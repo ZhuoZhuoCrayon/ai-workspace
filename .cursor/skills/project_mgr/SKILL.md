@@ -1,77 +1,106 @@
+---
+name: project-mgr
+title: project_mgr — 项目管理
+description: 通过 repos.json 注册和管理工作区中的项目。当用户想要接入项目到工作区、移除项目或询问项目设置规范时使用。
+---
+
 # project_mgr — 项目管理
 
-管理工作区中项目的添加和删除。
+管理工作区中项目的添加和删除。默认 visibility 为 `public`。
 
-## 触发方式
+项目通过 `repos.json` / `private/repos.json` 注册，`local_path` 记录本地仓库绝对路径，模型可通过该路径 `cd` 到项目目录进行开发。
 
-| 用户指令 | 执行动作 |
-|---------|---------|
-| "把 xxx 项目接入工作区" | 添加项目 |
-| "移除 xxx 项目" | 删除项目 |
+## 0x01 添加项目
 
-## 添加项目
+### a. 输入参数
 
-### 输入参数
+| 参数         | 必填 | 说明                                   |
+|------------|----|-----------------------------------------|
+| local_path | 是  | 本地路径（仓库根目录或大仓子目录均可）              |
+| visibility | 否  | public（默认） / private                   |
+| name       | 否  | 项目名称覆盖（默认从 `local_path` 的 basename 推断） |
 
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| name | 是 | 项目名称（小写英文短横线） |
-| local_path | 是 | 本地仓库绝对路径 |
-| git_url | 是 | Git 远程仓库地址 |
-| branch | 是 | 主分支名（如 main） |
-| description | 否 | 项目简述 |
-| visibility | 是 | public / private |
+### b. 自动发现
 
-### 执行步骤
+先 `cd` 到 `local_path`，再**逐条**执行以下 Git 命令采集信息（Git 在子目录中会自动向上查找 `.git`）：
 
-1. 验证 `local_path` 存在且是 Git 仓库
-2. 创建软链接：
-   - public → `ln -s <local_path> projects/<name>`
-   - private → `ln -s <local_path> private/projects/<name>`
-3. 追加到仓库注册表：
-   - public → `repos.json`
-   - private → `private/repos.json`
+| 信息       | 命令                                                        | 说明                                           |
+|----------|-----------------------------------------------------------|----------------------------------------------|
+| 远程仓库地址   | `git remote -v`                                           | 优先取 `upstream`（fetch），其次 `origin`（fetch）       |
+| 默认分支     | `git symbolic-ref refs/remotes/<remote>/HEAD 2>/dev/null` | 失败则回退检测 `master` / `main` 分支是否存在              |
 
-   条目格式：
-   ```json
-   {
-     "name": "<name>",
-     "description": "<description>",
-     "git_url": "<git_url>",
-     "branch": "<branch>",
-     "local_path": "<local_path>"
-   }
-   ```
-4. 初始化项目知识目录：
-   - public → 创建 `knowledge/<name>/INDEX.md`
-   - private → 创建 `private/knowledge/<name>/INDEX.md`
-5. 检查 `projects/<name>/AGENTS.md` 是否存在，不存在则提示用户创建
-6. 更新 `knowledge/INDEX.md`（或 `private/knowledge/INDEX.md`）
+推断规则：
 
-## 删除项目
+- **local_path**：直接使用用户提供的路径，不回退到仓库根目录（大仓场景下用户只关心子目录）
+- **项目名称**：取 `local_path` 的 basename（如 `/path/bk-monitor/bkmonitor` → `bkmonitor`）；用户可通过 `name` 参数覆盖
+- **远程仓库地址**：如果包含 token 或凭据（如 `https://user:token@github.com/...`），需要**剔除凭据**后再记录，格式化为 `https://github.com/<owner>/<repo>.git`
 
-### 输入参数
+### c. 确认
 
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| name | 是 | 项目名称 |
-| visibility | 是 | public / private |
+将自动发现的信息汇总后向用户确认，格式示例：
 
-### 执行步骤
+```text
+即将添加项目：
+- 名称：bkmonitor
+- 本地路径：/Users/xxx/bk-monitor/bkmonitor
+- 远程仓库：https://github.com/TencentBlueKing/bk-monitor.git
+- 默认分支：master
+- 可见性：public
 
-1. 删除软链接：
-   - public → `rm projects/<name>`
-   - private → `rm private/projects/<name>`
-2. 从 `repos.json` 或 `private/repos.json` 中移除对应条目
-3. 询问用户是否同时删除 `knowledge/<name>/`（默认保留）
-4. 更新 `knowledge/INDEX.md`（或 `private/knowledge/INDEX.md`）
+是否确认？
+```
 
-## 项目规范
+用户确认后再执行写入操作。
 
-接入的项目建议在仓库根目录包含以下文件：
+### d. 执行步骤
 
-| 文件 | 作用 |
-|------|------|
-| `AGENTS.md` | 项目级 AI 指引（技术栈、架构、约定） |
-| `.cursor/rules/` | 项目级 Cursor Rules |
-| `.cursor/skills/` | 项目级 Cursor Skills |
+1. 追加到 `repos.json`（或 `private/repos.json`）：
+
+```json
+{
+  "name": "<name>",
+  "description": "<description>",
+  "git_url": "<git_url>",
+  "branch": "<branch>",
+  "local_path": "<local_path>"
+}
+```
+
+2. 创建 `knowledge/<name>/INDEX.md`（或 `private/knowledge/<name>/INDEX.md`）
+3. 更新 `knowledge/INDEX.md`
+
+## 0x02 删除项目
+
+### a. 输入参数
+
+| 参数         | 必填 | 说明                   |
+|------------|----|-----------------------|
+| name       | 是  | 项目名称                 |
+| visibility | 否  | public（默认） / private |
+
+### b. 执行步骤
+
+1. 从 `repos.json` 或 `private/repos.json` 中移除对应条目
+2. 询问用户是否删除 `knowledge/<name>/`（默认保留）
+3. 更新 `knowledge/INDEX.md`
+
+## 0x03 使用项目
+
+模型在处理项目相关任务时：
+
+1. 从 `repos.json` / `private/repos.json` 读取 `local_path`
+2. 通过 `cd <local_path>` 切换到项目目录进行代码开发
+3. 同时加载 `knowledge/<name>/` 下的项目知识库作为上下文
+
+> **关键**：`local_path` 使模型能直接访问项目源码，`knowledge/<name>/` 提供项目级知识。两者结合即可完成项目任务，无需软链接。
+
+## 0x04 项目规范
+
+接入的项目建议包含以下文件：
+
+| 文件                | 作用                   |
+|-------------------|----------------------|
+| `AGENTS.md`       | 项目级 AI 指引（技术栈、架构、约定） |
+| `.cursor/rules/`  | 项目级 Cursor Rules     |
+| `.cursor/skills/` | 项目级 Cursor Skills    |
+

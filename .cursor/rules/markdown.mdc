@@ -5,20 +5,26 @@ globs: "**/*.md"
 
 # Markdown 写作规范
 
-## 结构
+## 0x01 结构
 
-- 使用 frontmatter（YAML）记录元信息：title / tags / description / created / updated
 - 章节编号使用 `## 0x01`、`## 0x02` 格式
 - 子章节使用 `### a.`、`### b.` 格式
+- 豁免：INDEX.md、AGENTS.md、CLAUDE.md 等结构性配置文件使用描述性标题即可，无需编号
 
-## 格式
+## 0x02 格式
+
+### a. 规范
+
+**CRITICAL（必须执行不可协商）**：严格遵循 [document-style-guide（中文技术文档的写作规范）](https://github.com/ruanyf/document-style-guide)。
+
+### b. 规则
 
 - 中英文之间加空格
 - 代码块标注语言类型
 - 表格对齐
 - 文件末尾保留一个空行
 
-## 文件命名
+## 0x03 文件命名
 
 - 使用小写英文 + 短横线连接：`redis-connection-timeout.md`
 - 索引文件统一命名 `INDEX.md`

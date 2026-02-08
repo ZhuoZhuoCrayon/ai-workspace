@@ -2,10 +2,8 @@
 
 ## 工作区结构
 
-- `repos.json` / `private/repos.json`：仓库注册表
-- `projects/` / `private/projects/`：项目软链接（均指向本地 Git 仓库）
-- `knowledge/` / `private/knowledge/`：知识库（按项目隔离）
-- `issues/` / `private/issues/`：任务管理
+- `repos.json` / `private/repos.json`：仓库注册表（含 `local_path`，可 `cd` 到项目目录开发）
+- `knowledge/` / `private/knowledge/`：知识库（按项目隔离，含 issues、snippets、troubleshooting 等）
 - `.cursor/skills/`：工作区 Skill
 - `.cursor/rules/`：工作区 Rules
 
@@ -23,24 +21,31 @@
 
 - 知识：`knowledge/` + `private/knowledge/`
 - 仓库：`repos.json` + `private/repos.json`
-- 项目：`projects/` + `private/projects/`
-- 任务：`issues/` + `private/issues/`
+
+## 项目访问方式
+
+外部项目通过 `repos.json` / `private/repos.json` 注册，其中 `local_path` 字段记录本地仓库绝对路径。处理项目任务时：
+
+1. 读取 `repos.json` / `private/repos.json` 获取项目的 `local_path`
+2. 通过 `cd <local_path>` 切换到项目目录进行代码开发
+3. 同时加载 `knowledge/<project>/` 下的项目知识库作为上下文
 
 ## 知识继承顺序
 
 处理项目任务时，按以下优先级查找知识：
 
 1. 会话上下文
-2. 任务上下文 → `issues/<YYYY-MM-DD-title>/`
-3. 项目自身 → `projects/<project>/AGENTS.md`、`projects/<project>/.cursor/rules/`
+2. 任务上下文 → `knowledge/<project>/issues/<YYYY-MM-DD-title>/`
+3. 项目自身 → `<local_path>/AGENTS.md`、`<local_path>/.cursor/rules/`（通过 `repos.json` 中的 `local_path` 定位）
 4. 项目知识库 → `knowledge/<project>/` + `private/knowledge/<project>/`
 5. 通用知识 → `knowledge/_shared/` + `private/knowledge/_shared/`
 6. 工作区全局 → `AGENTS.md`、`.cursor/rules/`、`.cursor/skills/`
 
 ## 任务处理流程
 
-1. 阅读 `issues/<date-title>/README.md`
-2. 查找 `knowledge/<project>/` 和 `projects/<project>/AGENTS.md`
-3. 制定 `issues/<date-title>/PLAN.md`
+1. 阅读 `knowledge/<project>/issues/<date-title>/README.md`
+2. 查找 `knowledge/<project>/` 和 `<local_path>/AGENTS.md`（从 `repos.json` 获取 `local_path`）
+3. 制定 `knowledge/<project>/issues/<date-title>/PLAN.md`
 4. 执行实施
-5. 更新 `issues/<date-title>/PROGRESS.md`
+5. 更新 `knowledge/<project>/issues/<date-title>/PROGRESS.md`
+
