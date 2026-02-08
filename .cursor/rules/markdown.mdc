@@ -1,0 +1,24 @@
+---
+description: Markdown 写作规范
+globs: "**/*.md"
+---
+
+# Markdown 写作规范
+
+## 结构
+
+- 使用 frontmatter（YAML）记录元信息：title / tags / description / created / updated
+- 章节编号使用 `## 0x01`、`## 0x02` 格式
+- 子章节使用 `### a.`、`### b.` 格式
+
+## 格式
+
+- 中英文之间加空格
+- 代码块标注语言类型
+- 表格对齐
+- 文件末尾保留一个空行
+
+## 文件命名
+
+- 使用小写英文 + 短横线连接：`redis-connection-timeout.md`
+- 索引文件统一命名 `INDEX.md`

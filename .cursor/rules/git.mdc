@@ -1,0 +1,35 @@
+---
+description: Git 提交规范
+alwaysApply: false
+---
+
+# Git 提交规范
+
+## Commit Message 格式
+
+遵循 Conventional Commits：
+
+```
+<type>(<scope>): <description>
+```
+
+### Type
+
+- feat: 新功能
+- fix: 修复
+- docs: 文档
+- refactor: 重构
+- chore: 杂项
+
+### Scope（可选）
+
+- knowledge: 知识库相关
+- skill: Skill 相关
+- project: 项目管理相关
+- issue: 任务相关
+
+### 示例
+
+- `docs(knowledge): add redis troubleshooting guide`
+- `feat(skill): add knowledge_mgr skill`
+- `chore: init workspace structure`
