@@ -14,12 +14,12 @@ description: 创建、归档和索引知识对象（issue、plan、snippet、tro
 
 所有知识对象均归属于项目，存放在 `knowledge/<project>/` 下：
 
-| 对象              | 位置                                                    |
-|-----------------|-------------------------------------------------------|
+| 对象              | 位置                                                        |
+|-----------------|-----------------------------------------------------------|
 | issue           | `knowledge/<project>/issues/<YYYY-MM-DD-title>/README.md` |
 | plan            | `knowledge/<project>/issues/<YYYY-MM-DD-title>/PLAN.md`   |
-| snippet         | `knowledge/<project>/snippets/`                        |
-| troubleshooting | `knowledge/<project>/troubleshooting/`                 |
+| snippet         | `knowledge/<project>/snippets/`                           |
+| troubleshooting | `knowledge/<project>/troubleshooting/`                    |
 
 ## 0x02 创建流程
 
