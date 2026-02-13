@@ -4,7 +4,7 @@ tags: [ai-workspace, 规划, 架构]
 issue: knowledge/ai-workspace/issues/2026-02-06-AI工作区项目启动/README.md
 description: AI 工作区的架构设计、Skills 设计和实施计划
 created: 2026-02-08
-updated: 2026-02-09
+updated: 2026-02-12
 ---
 
 # AI 工作区建设 —— 实施方案
@@ -151,65 +151,22 @@ ai-workspace/
 
 | Skill             | 路径                                      | 职责                                      |
 |-------------------|-----------------------------------------|-----------------------------------------|
-| **knowledge_mgr** | `.cursor/skills/knowledge_mgr/SKILL.md` | 知识对象的模板、创建、归档、索引更新                      |
+| **knowledge_mgr** | `.cursor/skills/knowledge_mgr/SKILL.md` | 知识对象的创建、更新、归档、后置检查、索引维护               |
 | **project_mgr**   | `.cursor/skills/project_mgr/SKILL.md`   | 项目的添加、删除、项目规范                           |
 
 ### a. knowledge_mgr
 
-统一管理四类知识对象的全生命周期：创建 → 归档 → 索引。
+统一管理四类知识对象的全生命周期：创建 → 更新 → 归档 → 索引。
 
-**管理的对象类型**
+核心机制：
 
-| 对象              | 位置                                                         |
-|-----------------|-----------------------------------------------------------|
-| issue           | `knowledge/<project>/issues/<YYYY-MM-DD-title>/README.md` |
-| plan            | `knowledge/<project>/issues/<YYYY-MM-DD-title>/PLAN.md`   |
-| snippet         | `knowledge/<project>/snippets/`                           |
-| troubleshooting | `knowledge/<project>/troubleshooting/`                    |
+- **对象表**：统一定义四类对象的位置、命名规则和模板
+- **Frontmatter schema**：统一字段定义（title / tags / description / created / updated 等）
+- **操作流程**：创建、更新、归档三种操作
+- **后置检查**：任何变更后必须执行 frontmatter 维护 → 索引更新 → 自检
+- **索引体系**：三级结构（一级项目概览 → 二级分类概览 → 三级文件详情），默认增量更新
 
-**创建流程**
-
-```text
-用户说 "创建一个 issue / plan / snippet / troubleshooting"
-  │
-  ├─ issue → 创建 knowledge/<project>/issues/<YYYY-MM-DD-title>/README.md
-  │          更新 knowledge/<project>/INDEX.md
-  │
-  ├─ plan  → 读取 knowledge/<project>/issues/<YYYY-MM-DD-title>/README.md
-  │          检索 knowledge/<project>/ 相关知识
-  │          生成 knowledge/<project>/issues/<YYYY-MM-DD-title>/PLAN.md
-  │
-  └─ snippet / troubleshooting
-             → 按模板创建到 knowledge/<project>/<type>/
-             → 更新三级索引
-```
-
-**归档流程（Inbox 模式）**
-
-```text
-knowledge/_inbox/ 中有待归档文档
-  │
-  ├─ 读取文档内容
-  ├─ 判断项目归属（<project> / _shared）
-  ├─ 判断对象类型（snippet / troubleshooting）
-  ├─ 补全 frontmatter
-  ├─ 移动到 knowledge/<project>/<type>/
-  └─ 更新三级 → 二级 → 一级索引
-```
-
-**三级索引体系**
-
-```text
-knowledge/INDEX.md                     ← 一级：所有项目知识概览
-knowledge/<project>/INDEX.md           ← 二级：某项目各分类概览
-knowledge/<project>/snippets/INDEX.md  ← 三级：某分类下文件详情
-```
-
-INDEX.md 是**可重建的**，由 AI 根据目录内容自动生成。
-
-**文档模板**
-
-所有知识对象使用统一的 frontmatter + 正文结构，模板定义在 `.cursor/skills/knowledge_mgr/templates.md`。
+模板定义在 `.cursor/skills/knowledge_mgr/templates.md`。
 
 ### b. project_mgr
 
@@ -286,9 +243,10 @@ INDEX.md 是**可重建的**，由 AI 根据目录内容自动生成。
 | 2026-02-09 | 取消软链接方案，改用 `repos.json` + `local_path` 访问项目 |
 | 2026-02-09 | 取消根目录 `issues/`，issue 归入 `knowledge/<project>/issues/` |
 | 2026-02-09 | 全局 Markdown 规范审计与修复                     |
+| 2026-02-12 | 重构 `knowledge_mgr` Skill：补充更新流程、提取后置检查、统一 frontmatter schema、优化索引增量更新策略 |
 
 ---
 
 *制定日期：2026-02-08*
-*最后更新：2026-02-09*
+*最后更新：2026-02-12*
 *状态：已归档*

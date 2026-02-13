@@ -10,7 +10,7 @@ updated: 2026-02-09
 
 所有知识对象使用统一的 frontmatter + 正文结构。
 
-## 0x01 排障经验模板
+## 0x01 Troubleshooting（排障经验）模板
 
 ```markdown
 ---
@@ -38,7 +38,7 @@ updated: <YYYY-MM-DD>
 ## 0x04 参考
 ```
 
-## 0x02 代码片段模板
+## 0x02 Snippet（代码片段）模板
 
 ```markdown
 ---
@@ -65,7 +65,7 @@ updated: <YYYY-MM-DD>
 \```
 ```
 
-## 0x03 Issue README 模板
+## 0x03 Issue（需求）模板
 
 ```markdown
 ---
@@ -93,7 +93,7 @@ updated: <YYYY-MM-DD>
 ## 0x03 参考
 ```
 
-## 0x04 PLAN 模板
+## 0x04 Plan（计划/实施方案）模板
 
 ```markdown
 ---
