@@ -9,7 +9,7 @@
   {
     "name": "ai-workspace",
     "description": "AI 工作区 — 知识管理与多项目协作中枢",
-    "git_url": "",
+    "git_url": "https://github.com/ZhuoZhuoCrayon/ai-workspace.git",
     "branch": "main",
     "local_path": "/Users/sandrincai/Project/Github/stars/ai-workspace"
   },
