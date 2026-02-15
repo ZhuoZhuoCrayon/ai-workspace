@@ -33,15 +33,15 @@ flowchart TD
 
 | # | 工具名 | 后端接口 | HTTP | 后端路径 | 核心参数 |
 |---|-------|---------|------|---------|---------|
-| 1 | `get_alert_events` | `AlertEventsResource` | POST | `/api/v4/alert_v2/alert/events/` | `alert_id`, `sources[]`, `limit`, `offset` |
-| 2 | `get_alert_event_ts` | `AlertEventTSResource` | POST | `/api/v4/alert_v2/alert/event_ts/` | `alert_id`, `sources[]`, `interval`, `start_time`, `end_time` |
-| 3 | `get_alert_event_tag_detail` | `AlertEventTagDetailResource` | POST | `/api/v4/alert_v2/alert/event_tag_detail/` | `alert_id`, `sources[]`, `interval`, `start_time`, `limit` |
-| 4 | `get_alert_k8s_scenarios` | `AlertK8sScenarioListResource` | GET | `/api/v4/alert_v2/alert/k8s_scenario_list/` | `alert_id` |
+| 1 | `get_alert_events` | `AlertEventsResource` | POST | `/api/v4/alert_v2/alert/events/` | `bk_biz_id`, `alert_id`, `sources[]`, `limit`, `offset` |
+| 2 | `get_alert_event_ts` | `AlertEventTSResource` | POST | `/api/v4/alert_v2/alert/event_ts/` | `bk_biz_id`, `alert_id`, `sources[]`, `interval`, `start_time`, `end_time` |
+| 3 | `get_alert_event_tag_detail` | `AlertEventTagDetailResource` | POST | `/api/v4/alert_v2/alert/event_tag_detail/` | `bk_biz_id`, `alert_id`, `sources[]`, `interval`, `start_time`, `limit` |
+| 4 | `get_alert_k8s_scenarios` | `AlertK8sScenarioListResource` | GET | `/api/v4/alert_v2/alert/k8s_scenario_list/` | `bk_biz_id`, `alert_id` |
 | 5 | `get_alert_k8s_metrics` | `AlertK8sMetricListResource` | GET | `/api/v4/alert_v2/alert/k8s_metric_list/` | `bk_biz_id`, `scenario` |
-| 6 | `get_alert_k8s_target` | `AlertK8sTargetResource` | GET | `/api/v4/alert_v2/alert/k8s_target/` | `alert_id` |
-| 7 | `get_alert_host_target` | `AlertHostTargetResource` | GET | `/api/v4/alert_v2/alert/host_target/` | `alert_id` |
-| 8 | `get_alert_traces` | `AlertTracesResource` | POST | `/api/v4/alert_v2/alert/traces/` | `alert_id`, `limit`, `offset` |
-| 9 | `get_alert_log_relations` | `AlertLogRelationListResource` | GET | `/api/v4/alert_v2/alert/log_relation_list/` | `alert_id` |
+| 6 | `get_alert_k8s_target` | `AlertK8sTargetResource` | GET | `/api/v4/alert_v2/alert/k8s_target/` | `bk_biz_id`, `alert_id` |
+| 7 | `get_alert_host_target` | `AlertHostTargetResource` | GET | `/api/v4/alert_v2/alert/host_target/` | `bk_biz_id`, `alert_id` |
+| 8 | `get_alert_traces` | `AlertTracesResource` | POST | `/api/v4/alert_v2/alert/traces/` | `bk_biz_id`, `alert_id`, `limit`, `offset` |
+| 9 | `get_alert_log_relations` | `AlertLogRelationListResource` | GET | `/api/v4/alert_v2/alert/log_relation_list/` | `bk_biz_id`, `alert_id` |
 
 **HTTP 方法选择依据**：
 - GET：参数简单（仅 ID / 字符串），无数组或复杂结构 → #4, #5, #6, #7, #9
@@ -63,6 +63,7 @@ flowchart TD
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|-------|------|
+| `bk_biz_id` | string | 是 | - | 业务 ID |
 | `alert_id` | string | 是 | - | 告警 ID，从 `list_alerts` / `get_alert_info` 获取 |
 | `sources` | array | 否 | `[]` | 事件来源过滤。可选值：`BCS`（容器）、`HOST`（主机）、`BKCI`（蓝盾）、`DEFAULT`（业务上报）。空数组 = 全部 |
 | `limit` | string | 否 | `"10"` | 返回事件的最大数量 |
@@ -74,6 +75,7 @@ flowchart TD
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|-------|------|
+| `bk_biz_id` | string | 是 | - | 业务 ID |
 | `alert_id` | string | 是 | - | 告警 ID |
 | `sources` | array | 否 | `[]` | 事件来源过滤，同上 |
 | `interval` | string | 否 | `"300"` | 时序数据的时间间隔（秒） |
@@ -86,6 +88,7 @@ flowchart TD
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|-------|------|
+| `bk_biz_id` | string | 是 | - | 业务 ID |
 | `alert_id` | string | 是 | - | 告警 ID |
 | `sources` | array | 否 | `[]` | 事件来源过滤 |
 | `interval` | string | 否 | `"60"` | 汇聚周期（秒） |
@@ -100,6 +103,7 @@ flowchart TD
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
+| `bk_biz_id` | string | 是 | 业务 ID |
 | `alert_id` | string | 是 | 告警 ID |
 
 #### 5. `get_alert_k8s_metrics`
@@ -117,6 +121,7 @@ flowchart TD
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
+| `bk_biz_id` | string | 是 | 业务 ID |
 | `alert_id` | string | 是 | 告警 ID |
 
 ### c. 告警关联主机 / 日志 / 调用链
@@ -127,6 +132,7 @@ flowchart TD
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
+| `bk_biz_id` | string | 是 | 业务 ID |
 | `alert_id` | string | 是 | 告警 ID |
 
 #### 8. `get_alert_traces`
@@ -135,6 +141,7 @@ flowchart TD
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|-------|------|
+| `bk_biz_id` | string | 是 | - | 业务 ID |
 | `alert_id` | string | 是 | - | 告警 ID |
 | `limit` | string | 否 | `"10"` | 返回调用链的最大数量 |
 | `offset` | string | 否 | `"0"` | 分页偏移量 |
@@ -145,6 +152,7 @@ flowchart TD
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
+| `bk_biz_id` | string | 是 | 业务 ID |
 | `alert_id` | string | 是 | 告警 ID |
 
 ### d. 调用分析工具
