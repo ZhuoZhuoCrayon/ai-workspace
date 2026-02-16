@@ -17,18 +17,20 @@
 
 ## 知识检索规则
 
-检索知识和仓库时，必须同时扫描公开和私有路径：
+**关键规则：任何涉及项目定位或知识检索的操作，必须在第一步并行读取公开和私有两条路径。禁止只读一侧后就得出「找不到」的结论。**
 
-- 知识：`knowledge/` + `private/knowledge/`
-- 仓库：`repos.json` + `private/repos.json`
+- 仓库：`repos.json` **+** `private/repos.json`（并行读取）
+- 知识：`knowledge/<project>/` **+** `private/knowledge/<project>/`（并行扫描）
 
 ## 项目访问方式
 
 外部项目通过 `repos.json` / `private/repos.json` 注册，其中 `local_path` 字段记录本地仓库绝对路径。处理项目任务时：
 
-1. 读取 `repos.json` / `private/repos.json` 获取项目的 `local_path`
+1. **并行读取** `repos.json` 和 `private/repos.json`，查找项目的 `local_path`
 2. 通过 `cd <local_path>` 切换到项目目录进行代码开发
-3. 同时加载 `knowledge/<project>/` 下的项目知识库作为上下文
+3. **并行加载** `knowledge/<project>/` 和 `private/knowledge/<project>/` 作为上下文
+
+> 注意：部分项目仅注册在 `private/repos.json` 中。如果只读 `repos.json` 会导致找不到项目。遇到「找不到项目/路径」时，先确认是否已读取两份 repos.json，再向用户确认。
 
 ## 知识继承顺序
 
