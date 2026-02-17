@@ -3,7 +3,7 @@ title: RPC 场景巡检 Skills
 tags: [bkm-skills, rpc, inspection, red, trpc]
 description: 基于蓝鲸监控 MCP 工具构建 RPC 服务健康巡检 Skill，覆盖 RED 指标分析与维度下钻
 created: 2026-02-15
-updated: 2026-02-15
+updated: 2026-02-16
 ---
 
 # RPC 场景巡检 Skills
@@ -41,15 +41,15 @@ updated: 2026-02-15
     - 脚本：`scripts/fetch_metrics.py` 是通用脚本，复制过来。
 - 即时查询：
     - 脚本：参考 [Calculate By Range](./references/calculate_by_range.md) 及 `scripts/fetch_metrics.py`，设计脚本执行即时查询。
-    - 即时查询技术参考：参考 `references/use_metrics.md`。
+    - 即时查询技术参考：新建 `references/use_red_summary.md`。
     - 注 1：calculate_by_range 接口，无需按时间范围分片。
-- 维度下钻：增加最佳实践，给出典型的维度下钻路径和脚本调用示例；增加使用示例到「时序查询技术参考」「即时查询技术参考」。
+- 维度下钻：增加最佳实践，给出典型的维度下钻路径和脚本调用示例；增加使用示例到 `use_metrics.md` 和 `use_red_summary.md`。
 - 波动下钻：增加最佳实践，给出典型的波动下钻分析路径和脚本调用示例。
-- 时间对比：增加使用示例到「时序查询技术参考」「即时查询技术参考」。
+- 时间对比：增加使用示例到 `use_metrics.md` 和 `use_red_summary.md`。
 - 调用链关联：
-    - 调用链规范：参考 `references/event_protocol.md`，将 [Calculate By Range](./references/calculate_by_range.md) 中字段映射部分挪过来。
+    - 调用链规范：参考 `references/trace_protocol.md`，将 [Calculate By Range](./references/calculate_by_range.md) 中字段映射部分挪过来。
     - 脚本：参考 `scripts/fetch_events.py`，基于 MCP 工具 `search_spans` 设计 `fetch_spans.py`。
-    - 调用链查询技术参考：参考 `references/use_events.md`，增加调用链关联的使用示例。
+    - 调用链查询技术参考：参考 `references/use_traces.md`，增加调用链关联的使用示例。
 
 ### b. 约束
 
@@ -57,9 +57,52 @@ updated: 2026-02-15
 - 参考 `bk-ci-helper` 的工程实践，保持高质量的文档和脚本设计。
 - 执行方案提供脚本名、参数设计（表格）和示例调用，供进一步讨论和确认。
 
-## 0x03 参考
+## 0x03 产物结构与对标关系
 
-### a. 文档
+以 `bk-ci-helper`（路径 `skills/bk-ci-helper`）为最佳实践模板，新 Skill 产物结构及对标关系如下：
+
+```text
+skills/rpc-inspection/
+├── SKILL.md                              # 主文件：前置条件、工具选择指南、巡检工作流、案例
+├── references/
+│   ├── metric_protocol.md                # RPC 指标规范（维度 + 指标 + SDK 差异）
+│   ├── trace_protocol.md                 # Span/Trace 字段协议（含 RPC 维度 → Span 属性映射）
+│   ├── use_metrics.md                    # 时序查询技术参考（脚本参数、PromQL 示例、下钻/对比技巧）
+│   ├── use_red_summary.md                # 即时查询技术参考（脚本参数、维度下钻、时间对比示例）
+│   └── use_traces.md                     # 调用链查询技术参考（脚本参数、Lucene 示例）
+└── scripts/
+    ├── fetch_metrics.py                  # 【复制】时序查询，封装 execute_range_query
+    ├── fetch_red_summary.py              # 【新建】即时查询，封装 calculate_by_range（无需时间分片）
+    └── fetch_spans.py                    # 【新建】调用链查询，封装 search_spans（--query-string Lucene）
+```
+
+**对标 `bk-ci-helper` 映射表**：
+
+| bk-ci-helper 文件 | RPC Skill 对应文件 | 操作 | 说明 |
+|---|---|---|---|
+| `references/metric_protocol.md` | `references/metric_protocol.md` | 新建 | 从 `metric.md` 整理，RPC 维度 + 指标 + SDK temporality 差异 |
+| `references/event_protocol.md` | `references/trace_protocol.md` | 新建 | Span/Trace 字段协议，含 `calculate_by_range.md` 中的维度→Span 属性映射、kind 过滤规则 |
+| `references/use_metrics.md` | `references/use_metrics.md` | 新建 | 时序查询技术参考，增加 RPC PromQL 示例、维度下钻和时间对比技巧 |
+| - | `references/use_red_summary.md` | 新建 | 即时查询技术参考，`fetch_red_summary.py` 用法、维度下钻和时间对比示例 |
+| `references/use_events.md` | `references/use_traces.md` | 新建 | 调用链查询技术参考，含 `fetch_spans.py` 使用和 Lucene 示例 |
+| `scripts/fetch_metrics.py` | `scripts/fetch_metrics.py` | 复制 | 通用脚本，封装 `execute_range_query`，支持 `--instant` |
+| `scripts/fetch_events.py` | `scripts/fetch_spans.py` | 新建 | 封装 `search_spans`，通过 `--query-string` 暴露 Lucene 查询，不暴露 `filters` |
+| - | `scripts/fetch_red_summary.py` | 新建 | 封装 `calculate_by_range`，无需按时间分片 |
+| `SKILL.md` | `SKILL.md` | 新建 | 主文件：前置条件、工具选择指南、巡检工作流、案例 |
+
+### 关键设计决策
+
+| # | 决策点 | 结论 |
+|---|---|---|
+| 1 | 时序查询工具 | 复用 `fetch_metrics.py`（封装 `execute_range_query`），RPC PromQL 写法参照 `metric.md`；技术参考见 `use_metrics.md` |
+| 2 | 即时查询工具 | `calculate_by_range` 是独立 MCP 工具（非 PromQL），需单独脚本 `fetch_red_summary.py`，无需时间分片；技术参考见 `use_red_summary.md` |
+| 3 | 调用链查询方式 | `fetch_spans.py` 通过 `--query-string` 传递 Lucene 语法，不暴露 `filters` 参数 |
+| 4 | SDK 差异处理 | `temporality`（`delta` / `cumulative`）在即时查询脚本中通过参数控制 |
+| 5 | 主被调差异 | `kind`（`caller` / `callee`）影响可用维度和 Trace 过滤条件（caller → kind=[3,4]，callee → kind=[1,2]） |
+
+## 0x04 参考
+
+### a. 源文档
 
 - [RPC 服务巡检工作流](./references/workflow.md)
 - [RPC 指标规范](./references/metric.md)
