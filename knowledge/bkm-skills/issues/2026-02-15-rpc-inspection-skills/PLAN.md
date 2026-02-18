@@ -4,7 +4,7 @@ tags: [bkm-skills, rpc, inspection, red, trpc, skill-design]
 issue: ./README.md
 description: RPC 巡检 Skill 的结构设计、脚本参数规格、references 内容大纲及分步实施计划
 created: 2026-02-15
-updated: 2026-02-16
+updated: 2026-02-17
 ---
 
 # RPC 场景巡检 Skills —— 实施方案
@@ -46,7 +46,7 @@ updated: 2026-02-16
 ## 0x02 产物结构
 
 ```text
-skills/rpc-inspection/
+skills/bk-rpc-inspection/
 ├── SKILL.md                              # 主文件（≤500 行）
 ├── references/
 │   ├── metric_protocol.md                # RPC 指标规范（维度 + 指标 + SDK 差异）
@@ -55,7 +55,9 @@ skills/rpc-inspection/
 │   ├── use_red_summary.md                # 即时查询技术参考（脚本用法、维度下钻、时间对比）
 │   ├── use_traces.md                     # 调用链查询技术参考（脚本用法、Lucene 示例）
 │   ├── rpc_metric_examples.md           # 【新建】RPC 场景 PromQL 示例集（按 SDK 分类的 RED 指标 + 维度下钻示例）
-│ 
+│   ├── common_format.md                 # 【新建】通用报告输出规范（关键字段、超链接、可读性、数值格式化）
+│   └── output_format.md                 # 【新建】报告输出规范（表格展示、巡检报告模板、下钻报告模板）
+│
 └── scripts/
     ├── fetch_metrics.py                  # 【复制】时序查询脚本，封装 execute_range_query
     ├── fetch_red_summary.py              # 【新建】即时查询脚本，封装 calculate_by_range
@@ -111,7 +113,7 @@ python3 /path/to/scripts/fetch_metrics.py --biz-id=2 \
 | `--temporality`  | str | 是  | -      | SDK 时间性：`delta`（Galileo）/ `cumulative`（Oteam）                                                                                                 |
 | `--start-time`   | int | 否  | now-1h | 开始时间（Unix 秒）                                                                                                                                  |
 | `--end-time`     | int | 否  | now    | 结束时间（Unix 秒）                                                                                                                                  |
-| `--filter`       | str | 否  | `""`   | 逗号分隔的过滤条件，格式 `key=value`。如 `"callee_method=SayHi, code=exception"`，脚本内部转换为 `where` 列表。                                                        |
+| `--filter`       | str | 否  | `""`   | 逗号分隔的过滤条件，格式 `key=value`。同 key 多值合并为 OR（如 `"callee_method=a,callee_method=b"`），不同 key 之间为 AND。脚本内部转换为 `where` 列表。 |
 | `--group-by`     | str | 否  | `""`   | 逗号分隔的分组字段，如 `callee_method,code`                                                                                                              |
 | `--offset`       | str | 否  | `""`   | 逗号分隔的对比偏移量，如 `1d` 或 `1d,1w`，支持 `s（秒）`、`m（分）`、`h（时）`、`d（天）`、`w（周）`、`M（月）`。                                                                     |
 | `--output`       | str | 是  | -      | 输出文件路径                                                                                                                                        |
@@ -173,6 +175,12 @@ python3 /path/to/scripts/fetch_red_summary.py --biz-id=2 \
 
 封装 `search_spans` MCP 工具。通过 `--query-string` 暴露 Lucene 查询能力，**不暴露 `filters` 参数**（由脚本内部将 Lucene 转换为 filters 或直接传 query）。
 
+**核心机制**：参考 `bk-ci-helper/scripts/fetch_events.py` 的时间分片模式：
+
+- **时间分片**：MCP 限制单次查询 ≤86400s，脚本自动将长时间范围拆分为多个窗口逐一拉取
+- **分页遍历**：单窗口内通过 offset 分页遍历全部结果（每页 500 条，单窗口上限 10,000 条）
+- **跨窗口聚合**：合并所有窗口结果后，按 `--sort` 重排序，再按 `--limit` 截取
+
 **参数表**：
 
 | 参数               | 类型  | 必填 | 默认值             | 说明                                                                                                      |
@@ -181,9 +189,9 @@ python3 /path/to/scripts/fetch_red_summary.py --biz-id=2 \
 | `--app-name`     | str | 是  | -               | APM 应用名                                                                                                 |
 | `--start-time`   | int | 否  | now-1h          | 开始时间（Unix 秒）                                                                                            |
 | `--end-time`     | int | 否  | now             | 结束时间（Unix 秒）                                                                                            |
-| `--query-string` | str | 否  | `""`            | Lucene 查询字符串，字段名使用 Span 属性名（如 `attributes.trpc.callee_method:SayHi AND attributes.trpc.status_code:5*`） |
+| `--query-string` | str | 否  | `""`            | Lucene 查询字符串，字段名使用 Span 属性名（如 `attributes.trpc.callee_method:SayHi AND status.code:2`） |
 | `--sort`         | str | 否  | `-elapsed_time` | 排序字段，`-` 前缀为降序                                                                                          |
-| `--limit`        | int | 否  | 10              | 返回条数                                                                                                    |
+| `--limit`        | int | 否  | 100             | 最大返回条数（跨窗口聚合后裁剪）                                                                                        |
 | `--output`       | str | 是  | -               | 输出文件路径                                                                                                  |
 
 **输出格式**：
@@ -206,7 +214,11 @@ python3 /path/to/scripts/fetch_red_summary.py --biz-id=2 \
       "service_name": "example.greeter",
       "elapsed_time": 1234,
       "start_time": 1763535900000,
-      "status_code": "ERROR"
+      "status.code": 2,
+      "status.message": "error: connection refused",
+      "trpc.status_code": "141",
+      "trpc.status_msg": "connection refused to downstream",
+      "trpc.status_type": "framework"
     }
   ]
 }
@@ -216,9 +228,9 @@ python3 /path/to/scripts/fetch_red_summary.py --biz-id=2 \
 
 ```bash
 # 查询异常 Span（被调视角）
-python3 /path/to/scripts/fetch_spans.py --biz-id=2 \
-    --app-name="trpc-demo" \
-    --query-string='resource.service.name:"example.greeter" AND attributes.trpc.callee_method:SayHi AND attributes.trpc.status_code:5* AND kind:[1 TO 2]' \
+python3 /path/to/scripts/fetch_spans.py --biz-id=<bk_biz_id> \
+    --app-name=<app_name> \
+    --query-string='resource.service.name:"<service_name>" AND status.code:2 AND kind:(2 OR 5)' \
     --sort="-elapsed_time" --limit=10 \
     --start-time=$(($(date +%s) - 3600)) --end-time=$(date +%s) \
     --output="error_spans.json"
@@ -298,7 +310,7 @@ python3 /path/to/scripts/fetch_spans.py --biz-id=2 \
 ### c. 维度下钻
 （示例：增加异常维度（例如「被调接口」）作为过滤条件，进一步对其他维度（例如「错误码」）进行分组，观察异常分布。）
 
-### b. 时间对比
+### d. 时间对比
 （示例：使用 offset 查询一段时间前的数据，进行环比对比，观察趋势变化。）
 
 ### e. 动态计算 step
@@ -340,35 +352,6 @@ python3 /path/to/scripts/fetch_spans.py --biz-id=2 \
 - 结合 --filter 过滤收窄范围后再 group_by
 ```
 
-### e. `rpc_metric_examples.md` — RPC 指标使用示例
-
-参考 `bk-ci-helper/references/host_metrics_example.md` 的结构。
-
-**内容大纲**：
-
-```markdown
-# RPC 指标使用示例
-
-可以参考以下示例，按实际情况编写 PromQL 查询语句进行分析。
-
-## 0x01 RED 查询示例（Counter）
-
-指标名为三段式：
-- 第一段：固定为 `custom`。
-- 第二段：结果表（RT），`SKILL.md` 已说明获取方式，样例：`space_xxx_bkapm_metric_xxx` 或 `xxx_bkapm_metric_xxx`。
-- 第三段：指标名。
-
-例如：
-- `custom:space_xxx_bkapm_metric_xxx:__default__:rpc_server_handled_total`。
-- `custom:xxx_bkapm_metric_xxx:__default__:rpc_server_handled_total`。
-
-（a-f：请求量/成功率/超时率/异常率/平均耗时/耗时分布。）
-
-## 0x02 RED 查询示例（Gauge）
-
-（a-f：请求量/成功率/超时率/异常率/平均耗时/耗时分布。）
-```
-
 ### e. `use_traces.md` — 调用链查询技术参考
 
 参考 `bk-ci-helper/references/use_events.md` 的结构。
@@ -395,6 +378,82 @@ python3 /path/to/scripts/fetch_spans.py --biz-id=2 \
 ### c. Trace 详情分析
 - 取典型 Span 的 trace_id → get_trace_detail（MCP 直接调用）
 - 分析调用链上下游影响
+```
+
+### f. `rpc_metric_examples.md` — RPC 指标使用示例
+
+参考 `bk-ci-helper/references/host_metrics_example.md` 的结构。
+
+**关键规则**：**所有 PromQL 示例必须携带 `service_name="<service_name>"` 作为过滤条件**（不可协商），使用占位符而非样例值。
+
+**内容大纲**：
+
+```markdown
+# RPC 指标使用示例
+
+> CRITICAL（不可协商）：所有 PromQL 查询必须携带 service_name="<service_name>" 作为过滤条件。
+
+指标名为四段式：custom:{RT}:__default__:{metric_name}
+主被调指标对照：被调 rpc_server_handled_* / 主调 rpc_client_handled_*
+
+## 0x01 被调 RED 查询示例（Counter / Oteam SDK）
+（a-f：被调请求量/成功率/超时率/异常率/平均耗时/耗时分布。）
+
+## 0x02 主调 RED 查询示例（Counter / Oteam SDK）
+（a-f：主调请求量/成功率/超时率/异常率/平均耗时/耗时分布。）
+
+## 0x03 被调 RED 查询示例（Gauge / Galileo SDK）
+（a-f：被调请求量/成功率/超时率/异常率/平均耗时/耗时分布。）
+
+## 0x04 主调 RED 查询示例（Gauge / Galileo SDK）
+（a-f：主调请求量/成功率/超时率/异常率/平均耗时/耗时分布。）
+```
+
+### g. `common_format.md` — 通用报告输出规范
+
+参考 `bk-ci-helper/references/common_format.md`，结合 RPC 场景调整关键字段和超链接模板。
+
+**内容大纲**：
+
+```markdown
+# 通用报告输出规范
+
+## 0x01 超链接
+（表格：RPC 场景需超链接的字段 — APM 应用名、服务名、Trace ID，及对应的蓝鲸监控 URL 模板）
+
+## 0x02 各场景关键字段
+### a. RED 指标概览
+### b. 维度下钻
+### c. 调用链关联
+（各场景必须/推荐展示的字段清单）
+
+## 0x03 可读性
+（耗时格式化、时间戳格式、百分比精度、大数值展示、状态标识，同 bk-ci-helper 规范）
+```
+
+### h. `output_format.md` — 报告输出规范
+
+参考 `bk-ci-helper/references/output_format.md`，结合 RPC 场景定义表格模板和巡检报告结构。
+
+**内容大纲**：
+
+```markdown
+# 报告输出规范
+
+## 0x01 RED 概览表格
+（列定义、排序规则、异常行高亮，附示例表格）
+
+## 0x02 维度下钻表格
+（标题格式、维度值 + 指标值 + 占比列、环比数据，附示例表格）
+
+## 0x03 时间对比表格
+（多时间点并列、增长率计算，附示例表格）
+
+## 0x04 调用链分析表格
+（Trace ID 超链接、关键信息列、异常 Span 展示）
+
+## 0x05 巡检报告模板
+（结构化报告章节：概要 → RED 概览 → 异常分析 → 调用链 → 结论，信息简洁规则、大表格截断规则）
 ```
 
 ## 0x05 SKILL.md 内容编排
@@ -503,7 +562,9 @@ Step 4：维度下钻，参考「a. 异常下钻」工作流。
 
 ## 0x05 报告输出规范
 
-参考 `bk-ci-helper/SKILL.md` 的 0x05 报告输出规范，结合 RPC 场景的特点进行调整。
+**【CRITICAL】** 输出报告前请完整阅读以下规范：
+* [通用报告输出规范](references/common_format.md)：超链接、关键字段、可读性。
+* [报告输出规范](references/output_format.md)：表格展示、报告模板。
 ```
 
 ## 0x06 实施步骤
@@ -512,7 +573,7 @@ Step 4：维度下钻，参考「a. 异常下钻」工作流。
 
 | # | 步骤 | 产出 | 数据来源 | 验收标准 |
 |---|------|------|----------|----------|
-| 1.1 | 创建 Skill 目录结构 | `skills/rpc-inspection/` 骨架 | - | 目录结构与 0x02 一致 |
+| 1.1 | 创建 Skill 目录结构 | `skills/bk-rpc-inspection/` 骨架 | - | 目录结构与 0x02 一致 |
 | 1.2 | 复制并裁剪 `fetch_metrics.py` | `scripts/fetch_metrics.py` | `bk-ci-helper/scripts/fetch_metrics.py` | 删除 `--instant` 相关逻辑，仅保留时序查询能力，可执行 |
 | 1.3 | 实现 `fetch_red_summary.py` | `scripts/fetch_red_summary.py` | 0x03-b 参数设计 + `calculate_by_range` MCP 工具 | 参数表全覆盖，输出格式一致，用真实数据验证 |
 | 1.4 | 实现 `fetch_spans.py` | `scripts/fetch_spans.py` | 0x03-c 参数设计 + `search_spans` MCP 工具 | 参数表全覆盖，Lucene query 传递正确，用真实数据验证 |
@@ -523,9 +584,12 @@ Step 4：维度下钻，参考「a. 异常下钻」工作流。
 
 | # | 步骤 | 产出 | 数据来源 | 验收标准 |
 |---|------|------|----------|----------|
-| 2.1 | 编写 `use_metrics.md` | `references/use_metrics.md` | 0x04-c 大纲 + `bk-ci-helper/references/use_metrics.md` 结构 | 覆盖时序/即时/下钻/对比/波动全场景，每场景有脚本示例 |
+| 2.1 | 编写 `use_metrics.md` | `references/use_metrics.md` | 0x04-c 大纲 + `bk-ci-helper/references/use_metrics.md` 结构 | 覆盖时序/下钻/对比/波动全场景，每场景有脚本示例 |
 | 2.2 | 编写 `use_red_summary.md` | `references/use_red_summary.md` | 0x04-d 大纲 | 覆盖概览/下钻/波动/对比全场景，每场景有脚本示例 |
 | 2.3 | 编写 `use_traces.md` | `references/use_traces.md` | 0x04-e 大纲 + `bk-ci-helper/references/use_events.md` 结构 | 覆盖维度转换/错误查询/Trace 分析全场景 |
+| 2.4 | 编写 `rpc_metric_examples.md` | `references/rpc_metric_examples.md` | 0x04-f 大纲 | 覆盖 Counter/Gauge 两种类型的 RED 指标 PromQL 示例 |
+| 2.5 | 编写 `common_format.md` | `references/common_format.md` | 0x04-g 大纲 + `bk-ci-helper/references/common_format.md` | 超链接模板完整、关键字段覆盖 RED/下钻/调用链场景、格式化规则明确 |
+| 2.6 | 编写 `output_format.md` | `references/output_format.md` | 0x04-h 大纲 + `bk-ci-helper/references/output_format.md` | 覆盖 RED 概览/下钻/对比/调用链表格模板，巡检报告模板完整 |
 
 ### Phase 3：主文件 + 验证
 
@@ -544,4 +608,4 @@ Step 4：维度下钻，参考「a. 异常下钻」工作流。
 - MCP 工具：`calculate_by_range`、`execute_range_query`、`search_spans`、`get_trace_detail`、`get_span_detail`
 
 ---
-*制定日期：2026-02-15 ｜ 更新日期：2026-02-16*
+*制定日期：2026-02-15 ｜ 更新日期：2026-02-17*

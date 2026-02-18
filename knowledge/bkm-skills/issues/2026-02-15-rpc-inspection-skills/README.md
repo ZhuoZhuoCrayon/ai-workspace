@@ -62,7 +62,7 @@ updated: 2026-02-16
 以 `bk-ci-helper`（路径 `skills/bk-ci-helper`）为最佳实践模板，新 Skill 产物结构及对标关系如下：
 
 ```text
-skills/rpc-inspection/
+skills/bk-rpc-inspection/
 ├── SKILL.md                              # 主文件：前置条件、工具选择指南、巡检工作流、案例
 ├── references/
 │   ├── metric_protocol.md                # RPC 指标规范（维度 + 指标 + SDK 差异）
