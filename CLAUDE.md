@@ -8,7 +8,7 @@
   - 仓库：`repos.json` **+** `private/repos.json`
   - 知识：`knowledge/<project>/` **+** `private/knowledge/<project>/`
 - 知识按项目隔离，存放在 `knowledge/<project>/`，跨项目通用知识在 `knowledge/_shared/`
-- 处理项目任务时，从两份 repos.json 获取 `local_path`，通过 `cd` 切换到项目目录开发
+- **【CRITICAL】提到项目名时，第一步查 repos.json 获取 `local_path`，后续 git / 文件操作均在该目录下执行，禁止在 ai-workspace 下操作其他项目仓库**
 
 ## 可用 Skills
 

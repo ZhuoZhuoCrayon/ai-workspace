@@ -24,10 +24,14 @@
 
 ## 项目访问方式
 
-外部项目通过 `repos.json` / `private/repos.json` 注册，其中 `local_path` 字段记录本地仓库绝对路径。处理项目任务时：
+外部项目通过 `repos.json` / `private/repos.json` 注册，其中 `local_path` 字段记录本地仓库绝对路径。
+
+**【CRITICAL】当用户消息中提到具体项目名（如 bkm-skills、bkmonitor_mcp 等），第一步必须并行读取 `repos.json` + `private/repos.json` 获取该项目的 `local_path`，后续所有 git / 文件操作在 `local_path` 目录下执行。禁止在 ai-workspace 目录下操作其他项目的 git 仓库。**
+
+处理项目任务时：
 
 1. **并行读取** `repos.json` 和 `private/repos.json`，查找项目的 `local_path`
-2. 通过 `cd <local_path>` 切换到项目目录进行代码开发
+2. **切换到 `local_path`**：所有 git、代码操作使用 `working_directory: <local_path>`
 3. **并行加载** `knowledge/<project>/` 和 `private/knowledge/<project>/` 作为上下文
 
 > 注意：部分项目仅注册在 `private/repos.json` 中。如果只读 `repos.json` 会导致找不到项目。遇到「找不到项目/路径」时，先确认是否已读取两份 repos.json，再向用户确认。
