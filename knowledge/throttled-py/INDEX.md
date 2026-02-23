@@ -1,15 +1,9 @@
 # throttled-py 知识库
 
-> 最后更新：2026-02-09
+> 最后更新：2026-02-22
 
-## Issues
+## 索引
 
-暂无
-
-## Snippets
-
-暂无
-
-## Troubleshooting
-
-暂无
+| 分类 | 路径 | 数量 | 说明 |
+|------|------|------|------|
+| Issues | [issues/](./issues/INDEX.md) | 1 篇 | 需求与任务 |
