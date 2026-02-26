@@ -9,6 +9,7 @@
   - 知识：`knowledge/<project>/` **+** `private/knowledge/<project>/`
 - 知识按项目隔离，存放在 `knowledge/<project>/`，跨项目通用知识在 `knowledge/_shared/`
 - **【CRITICAL】提到项目名时，第一步查 repos.json 获取 `local_path`，后续 git / 文件操作均在该目录下执行，禁止在 ai-workspace 下操作其他项目仓库**
+- **【CRITICAL】回答项目问题时，必须先检索项目知识库（issues、snippets、troubleshooting 等），命中直接引用；未命中再探索源码**
 
 ## 可用 Skills
 

@@ -38,14 +38,17 @@
 
 ## 知识继承顺序
 
+**【CRITICAL】回答项目相关问题或执行项目任务时，必须先按以下优先级检索知识库（issues、snippets、troubleshooting 等所有对象），命中则直接引用；未命中再探索项目源码。禁止跳过知识库直接搜索源码。**
+
 处理项目任务时，按以下优先级查找知识：
 
 1. 会话上下文
 2. 任务上下文 → `knowledge/<project>/issues/<YYYY-MM-DD-title>/`
-3. 项目自身 → `<local_path>/AGENTS.md`、`<local_path>/.cursor/rules/`（通过 `repos.json` 中的 `local_path` 定位）
-4. 项目知识库 → `knowledge/<project>/` + `private/knowledge/<project>/`
-5. 通用知识 → `knowledge/_shared/` + `private/knowledge/_shared/`
-6. 工作区全局 → `AGENTS.md`、`.cursor/rules/`、`.cursor/skills/`
+3. 项目知识库 → `knowledge/<project>/` + `private/knowledge/<project>/`（搜索所有对象：issues、snippets、troubleshooting）
+4. 项目自身 → `<local_path>/AGENTS.md`、`<local_path>/.cursor/rules/`（通过 `repos.json` 中的 `local_path` 定位）
+5. 项目源码 → `<local_path>` 下的代码文件（仅在 1~4 未命中时）
+6. 通用知识 → `knowledge/_shared/` + `private/knowledge/_shared/`
+7. 工作区全局 → `AGENTS.md`、`.cursor/rules/`、`.cursor/skills/`
 
 ## 任务处理流程
 
