@@ -4,7 +4,7 @@ tags: [apm, application, config, bk-collector, token, create, delete]
 description: APM 应用创建重跑、脏数据清理、配置下发、Token 管理等操作
 language: python
 created: 2026-02-09
-updated: 2026-02-09
+updated: 2026-02-28
 ---
 
 # APM 链路管理
@@ -132,14 +132,103 @@ from apm.models.subscription_config import SubscriptionConfig
 c = SubscriptionConfig.objects.filter(bk_biz_id=bk_biz_id, app_name=app_name).first()
 ```
 
-### b. 平台配置下发
+### b. 下发 span_name 归一化规则
+
+通过 `custom_service_config` 配置正则匹配规则，将高基数 URL / span_name 归一化为低基数路径。
+
+```python
+import json
+from apm.models.config import *
+from apm.models.application import *
+from apm.core.application_config import *
+
+bk_biz_id = 19062
+app_name = "esp_pubgm_prod"
+
+app_config = {"custom_service_config": {"name": "service_discover/common", "rules": [
+    {
+        "service": "None", "type": "http", "match_type": "regex",
+        "predicate_key": "span_name", "match_key": "span_name",
+        "span_kind": "SPAN_KIND_CLIENT",
+        "match_groups": [{"destination": "span_name", "source": "path"}],
+        "rule": {"regex": r"^(?P<path>/checkLogin\.php)"},
+    },
+    {
+        "service": "None", "type": "http", "match_type": "regex",
+        "predicate_key": "span_name", "match_key": "span_name",
+        "span_kind": "SPAN_KIND_CLIENT",
+        "match_groups": [{"destination": "span_name", "source": "path"}],
+        "rule": {"regex": r"^(?P<path>/v4/openim/batchsendmsg)"},
+    },
+    {
+        "service": "None", "type": "http", "match_type": "regex",
+        "predicate_key": "span_name", "match_key": "span_name",
+        "span_kind": "SPAN_KIND_CLIENT",
+        "match_groups": [{"destination": "span_name", "source": "path"}],
+        "rule": {"regex": r"\bsCloudApiName=(?P<path>[^&\s]+)"},
+    },
+    {
+        "service": "None", "type": "http", "match_type": "regex",
+        "predicate_key": "span_name", "match_key": "span_name",
+        "span_kind": "SPAN_KIND_CLIENT",
+        "match_groups": [{"destination": "span_name", "source": "path"}],
+        "rule": {"regex": r"^(?P<path>/v2/profile/userinfo)"},
+    },
+    {
+        "service": "None", "type": "http", "match_type": "regex",
+        "predicate_key": "span_name", "match_key": "span_name",
+        "span_kind": "SPAN_KIND_CLIENT",
+        "match_groups": [{"destination": "span_name", "source": "path"}],
+        "rule": {"regex": r"^(?P<path>/v2/profile/openid2uid)"},
+    },
+    {
+        "service": "None", "type": "http", "match_type": "regex",
+        "predicate_key": "span_name", "match_key": "span_name",
+        "span_kind": "SPAN_KIND_CLIENT",
+        "match_groups": [{"destination": "span_name", "source": "path"}],
+        "rule": {"regex": r"^(?P<path>/v2/auth/verify_login)"},
+    },
+    {
+        "service": "None", "type": "http", "match_type": "regex",
+        "predicate_key": "span_name", "match_key": "span_name",
+        "span_kind": "SPAN_KIND_CLIENT",
+        "match_groups": [{"destination": "span_name", "source": "path"}],
+        "rule": {"regex": r"^(?P<path>/audit\d+/_doc)"},
+    },
+    {
+        "service": "None", "type": "http", "match_type": "regex",
+        "predicate_key": "span_name", "match_key": "span_name",
+        "span_kind": "SPAN_KIND_CLIENT",
+        "match_groups": [{"destination": "span_name", "source": "path"}],
+        "rule": {"regex": r"^(?P<path>/matchauth\d+/_doc)"},
+    },
+    {
+        "service": "None", "type": "http", "match_type": "regex",
+        "predicate_key": "span_name", "match_key": "span_name",
+        "span_kind": "SPAN_KIND_CLIENT",
+        "match_groups": [{"destination": "span_name", "source": "path"}],
+        "rule": {"regex": r"^(?P<path>/orgscores\d+/_doc)"},
+    },
+]}}
+
+NormalTypeValueConfig.refresh_config(
+    bk_biz_id, app_name, AppConfigBase.APP_LEVEL, app_name,
+    [{"type": ConfigTypes.ALL_APP_CONFIG, "value": json.dumps(app_config)}],
+    need_delete_config=False,
+)
+
+applications = list(ApmApplication.objects.filter(bk_biz_id=bk_biz_id, app_name=app_name))
+ApplicationConfig.refresh_k8s(applications)
+```
+
+### c. 平台配置下发
 
 ```python
 from apm.core.platform_config import PlatformConfig
 PlatformConfig.refresh("system")
 ```
 
-### c. 查询 Span 分组统计
+### d. 查询 Span 分组统计
 
 ```python
 from apm.models.datasource import TraceDataSource

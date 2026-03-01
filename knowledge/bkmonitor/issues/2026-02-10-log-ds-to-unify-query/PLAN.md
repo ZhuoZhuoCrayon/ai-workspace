@@ -31,10 +31,10 @@ updated: 2026-02-10
 
 ```bash
 NAMESPACE="blueking"
-POD="bk-monitor-web-68cc644ccd-6vwbh"
+POD="bk-monitor-api-54d46d7d57-2fr7l"
 
 NAMESPACE="ieg-blueking-monitor-prod"
-POD="bk-monitor-api-86459d8699-267wx"
+POD="bk-monitor-api-b6f767fcb-2dxfb"
 
 LOCAL_PROJECT_ROOT="/remote-dev/Project/Github/bk/monitor/bk-monitor/bkmonitor"
 kubectl cp ${LOCAL_PROJECT_ROOT}/constants/data_source.py -n ${NAMESPACE} ${POD}:/app/code/constants/data_source.py

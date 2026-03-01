@@ -4,7 +4,7 @@ tags: [apm, service, discover, node, endpoint]
 description: APM 服务节点发现、端点发现、指标发现等代码片段
 language: python
 created: 2026-02-09
-updated: 2026-02-09
+updated: 2026-02-28
 ---
 
 # APM 服务发现
@@ -118,7 +118,54 @@ result = RelationQ.query(
 )
 ```
 
-### e. 手动创建服务节点
+### e. 按服务统计接口数量分布
+
+```python
+from collections import Counter
+from apm.models import Endpoint
+
+bk_biz_id = 19062
+app_name = "esp_pubgm_prod"
+
+counter = Counter(
+    Endpoint.objects.filter(bk_biz_id=bk_biz_id, app_name=app_name)
+    .values_list("service_name", flat=True)
+)
+for service_name, count in counter.most_common():
+    print(f"{service_name}: {count}")
+```
+
+### f. 删除高基数接口
+
+```python
+from django.db.models import Q, Count
+from apm.models import Endpoint
+
+bk_biz_id = 19062
+app_name = "esp_pubgm_prod"
+
+targets = Endpoint.objects.filter(
+    bk_biz_id=bk_biz_id, app_name=app_name,
+).filter(
+    Q(endpoint_name__startswith="/checkLogin.php?")
+    | Q(endpoint_name__startswith="/v4/openim/batchsendmsg?")
+    | Q(endpoint_name__contains="sCloudApiName=")
+    | Q(endpoint_name__startswith="/v2/profile/userinfo?")
+    | Q(endpoint_name__startswith="/v2/profile/openid2uid?")
+    | Q(endpoint_name__startswith="/v2/auth/verify_login?")
+    | Q(endpoint_name__startswith="/audit2023/_doc/")
+    | Q(endpoint_name__startswith="/matchauth542/_doc/")
+    | Q(endpoint_name__startswith="/orgscores542/_doc/")
+)
+
+print(f"will delete {targets.count()} endpoints")
+for row in targets.values("service_name").annotate(cnt=Count("id")).order_by("-cnt"):
+    print(f"  {row['service_name']}: {row['cnt']}")
+
+# targets.delete()
+```
+
+### g. 手动创建服务节点
 
 ```python
 from apm.models import TopoNode
