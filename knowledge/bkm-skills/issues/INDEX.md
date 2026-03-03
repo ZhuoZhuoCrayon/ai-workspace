@@ -3,3 +3,5 @@
 | 文件 | 标签 | 摘要 | 更新日期 |
 |------|------|------|---------|
 | [RPC 场景巡检 Skills](./2026-02-15-rpc-inspection-skills/README.md) | `rpc` `inspection` `red` `trpc` | 基于蓝鲸监控 MCP 工具构建 RPC 服务健康巡检 Skill，覆盖 RED 指标分析与维度下钻 | 2026-02-15 |
+| [优化 bk-ci-helper](./2026-03-01-ci-helper-best-practices/README.md) | `bk-ci-helper` `optimization` `best-practices` | 将 bk-rpc-inspection 最佳实践迁移到 bk-ci-helper | 2026-03-01 |
+| [RPC 巡检 Skill 提速优化](./2026-03-02-rpc-inspection-optimization/README.md) | `bk-rpc-inspection` `optimization` `performance` | 优化 bk-rpc-inspection Skill 的执行效率，减少工具调用次数和端到端耗时 | 2026-03-02 |
