@@ -8,7 +8,7 @@
 
 | 需求 | 标签 | 状态 | 更新日期 |
 |------|------|------|----------|
-| [APM 支持跨应用共享数据源](./issues/2026-03-03-apm-shared-datasource/README.md) | `apm` `datasource` `shared-storage` | 设计中 | 2026-03-03 |
+| [APM 支持跨应用共享数据源](./issues/2026-03-03-apm-shared-datasource/README.md) | `apm` `datasource` `es` `shared-storage` | 设计中 | 2026-03-03 |
 | [日志数据源切换 unify-query](./issues/2026-02-10-log-ds-to-unify-query/README.md) | `log` `unify-query` | 对账中 | 2026-02-10 |
 
 ### Snippets
