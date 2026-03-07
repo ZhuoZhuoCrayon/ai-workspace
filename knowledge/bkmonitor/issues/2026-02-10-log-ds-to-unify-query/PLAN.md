@@ -31,7 +31,7 @@ updated: 2026-02-10
 
 ```bash
 NAMESPACE="blueking"
-POD="bk-monitor-api-54d46d7d57-2fr7l"
+POD="bk-monitor-api-d76956886-84bhf"
 
 NAMESPACE="ieg-blueking-monitor-prod"
 POD="bk-monitor-api-b6f767fcb-2dxfb"
@@ -41,7 +41,7 @@ kubectl cp ${LOCAL_PROJECT_ROOT}/constants/data_source.py -n ${NAMESPACE} ${POD}
 kubectl cp ${LOCAL_PROJECT_ROOT}/bkmonitor/data_source/unify_query/query.py -n ${NAMESPACE} ${POD}:/app/code/bkmonitor/data_source/unify_query/query.py
 kubectl cp ${LOCAL_PROJECT_ROOT}/bkmonitor/data_source/data_source/__init__.py -n ${NAMESPACE} ${POD}:/app/code/bkmonitor/data_source/data_source/__init__.py
 kubectl cp ${LOCAL_PROJECT_ROOT}/bkmonitor/management/commands/reconcile_log_strategy.py -n ${NAMESPACE} ${POD}:/app/code/bkmonitor/management/commands/reconcile_log_strategy.py
-
+kubectl cp ${LOCAL_PROJECT_ROOT}/bkmonitor/config/default.py -n ${NAMESPACE} ${POD}:/app/code/bkmonitor/config/default.py
 kubectl exec -n ${NAMESPACE} ${POD} -it -- bash
 ```
 
@@ -78,6 +78,13 @@ kubectl cp ${NAMESPACE}/${POD}:${OUTPUT} ${OUTPUT}
 END_TIME=$(date +%s)
 START_TIME=$((END_TIME - 900))
 echo "对账时间范围: ${START_TIME} ~ ${END_TIME}"
+```
+
+**bkop**
+
+```bash
+OUTPUT="/tmp/bkop_reconcile_$(date +%Y%m%d%H%M%S)_g01.csv"
+python manage.py reconcile_log_strategy --mode reconcile --output ${OUTPUT} --start-time ${START_TIME} --end-time ${END_TIME} --biz-ids 2 9 10 11 7 -50
 ```
 
 **第 1 组**（1 个业务，5888 个策略）—— TGlog：
@@ -153,8 +160,8 @@ python manage.py reconcile_log_strategy --mode reconcile --output ${OUTPUT} --st
 将生成的 CSV 从 Pod 中复制到本地（`kubectl cp` 不支持通配符，用 `tar` 批量传输）：
 
 ```bash
-# 在 Pod 外执行：批量复制所有 ieod_reconcile_*.csv 到本地 /tmp/
-kubectl exec -n ${NAMESPACE} ${POD} -- bash -c 'cd /tmp && tar cf - ieod_reconcile_*.csv' | tar xf - -C /tmp/
+# 在 Pod 外执行：批量复制所有 *_reconcile_*.csv 到本地 /tmp/
+kubectl exec -n ${NAMESPACE} ${POD} -- bash -c 'cd /tmp && tar cf - *_reconcile_*.csv' | tar xf - -C /tmp/
 ```
 
 ### d. 指定策略对账（调试用）
