@@ -15,9 +15,9 @@ updated: 2026-03-04
 
 ### a. 思路
 
-**Before**：配置以 `service_name` 为最小粒度，1 条记录 = 1 个服务。全局配置只能通过遍历所有服务逐条写入。
+**Before**：以服务（`service_name`）为最小粒度，1 条记录 = 1 个服务，全局配置只能通过遍历所有服务逐条写入。
 
-**After**：配置以 `service_names` 为生效范围，1 条记录可覆盖多个服务或全局。查询时合并全局 + 服务级结果，服务级优先。
+**After**：以服务可见范围（`service_names`）管理配置。
 
 ### b. 模型设计
 
@@ -29,20 +29,21 @@ classDiagram
         <<abstract>>
         bk_biz_id
         app_name
-        service_name（保留兼容）
-        service_names: JSONField（新增）
-        created_at / updated_at
+        service_name
+        service_names
         get_relations()
     }
     class LogServiceRelation {
         log_type
         related_bk_biz_id
-        value_list: JSONField
+        value_list
     }
     class CodeRedefinedConfigRelation {
-        kind（caller/callee）
-        callee_server / callee_service / callee_method
-        code_type_rules: JSONField
+        kind
+        callee_server
+        callee_service
+        callee_method
+        code_type_rules
         enabled
     }
 
@@ -50,34 +51,71 @@ classDiagram
     ServiceBase <|-- CodeRedefinedConfigRelation
 ```
 
-**`service_names` 字段定义**：`JSONField(default=list)`
-
 **生效范围约定**：
 
-| `service_names` 值 | 语义 |
-|---|---|
-| `[]`（空列表） | 全局 —— 应用下所有服务生效 |
-| `["svc_a", "svc_b"]` | 指定服务列表 |
+| # | service_name *[1]* | service_names | 语义 | 限制 |
+|---|---|---|---|---|
+| 1 | `*` | `[]` | **全局**：全部服务可见。 | 服务下不可修改。 |
+| 2 | `*` | `["svc_a", "svc_b"]` | **多服务**：部分服务可见。 | 服务下不可修改。 |
+| 3 | `svc_a` | `["svc_a"]` | **单服务**：单个服务可见，可调整范围，转为 `#2` *[2]*。 | -- |
 
-> 保留 `service_name` 字段（兼容历史数据与索引），新逻辑以 `service_names` 为准。全局记录的 `service_name` 填空字符串（需修改字段定义：`blank=True, default=""`）。migrate 保证所有存量数据的 `service_names` 被回填，不存在 `None` 状态。
+* *[1] 向前兼容：保留 `service_name` ，通过收敛关联配置 CRUD，确保逐步废弃该字段。*
+* *[2] 调整可见服务范围：暂时只在「返回码重定义」支持。*
 
-### c. 查询合并策略
+### c. 查询策略
+
+将「查询」收敛为公共方法。
 
 ```mermaid
 flowchart LR
-    A[查询入参] --> B[按 app 查全局记录]
-    A --> C[按 service_names 查指定记录]
-    B --> D[合并]
+    A[查询 ORM] --> B[全局]
+    A --> C[服务可见]
+    B --> D[查询结果]
     C --> D
-    D --> E{冲突?}
-    E -->|是| F[服务级优先]
-    E -->|否| G[返回合集]
+    D --> E[增加标识]
+    E --> F[is_global]
+    E --> G[is_shared]
 ```
 
 - 全局记录：`service_names=[]`
 - 指定记录：`service_names__contains=[target_service]`
-- 合并优先级：服务级 > 跨服务共享 > 全局
-- 冲突解决（CodeRedefinedConfigRelation）：按 `(callee_server, callee_service, callee_method)` 去重，`len(service_names)` 越小优先级越低，服务级覆盖全局
+- 服务下不可修改：`is_global` `is_shared`。
+
+
+
+### d. 更新策略
+
+将「更新」收敛为公共方法。
+
+```mermaid
+flowchart LR
+    A[输入配置] --> B{层级}
+    B -->|应用| C{模式}
+    C -->|全局| E[全局规则]
+    C -->|全量| F[全量规则]
+    B -->|服务| D[移除共享规则]
+    E -->|global| G[查询存量]
+    F -->|all| G
+    D -->|service| G
+    G --> I[对比]
+    I --> H1[update]
+    I --> H2[create]
+    I --> H3[delete]
+
+```
+
+**更新范围：**
+
+* 全量：`--`。
+* 全局：`service_names=[]`
+* 服务：`service_names=["target_service"]`
+
+**对比唯一键**：
+
+* 公共：`bk_biz_id`、`app_name`、`service_names`
+* 额外（e.g. `CodeRedefinedConfigRelation`）：`kind`、`callee_server`、`callee_service`、`callee_method`。
+
+
 
 ### d. 迁移策略
 
@@ -88,17 +126,14 @@ flowchart LR
     C --> D[旧读取路径兼容]
 ```
 
-第一期：migrate 将 `service_name` 值填入 `service_names`（`[service_name]`），所有新写入路径统一使用 `service_names`。旧读取路径保持 `service_name` 兼容，逐步收敛。
+* 新增记录：确保 `service_name` `service_names` 均写入。 
 
 ### e. 风险与约束
 
 | 风险 | 应对 |
 |---|---|
-| service_names JSON 查询性能 | 数据量小（配置级），可接受；MySQL 下 `JSON_CONTAINS` 无法利用索引，必要时通过虚拟列 + B-Tree 索引优化 |
-| 全局与服务级冲突 | 查询侧显式合并，服务级优先覆盖 |
-| 迁移期间双字段并存 | service_name 保留为冗余索引字段，不影响现有查询 |
-| 写入路径遗漏 service_names | ServiceBase.save() 自动同步：若 service_names 为空且 service_name 非空，填充 `[service_name]` |
-| 全局规则展开量 | 服务数 × 全局规则数，服务数 < 200 时可接受；长期推动 collector 支持通配符 |
+| service_names JSON 查询性能 | MySQL 下 `JSON_CONTAINS` 无法利用索引，数量级小，可接受。 |
+| 迁移期间双字段并存 | service_name 保留为冗余索引字段，不影响现有查询。 |
 
 ---
 
@@ -110,20 +145,22 @@ flowchart LR
 
 | 类型 | 变更 | 说明 |
 |---|---|---|
-| Field | `service_names` | `JSONField(default=list)`，`[]` = 全局，非空 = 指定服务 |
-| Method | `get_relations` | 统一查询收口 *[1]* |
-| Method | `save` | 自动同步 *[2]* |
-| Index | `index_together` | 保留 `(bk_biz_id, app_name, service_name)` 兼容现有查询 |
-| Migration | `packages/apm_web/migrations/` | 所有子类表添加字段，RunPython 回填 *[3]* |
+| Field | `service_names` | `JSONField(default=list)`。 |
+| Method | `get_relations` | 统一查询收口 *[1]*。 |
+| Method | `update_relations` | 统一更新收口 *[2]*。 |
+| Index | `index_together` | 移除 `(bk_biz_id, app_name, service_name)` 避免 `service_name` 不可重复。 |
+| Migration | `packages/apm_web/migrations/` | 所有子类表添加字段，RunPython 回填。 |
 
 *[1]* 统一查询收口：
-- 签名：`get_relations(cls, bk_biz_id, app_name, service_names, include_global=True, **extra_filters)`
-- 查询：`Q(service_names=[])` (全局) `|` `Q(service_names__contains=[svc])` (指定服务) 取并集返回
-- 扩展：子类可 override，调用方通过 `extra_filters` 传入业务过滤条件
+- 签名：`get_relations(cls, bk_biz_id, app_name, service_names, include_global=True, include_shared=True, **extra_filters)`
+- 查询：
+  - 全局：`Q(service_names=[])`  。
+  - 共享：`Q(service_names__contains=[svc])` 。
+  - 独享：`Q(service_names=[svc])` （需验证）。
 
-*[2]* 若 `service_names` 为空且 `service_name` 非空，自动填充 `service_names = [service_name]`，防止写入路径遗漏。
+- 扩展：子类可 override，调用方通过 `extra_filters` 传入业务过滤条件。
 
-*[3]* 批量回填 `service_names = [service_name]`，使用 `iterator()` + 分批 `bulk_update` 控制内存。
+*[2]* 统一更新收口：`update_relations(cls, bk_biz_id, app_name, relations, mode)`
 
 ### b. 日志关联全局改造
 
@@ -151,6 +188,7 @@ flowchart LR
 - 现状：仅处理 `log_datasource_option`（ES 集群配置），不操作 `LogServiceRelation`
 
 *[3]* ApplicationInfoByAppNameResource 扩展：
+
 - 新增：返回值增加 `log_relations` 字段
 - 查询：`LogServiceRelation.get_relations(bk_biz_id, app_name, [], include_global=True)`
 - 参考：原 `add_service_relation` 方法已被注释，可复用其结构
