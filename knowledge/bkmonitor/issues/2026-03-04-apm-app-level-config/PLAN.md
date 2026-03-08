@@ -2,9 +2,9 @@
 title: APM 支持应用级别配置 —— 实施方案
 tags: [apm, service-config, log-relation, code-redefine, app-level]
 issue: ./README.md
-description: 通过扩展 ServiceBase 生效范围与统一查询收口，将日志关联和返回码重定义从服务粒度扩展到应用级别
+description: 通过 is_global 字段与 ServiceBase 公共方法，将日志关联和返回码重定义从服务粒度扩展到应用级别
 created: 2026-03-04
-updated: 2026-03-04
+updated: 2026-03-07
 ---
 
 # APM 支持应用级别配置 —— 实施方案
@@ -15,13 +15,24 @@ updated: 2026-03-04
 
 ### a. 思路
 
-**Before**：以服务（`service_name`）为最小粒度，1 条记录 = 1 个服务，全局配置只能通过遍历所有服务逐条写入。
+**Before**：1 条记录 = 1 个服务，全局配置只能遍历所有服务逐条写入。
 
-**After**：以服务可见范围（`service_names`）管理配置。
+**After**：引入全局记录标记，查询时自动合并全局与服务级记录，写入时隔离保护。
+
+**关键决策**：
+
+- **显式字段区分**：新增布尔字段标记全局或服务级。
+- **查询收口**：所有查询收敛到基类公共方法，按场景自动组合全局与服务级条件，调用方不再自行拼查询。
+- **写入收口**：基类提供 diff-sync 能力，子类仅声明 diff key；所有服务级写入自动排除全局记录。
+- **改造范围**：
+  - **全部子表**写入、查询进行逻辑收敛。
+  - 日志关联：支持新增全局配置，消费入口相应进行改造。
+  - 返回码重定义：全局配置支持按 `service_names` 合并及拆分更新。
+
 
 ### b. 模型设计
 
-ServiceBase 新增 `service_names` 字段和 `get_relations` 类方法，所有子类统一继承。
+`ServiceBase`（抽象基类，7 个子类）新增 `is_global` 字段，Migration 仅添加一列，无需数据迁移。
 
 ```mermaid
 classDiagram
@@ -30,110 +41,82 @@ classDiagram
         bk_biz_id
         app_name
         service_name
-        service_names
-        get_relations()
+        is_global（新增）
     }
     class LogServiceRelation {
-        log_type
         related_bk_biz_id
-        value_list
+        log_type
     }
     class CodeRedefinedConfigRelation {
-        kind
         callee_server
         callee_service
         callee_method
-        code_type_rules
-        enabled
     }
 
     ServiceBase <|-- LogServiceRelation
     ServiceBase <|-- CodeRedefinedConfigRelation
 ```
 
-**生效范围约定**：
+| 级别           | `is_global` *[1]* | `service_name` | 生效范围         |
+| :------------- | :---------------- | :------------- | :--------------- |
+| 应用级（全局） | `true`            | `""`           | 应用下所有服务。 |
+| 服务级         | `False`           | `"<具体服务>"` | 仅指定服务。     |
 
-| # | service_name *[1]* | service_names | 语义 | 限制 |
-|---|---|---|---|---|
-| 1 | `*` | `[]` | **全局**：全部服务可见。 | 服务下不可修改。 |
-| 2 | `*` | `["svc_a", "svc_b"]` | **多服务**：部分服务可见。 | 服务下不可修改。 |
-| 3 | `svc_a` | `["svc_a"]` | **单服务**：单个服务可见，可调整范围，转为 `#2` *[2]*。 | -- |
+*[1]* **7 表自动继承**：字段定义在抽象基类，子类表自动获得该列，无需逐表处理。
 
-* *[1] 向前兼容：保留 `service_name` ，通过收敛关联配置 CRUD，确保逐步废弃该字段。*
-* *[2] 调整可见服务范围：暂时只在「返回码重定义」支持。*
+### c. 查询机制
 
-### c. 查询策略
+基类提供统一查询方法，按场景自动组合条件：
 
-将「查询」收敛为公共方法。
+| 场景                 | service_name   | include_global   | 返回内容              |
+| :------------------- | :------------- | ---------------- | :-------------------- |
+| 服务级               | `"<具体服务>"` | `true` / `false` | 服务（可选 + 全局）。 |
+| 应用级视图（仅全局） | `""`           | `true`           | 全局规则。            |
+| 应用级视图（全量）   | `--` *[1]*     | `true`           | 应用下所有规则。      |
 
-```mermaid
-flowchart LR
-    A[查询 ORM] --> B[全局]
-    A --> C[服务可见]
-    B --> D[查询结果]
-    C --> D
-    D --> E[增加标识]
-    E --> F[is_global]
-    E --> G[is_shared]
-```
+* *[1]* `--` 代表不传 `service_name`。
+* *[2]* 返回结果附带 `is_global`，调用方据此区分来源。
 
-- 全局记录：`service_names=[]`
-- 指定记录：`service_names__contains=[target_service]`
-- 服务下不可修改：`is_global` `is_shared`。
+* *[3]* **向后兼容**：List API 默认不返回全局规则，旧前端不传参数时行为不变。
 
+### d. 写入机制
 
-
-### d. 更新策略
-
-将「更新」收敛为公共方法。
+现状三套写入模式（按 key diff、逐条 upsert、删旧建新）各自实现，引入全局后需在每条路径手动排除，容易遗漏。收敛为统一的 diff-sync 模式：
 
 ```mermaid
 flowchart LR
-    A[输入配置] --> B{层级}
-    B -->|应用| C{模式}
-    C -->|全局| E[全局规则]
-    C -->|全量| F[全量规则]
-    B -->|服务| D[移除共享规则]
-    E -->|global| G[查询存量]
-    F -->|all| G
-    D -->|service| G
-    G --> I[对比]
-    I --> H1[update]
-    I --> H2[create]
-    I --> H3[delete]
-
+    A[接收记录列表] --> B[获取存量记录]
+    B --> C[按 diff key 比对]
+    C --> D[新增]
+    C --> E[变更]
+    C --> F[移除]
+    D & E & F --> G[返回变更统计]
 ```
 
-**更新范围：**
-
-* 全量：`--`。
-* 全局：`service_names=[]`
-* 服务：`service_names=["target_service"]`
-
-**对比唯一键**：
-
-* 公共：`bk_biz_id`、`app_name`、`service_names`
-* 额外（e.g. `CodeRedefinedConfigRelation`）：`kind`、`callee_server`、`callee_service`、`callee_method`。
+**保护机制**：获取存量时自动附加服务级条件，从机制上防止意外修改全局记录。全局记录写入需显式声明。
 
 
 
-### d. 迁移策略
+### e. 配置下发
 
-```mermaid
-flowchart LR
-    A[migrate] --> B["service_names = [service_name]"]
-    B --> C[新记录统一写 service_names]
-    C --> D[旧读取路径兼容]
-```
+返回码重定义规则下发到 bk-collector 时，按记录类型设置 `source` 字段：
 
-* 新增记录：确保 `service_name` `service_names` 均写入。 
+| 级别           | `source` 值 | 说明                                |
+| :------------- | :---------- | :---------------------------------- |
+| 应用级（全局） | `"*"`       | bk-collector 通配符，匹配所有服务。 |
+| 服务级         | 具体服务名  | 仅匹配指定服务。                    |
 
-### e. 风险与约束
+- *[1]* **不展开、不去重**：全局规则直接以通配符下发，由 bk-collector 运行时匹配，避免枚举所有服务。
+- *[2]* **优先级依赖 bk-collector**：服务级与全局规则同时存在时，需确保服务级优先生效（见风险 R2）。
 
-| 风险 | 应对 |
-|---|---|
-| service_names JSON 查询性能 | MySQL 下 `JSON_CONTAINS` 无法利用索引，数量级小，可接受。 |
-| 迁移期间双字段并存 | service_name 保留为冗余索引字段，不影响现有查询。 |
+### f. 风险与约束
+
+| #  | 风险                                                   | 等级     | 应对                                                                                   |
+|:---|:-------------------------------------------------------|:---------|:---------------------------------------------------------------------------------------|
+| R1 | 返回码重定义无联合唯一约束，并发写入可能重复           | High     | 本期记为风险，后续独立 PR 修复                                                         |
+| R2 | bk-collector `source="*"` 匹配优先级未确认             | Critical | 上线前必须验证：下发全局 + 服务级规则，断言服务级优先生效。若不支持，需调整方案         |
+| R3 | ORM 写入不经过 `full_clean`，`service_name` 无 `blank` | Low      | 无实际影响，记录备忘                                                                   |
+| R4 | `is_global` 查询可能不走索引                           | Low      | 数据量小，可接受                                                                       |
 
 ---
 
@@ -141,93 +124,102 @@ flowchart LR
 
 ### a. ServiceBase 基础能力
 
-`apm_web.models.service.ServiceBase`
+`apm_web/models/service.py`
 
-| 类型 | 变更 | 说明 |
-|---|---|---|
-| Field | `service_names` | `JSONField(default=list)`。 |
-| Method | `get_relations` | 统一查询收口 *[1]*。 |
-| Method | `update_relations` | 统一更新收口 *[2]*。 |
-| Index | `index_together` | 移除 `(bk_biz_id, app_name, service_name)` 避免 `service_name` 不可重复。 |
-| Migration | `packages/apm_web/migrations/` | 所有子类表添加字段，RunPython 回填。 |
+| 变更点                   | 说明                                                                                                                                                                          |
+|:-------------------------|:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **[Field]** `is_global`  | `BooleanField(default=False)`。                                                                                                                            |
+| **[Method]** `get_relations`   | 统一查询入口 *[1]*，可以根据实际情况，额外提供 `get_relation_q` / `get_relation_infos` 。 |
+| **[Method]** `sync_relations`  | 统一更新入口 *[2]*，按 `DIFF_KEYS` 比对存量，执行 `bulk_update` / `bulk_create` / `delete`。 |
 
-*[1]* 统一查询收口：
-- 签名：`get_relations(cls, bk_biz_id, app_name, service_names, include_global=True, include_shared=True, **extra_filters)`
-- 查询：
-  - 全局：`Q(service_names=[])`  。
-  - 共享：`Q(service_names__contains=[svc])` 。
-  - 独享：`Q(service_names=[svc])` （需验证）。
+* *[1]* 统一查询入口：`get_relations(cls, bk_biz_id, app_name, service_names, include_global=True, **extra_filters)`。
+* *[2]* 统一更新入口：`sync_relations(cls, bk_biz_id, app_name, service_name, records, scope)`。
+  * `scope=all`：所有记录。
+  * `scope=global`：`Q(is_global=True)`。
+  * `scope=service`：`Q(is_global=False)`。
 
-- 扩展：子类可 override，调用方通过 `extra_filters` 传入业务过滤条件。
+**diff-sync 配置声明：**
 
-*[2]* 统一更新收口：`update_relations(cls, bk_biz_id, app_name, relations, mode)`
+| 子类                          | `DIFF_KEYS` *[1]*                                            | `DEFAULT_KEYS` *[2]*             |
+| :---------------------------- | :----------------------------------------------------------- | :------------------------------- |
+| `LogServiceRelation`          | `["related_bk_biz_id"]`                                      | `["log_type", "value_list"]`     |
+| `CodeRedefinedConfigRelation` | `["kind"", callee_server", "callee_service", "callee_method"]` | `["code_type_rules", "enabled"]` |
 
-### b. 日志关联全局改造
+* *[1]* DIFF_KEYS：记录的唯一标识，用于比对存量和传入列表。
+* *[2]* DEFAULT_KEYS：匹配到已有记录后，允许被更新的字段，等价于  `update_or_create(defaults=...)` 的部分。
+* *[3]* `DIFF_KEYS`、`DEFAULT_KEYS` 作为类成员变量，子类可重写，供 `sync_relations` 读取。
 
-`apm_web.models.service.LogServiceRelation`
+### b. 返回码重定义
 
-| 模块 | 变更 | 说明 |
-|---|---|---|
-| `ServiceLogHandler.get_log_relations` | 改造查询 | 调用 `get_relations` 替代 `filter` *[1]* |
-| `SetupResource` | 新增参数 | 支持写入应用级别日志关联 *[2]* |
-| `ApplicationInfoByAppNameResource` | 新增返回字段 | 输出全局级别日志关联 *[3]* |
-| `ServiceInfoResource` | 查询收敛 | `filter(service_name=...)` → `get_relations` |
-| `ServiceInfoResource` | 写入收敛 | 删除与 `values_list` 查询收口到统一方法 |
-| `meta.resources.add_service_relation` | 查询收敛 | 收口到 `get_relations` |
-| `ServiceConfigResource.update_log_relations` | 写入适配 | 创建实例时补充 `service_names=[service_name]` |
-| `ServiceRelationResource.handle_update` | 写入适配 | 通用创建路径，extras 中补充 `service_names` |
+#### b-1. 接口改造
 
-*[1]* 查询改造：
-- 调用：`LogServiceRelation.get_relations(bk_biz_id, app_name, service_names, include_global, log_type=BK_LOG)`
-- 替代：`filter(service_name__in=service_names, log_type=BK_LOG)`
-- 合并：全局 + 服务级取并集，按 `index_set_id` 去重
-- 调用方（`ServiceRelationListResource`、`ServiceLogInfoResource`、`EntitySet`）已使用 `service_names` 参数，签名无需改动
+`apm_web/service/resources.py`
 
-*[2]* SetupResource 扩展：
-- 新增：`log_service_relation` 可选参数，写入全局记录（`service_names=[]`）
-- 现状：仅处理 `log_datasource_option`（ES 集群配置），不操作 `LogServiceRelation`
+| 变更点                                                   | 说明                                                 |
+| :------------------------------------------------------- | :--------------------------------------------------- |
+| `ListCodeRedefinedRuleResource`                          | *[1]*                                                |
+| `SetCodeRedefinedRuleResource`                           | *[2]*                                                |
+| `DeleteCodeRedefinedRuleResource`                        | 冗余接口，前端确认无调用入口后删除。                 |
+| `SetCodeRedefinedRuleResource.build_code_relabel_config` | 全局规则服务名（`source`）配置为 `"*"`，其余无变更。 |
 
-*[3]* ApplicationInfoByAppNameResource 扩展：
+*[1]*
 
-- 新增：返回值增加 `log_relations` 字段
-- 查询：`LogServiceRelation.get_relations(bk_biz_id, app_name, [], include_global=True)`
-- 参考：原 `add_service_relation` 方法已被注释，可复用其结构
+* 参数：`service_name` 变为「可选」，不传服务名视为「应用级视图（全量）」。
+* 处理：调用 `get_relations` 获取配置。
+* 响应：规则增加 `is_global`、`service_names` 字段，不同服务相同规则按 `service_name` 聚合展示。
 
-> `save()` 自动同步作为写入路径的兜底保障，但写入路径应显式赋值。
+*[2]*
 
-### c. 返回码重定义全局改造
+* 参数：规则新增 `service_names` 字段；外层 `service_name` 变为「可选」。
+* 处理：按 `service_names` 拆分为单个服务的规则，调用 `sync_relations` 设置。
 
-`apm_web.models.service.CodeRedefinedConfigRelation`
+#### b-2. 全局页面展示条件
 
-| 模块 | 变更 | 说明 |
-|---|---|---|
-| `ListCodeRedefinedRuleResource` | 改造查询 | 调用 `get_relations` 替代 `filter` *[1]* |
-| `SetCodeRedefinedRuleResource` | 写入逻辑 | 新增全局规则写入路径（`service_names=[]`） |
-| `SetCodeRedefinedRuleResource.build_code_relabel_config` | 配置构建 | 合并全局规则到每个服务的下发配置 *[2]* |
-| `publish_code_relabel_to_apm` | 下发适配 | 下发格式无变化，展开后透明兼容 *[3]* |
+1）背景：「应用配置」仅在 RPC 场景才需要展示全局返回码重定向的配置页面。
 
-*[1]* 查询改造：
-- 调用：`CodeRedefinedConfigRelation.get_relations(bk_biz_id, app_name, [service_name])`
-- 返回：标记每条规则来源（`scope: "global"` / `"service"` / `"shared"`）
-- 展示：服务级视图合并全局 + 当前服务规则，全局规则标记 `readonly`
+2）`apm_web.meta.resources.SimpleServiceList`
 
-*[2]* 配置构建：
-- 现状：按 `(bk_biz_id, app_name, enabled=True)` 查全量，按 `(service_name, kind)` 分组
-- 改造：全局规则（`service_names=[]`）生成时，`source` 展开为每个活跃服务名
+* 增加 `include_systems` 参数并返回 `systems`。
+* 复用 `apm_web.strategy.dispatch.enricher.SystemChecker`  增加信息。
 
-*[3]* 下发链路：`publish_code_relabel_to_apm` → `NormalTypeValueConfig` → `ApplicationConfig` → bk-collector。bk-collector 按 `source` 匹配，展开后透明兼容。
+3）前端：
 
-### d. ServiceConfigResource 待确认项
+* 存在 `RPC` 服务时展示。
+* 作用范围仅支持 `systems` 包含 `RPC` 的服务。
 
-`apm_web.service.resources.ServiceConfigResource`
+### c. 日志关联
 
-| 待确认 | 选项 |
-|---|---|
-| 服务级界面是否展示全局关联 | A：展示但标记 `readonly` / B：不展示 |
-| 服务级是否可编辑全局规则 | A：不可（跳转应用级入口）/ B：可编辑（影响所有服务） |
+`apm_web/handlers/log_handler.py`、`apm_web/service/resources.py`
 
-建议方案 A：展示但只读，编辑入口收敛到应用级配置页面，避免从服务级修改全局规则造成误操作。
+#### c-1. 查询
+
+以下调用方统一改为调用 `get_relations`：
+
+| 调用方                                           | 改造要点                             |
+|:-------------------------------------------------|:-------------------------------------|
+| `ServiceLogHandler.get_log_relations`            | 废弃。 |
+| `EntitySet._service_log_indexes_map` | `include_global=true` |
+| `ServiceInfoResource.get_log_relation_info_list` | `LogServiceRelationOutputSerializer` 增加 `is_global`。 |
+| `ServiceInfoResource.get_log_relation_info`      | **无引用，待废弃。** |
+| `ServiceDetailResource.add_service_relation` | **无引用，待废弃。** |
+| `ApplicationInfoByAppNameResource` | 返回值增加 `log_relations` 字段，查询全局关联。 |
+
+#### c-2. 写入
+
+| 变更点                                       | 说明                                                         |
+| :------------------------------------------- | :----------------------------------------------------------- |
+| `SetupResource`                              | 新增 `LogRelationSetupProcessor`，写入全局日志关联。         |
+| `ServiceConfigResource.update_log_relations` | 调收归 `ServiceBase.sync_relations`。                        |
+| `LogServiceRelation.filter_by_index_set_id`  | 会命中全局记录，调用方 `AppQueryByIndexSetResource` 须按 `(bk_biz_id, app_name)` 去重。 |
+
+### d. 接口层入口收敛
+
+| 变更点                    | 说明                                                         |
+| :------------------------ | :----------------------------------------------------------- |
+| `ServiceRelationResource` | 冗余接口，前端确认无调用入口后删除。                         |
+| `ServiceConfigResource`   | 所有 `ServiceBase` 子类更新逻辑统一收归 `ServiceBase.sync_relations`。 |
+| `ServiceInfoResource`     | 所有 `ServiceBase` 子类查询逻辑统一收归 `ServiceBase.get_relations`。 |
 
 ---
 
-*制定日期：2026-03-04*
+*制定日期：2026-03-04 ｜ 更新日期：2026-03-07*
