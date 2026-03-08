@@ -1,10 +1,10 @@
 ---
-
-## title: APM 支持应用级别配置
+title: APM 支持应用级别配置
 tags: [apm, service-config, log-relation, code-redefine, app-level]
 description: 将 APM 服务关联配置从纯服务粒度扩展到应用级别，支持跨服务共享与全局配置
 created: 2026-03-04
 updated: 2026-03-08
+---
 
 # APM 支持应用级别配置
 

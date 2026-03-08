@@ -56,10 +56,10 @@ classDiagram
     ServiceBase <|-- CodeRedefinedConfigRelation
 ```
 
-| 级别           | `is_global` *[1]* | `service_name` | 生效范围         |
-|:---------------|:-------------------|:---------------|:-----------------|
-| 应用级（全局） | `True`             | `""`           | 应用下所有服务。 |
-| 服务级         | `False`            | `"<具体服务>"` | 仅指定服务。     |
+| 级别      | is_global *[1]* | service_name | 生效范围     |
+|:--------|:----------------|:-------------|:---------|
+| 应用级（全局） | `True`          | `""`         | 应用下所有服务。 |
+| 服务级     | `False`         | `"<具体服务>"`   | 仅指定服务。   |
 
 - *[1]* **7 表自动继承**：字段定义在抽象基类，子类表自动获得该列，无需逐表处理。
 
@@ -67,11 +67,11 @@ classDiagram
 
 基类提供统一查询方法，按场景自动组合条件：
 
-| 场景                   | `service_name`   | `include_global`   | 返回内容              |
-|:-----------------------|:-----------------|:-------------------|:----------------------|
-| 服务级                 | `"<具体服务>"`   | `true` / `false`   | 服务（可选 + 全局）。 |
-| 应用级视图（仅全局）   | `""`             | `true`             | 全局规则。            |
-| 应用级视图（全量）     | `--` *[1]*       | `true`             | 应用下所有规则。      |
+| 场景         | service_name | include_global   | 返回内容         |
+|:-----------|:-------------|:-----------------|:-------------|
+| 服务级        | `"<具体服务>"`   | `true` / `false` | 服务（可选 + 全局）。 |
+| 应用级视图（仅全局） | `""`         | `true`           | 全局规则。        |
+| 应用级视图（全量）  | `--` *[1]*   | `true`           | 应用下所有规则。     |
 
 - *[1]* `--` 代表不传 `service_name`。
 - *[2]* 返回结果附带 `is_global`，调用方据此区分来源。
@@ -97,22 +97,22 @@ flowchart LR
 
 返回码重定义规则下发到 bk-collector 时，按记录类型设置 `source` 字段：
 
-| 级别           | `source` 值 | 说明                                |
-|:---------------|:------------|:------------------------------------|
-| 应用级（全局） | `"*"`       | bk-collector 通配符，匹配所有服务。 |
-| 服务级         | 具体服务名  | 仅匹配指定服务。                    |
+| 级别      | `source` 值 | 说明                       |
+|:--------|:-----------|:-------------------------|
+| 应用级（全局） | `"*"`      | bk-collector 通配符，匹配所有服务。 |
+| 服务级     | 具体服务名      | 仅匹配指定服务。                 |
 
 - *[1]* **不展开、不去重**：全局规则直接以通配符下发，由 bk-collector 运行时匹配，避免枚举所有服务。
 - *[2]* **优先级依赖 bk-collector**：服务级与全局规则同时存在时，需确保服务级优先生效（见风险 R2）。
 
 ### f. 风险与约束
 
-| #  | 风险                                                   | 等级     | 应对                                                                           |
-|:---|:-------------------------------------------------------|:---------|:-------------------------------------------------------------------------------|
-| R1 | 返回码重定义无联合唯一约束，并发写入可能重复           | High     | 本期记为风险，后续独立 PR 修复。                                               |
-| R2 | bk-collector `source="*"` 匹配优先级未确认             | Critical | 上线前必须验证：下发全局 + 服务级规则，断言服务级优先生效。若不支持，需调整方案。 |
-| R3 | ORM 写入不经过 `full_clean`，`service_name` 无 `blank` | Low      | 无实际影响，记录备忘。                                                         |
-| R4 | `is_global` 查询可能不走索引                           | Low      | 数据量小，可接受。                                                             |
+| #  | 风险                                              | 等级       | 应对                                         |
+|:---|:------------------------------------------------|:---------|:-------------------------------------------|
+| R1 | 返回码重定义无联合唯一约束，并发写入可能重复                          | High     | 本期记为风险，后续独立 PR 修复。                         |
+| R2 | bk-collector `source="*"` 匹配优先级未确认              | Critical | 上线前必须验证：下发全局 + 服务级规则，断言服务级优先生效。若不支持，需调整方案。 |
+| R3 | ORM 写入不经过 `full_clean`，`service_name` 无 `blank` | Low      | 无实际影响，记录备忘。                                |
+| R4 | `is_global` 查询可能不走索引                            | Low      | 数据量小，可接受。                                  |
 
 ---
 
@@ -122,11 +122,11 @@ flowchart LR
 
 `apm_web/models/service.py`
 
-| 变更点                        | 说明                                                                                             |
-|:------------------------------|:-------------------------------------------------------------------------------------------------|
-| **[Field]** `is_global`       | `BooleanField(default=False)`。                                                                  |
-| **[Method]** `get_relations`  | 统一查询入口 *[1]*，可根据实际情况额外提供 `get_relation_q` / `get_relation_infos`。             |
-| **[Method]** `sync_relations` | 统一更新入口 *[2]*，按 `DIFF_KEYS` 比对存量，执行 `bulk_update` / `bulk_create` / `delete`。     |
+| 变更点                         | 说明                                                                           |
+|:----------------------------|:-----------------------------------------------------------------------------|
+| **[Field]** is_global       | `BooleanField(default=False)`。                                               |
+| **[Method]** get_relations  | 统一查询入口 *[1]*，可根据实际情况额外提供 `get_relation_q` / `get_relation_infos`。            |
+| **[Method]** sync_relations | 统一更新入口 *[2]*，按 `DIFF_KEYS` 比对存量，执行 `bulk_update` / `bulk_create` / `delete`。 |
 
 - *[1]* 统一查询入口：`get_relations(cls, bk_biz_id, app_name, service_names, include_global=True, **extra_filters)`。
 - *[2]* 统一更新入口：`sync_relations(cls, bk_biz_id, app_name, service_name, records, scope)`。
@@ -136,15 +136,17 @@ flowchart LR
 
 **diff-sync 配置声明**：
 
-| 子类                          | `DIFF_KEYS` *[1]*                                       | `DEFAULT_KEYS` *[2]*             |
-|:------------------------------|:---------------------------------------------------------|:---------------------------------|
-| `LogServiceRelation`          | `related_bk_biz_id`                                     | `["log_type", "value_list"]`     |
-| `CodeRedefinedConfigRelation` | `kind` `callee_server` `callee_service` `callee_method`  | `["code_type_rules", "enabled"]` |
+| 子类                          | DIFF_KEYS *[1]*                                         | DEFAULT_KEYS *[2]*               |
+|:----------------------------|:--------------------------------------------------------|:---------------------------------|
+| LogServiceRelation          | `related_bk_biz_id`                                     | `["log_type", "value_list"]`     |
+| CodeRedefinedConfigRelation | `kind` `callee_server` `callee_service` `callee_method` | `["code_type_rules", "enabled"]` |
 
 - *[1]* `DIFF_KEYS`：记录的唯一标识，用于比对存量和传入列表。
 - *[2]* `DEFAULT_KEYS`：匹配到已有记录后，允许被更新的字段，等价于 `update_or_create(defaults=...)` 的部分。
 - *[3]* `DIFF_KEYS`、`DEFAULT_KEYS` 作为类成员变量，子类可重写，供 `sync_relations` 读取。
-- *[4]* `SCOPE_KEYS`：`bk_biz_id` `app_name` `service_name`，参与 diff 比对。`scope=all` 时工作集包含不同 `service_name` 的记录，需依赖 `SCOPE_KEYS` 区分。
+- *[4]* `SCOPE_KEYS`：
+    - 字段：`bk_biz_id` `app_name` `service_name`，参与 diff 比对。
+    - 背景：`scope=all` 时工作集包含不同 `service_name` 的记录，需依赖 `SCOPE_KEYS` 区分。
 
 ### b. 返回码重定义
 
@@ -152,12 +154,12 @@ flowchart LR
 
 `apm_web/service/resources.py`
 
-| 变更点                                                   | 说明                                                 |
-|:---------------------------------------------------------|:-----------------------------------------------------|
-| `ListCodeRedefinedRuleResource`                          | *[1]*                                                |
-| `SetCodeRedefinedRuleResource`                           | *[2]*                                                |
-| `DeleteCodeRedefinedRuleResource`                        | 冗余接口，前端确认无调用入口后删除。                 |
-| `SetCodeRedefinedRuleResource.build_code_relabel_config` | 全局规则服务名（`source`）配置为 `"*"`，其余无变更。 |
+| 变更点                                                    | 说明                                |
+|:-------------------------------------------------------|:----------------------------------|
+| ListCodeRedefinedRuleResource                          | *[1]*                             |
+| SetCodeRedefinedRuleResource                           | *[2]*                             |
+| DeleteCodeRedefinedRuleResource                        | 冗余接口，前端确认无调用入口后删除。                |
+| SetCodeRedefinedRuleResource.build_code_relabel_config | 全局规则服务名（`source`）配置为 `"*"`，其余无变更。 |
 
 *[1]*
 
@@ -195,30 +197,30 @@ flowchart LR
 
 以下调用方统一改为调用 `get_relations`：
 
-| 调用方                                           | 改造要点                                                    |
-|:-------------------------------------------------|:------------------------------------------------------------|
-| `ServiceLogHandler.get_log_relations`            | 废弃。                                                      |
-| `EntitySet._service_log_indexes_map`             | `include_global=true`。                                     |
-| `ServiceInfoResource.get_log_relation_info_list` | `LogServiceRelationOutputSerializer` 增加 `is_global`。     |
-| `ServiceInfoResource.get_log_relation_info`      | **无引用，待废弃。**                                        |
-| `ServiceDetailResource.add_service_relation`     | **无引用，待废弃。**                                        |
-| `ApplicationInfoByAppNameResource`               | 返回值增加 `log_relations` 字段，查询全局关联。             |
+| 变更点                                            | 说明                                                   |
+|:-----------------------------------------------|:-----------------------------------------------------|
+| ServiceLogHandler.get_log_relations            | 废弃。                                                  |
+| EntitySet._service_log_indexes_map             | `include_global=true`。                               |
+| ServiceInfoResource.get_log_relation_info_list | `LogServiceRelationOutputSerializer` 增加 `is_global`。 |
+| ServiceInfoResource.get_log_relation_info      | **无引用，待废弃。**                                         |
+| ServiceDetailResource.add_service_relation     | **无引用，待废弃。**                                         |
+| ApplicationInfoByAppNameResource               | 返回值增加 `log_relations` 字段，查询全局关联。                     |
 
 #### c-2. 写入
 
-| 变更点                                       | 说明                                                                                    |
-|:---------------------------------------------|:----------------------------------------------------------------------------------------|
-| `SetupResource`                              | 新增 `LogRelationSetupProcessor`，写入全局日志关联。                                    |
-| `ServiceConfigResource.update_log_relations` | 收归 `ServiceBase.sync_relations`。                                                     |
-| `LogServiceRelation.filter_by_index_set_id`  | 会命中全局记录，调用方 `AppQueryByIndexSetResource` 须按 `(bk_biz_id, app_name)` 去重。 |
+| 变更点                                        | 说明                                                                      |
+|:-------------------------------------------|:------------------------------------------------------------------------|
+| SetupResource                              | 新增 `LogRelationSetupProcessor`，写入全局日志关联。                                |
+| ServiceConfigResource.update_log_relations | 收归 `ServiceBase.sync_relations`。                                        |
+| LogServiceRelation.filter_by_index_set_id  | 会命中全局记录，调用方 `AppQueryByIndexSetResource` 须按 `(bk_biz_id, app_name)` 去重。 |
 
 ### d. 接口层入口收敛
 
-| 变更点                    | 说明                                                                |
-|:--------------------------|:--------------------------------------------------------------------|
-| `ServiceRelationResource` | 冗余接口，前端确认无调用入口后删除。                                |
-| `ServiceConfigResource`   | 所有 `ServiceBase` 子类更新逻辑统一收归 `ServiceBase.sync_relations`。 |
-| `ServiceInfoResource`     | 所有 `ServiceBase` 子类查询逻辑统一收归 `ServiceBase.get_relations`。  |
+| 变更点                     | 说明                                                        |
+|:------------------------|:----------------------------------------------------------|
+| ServiceRelationResource | 冗余接口，前端确认无调用入口后删除。                                        |
+| ServiceConfigResource   | 所有 `ServiceBase` 子类更新逻辑统一收归 `ServiceBase.sync_relations`。 |
+| ServiceInfoResource     | 所有 `ServiceBase` 子类查询逻辑统一收归 `ServiceBase.get_relations`。  |
 
 ---
 

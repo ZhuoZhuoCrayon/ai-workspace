@@ -1,6 +1,5 @@
 ---
-
-## title: APM 跨应用共享数据源 —— 实施方案
+title: APM 跨应用共享数据源 —— 实施方案
 tags: [apm, datasource, es, shared-storage, architecture]
 issue: knowledge/bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md
 description: APM 跨应用共享数据源的实现方案与开发方案
