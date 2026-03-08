@@ -2,3 +2,4 @@
 .vscode
 private/
 *.key
+.iwiki-sync.json
