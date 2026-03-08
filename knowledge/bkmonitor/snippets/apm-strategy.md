@@ -4,7 +4,7 @@ tags: [apm, strategy, trpc, tars, template, dispatch]
 description: APM 策略模板管理、tRPC/Tars 策略应用等操作
 language: python
 created: 2026-02-09
-updated: 2026-02-09
+updated: 2026-03-05
 ---
 
 # APM 策略
@@ -153,9 +153,14 @@ dispatcher.dispatch(
 ### d. 系统探测
 
 ```python
-from apm_web.strategy import dispatch
+from apm_web.strategy.dispatch.enricher import SystemChecker
+from apm_web.strategy.dispatch.entity import EntitySet
 
-system_services_map = dispatch.SystemChecker(dispatch.EntitySet(2, "bkop")).check()
+bk_biz_id = -4228598
+app_name = "hpjy_microservices_activities"
+
+e = EntitySet(bk_biz_id, app_name)
+SystemChecker(e).check_systems()
 ```
 
 ### e. 重置清理
