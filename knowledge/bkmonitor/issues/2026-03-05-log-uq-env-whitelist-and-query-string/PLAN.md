@@ -1,9 +1,11 @@
-## title: 日志 UnifyQuery 环境变量白名单与 query_string 增强 —— 实施方案
+---
+title: 日志 UnifyQuery 环境变量白名单与 query_string 增强 —— 实施方案
 tags: [log, unify-query, data-source, query-string, config]
 issue: ./README.md
 description: 为日志灰度白名单增加环境变量配置层，并在日志数据源中对齐日志平台 query_string 处理逻辑
 created: 2026-03-05
 updated: 2026-03-05
+---
 
 # 日志 UnifyQuery 环境变量白名单与 query_string 增强 —— 实施方案
 
@@ -32,8 +34,6 @@ updated: 2026-03-05
   - 简化为单个方法，正则和通配符作为类常量。
 
 > 日志平台参考：[query_string_builder.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bklog/apps/log_esquery/esquery/builder/query_string_builder.py#L46)
-
----
 
 ## 0x02 开发方案
 
@@ -72,9 +72,6 @@ updated: 2026-03-05
 
 同步到本地开发环境 `local/env/bkop.woa.com.env`。
 
----
-
----
 
 ## 0x03 Review 要点
 
