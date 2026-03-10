@@ -13,6 +13,12 @@
 | [APM 支持跨应用共享数据源](./issues/2026-03-03-apm-shared-datasource/README.md) | `apm` `datasource` `es` `shared-storage` | 设计中 | 2026-03-03 |
 | [日志数据源切换 unify-query](./issues/2026-02-10-log-ds-to-unify-query/README.md) | `log` `unify-query` | 对账中 | 2026-02-10 |
 
+### Troubleshooting
+
+| 分类 | 路径 | 数量 | 说明 |
+|------|------|------|------|
+| 排障经验 | [troubleshooting/](./troubleshooting/INDEX.md) | 1 篇 | 问题排查与修复记录 |
+
 ### Snippets
 
 代码片段集合，包含告警、APM、自定义上报等常用操作。
