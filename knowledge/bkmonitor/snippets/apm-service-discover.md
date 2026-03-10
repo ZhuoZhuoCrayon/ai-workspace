@@ -4,7 +4,7 @@ tags: [apm, service, discover, node, endpoint]
 description: APM 服务节点发现、端点发现、指标发现等代码片段
 language: python
 created: 2026-02-09
-updated: 2026-02-28
+updated: 2026-03-10
 ---
 
 # APM 服务发现
@@ -189,4 +189,49 @@ for server in servers:
             }
         }
     )
+```
+
+### h. 批量克隆服务节点
+
+```python
+from apm.models import TopoNode
+import copy
+
+base = {
+    "bk_biz_id": "<bk_biz_id>",
+    "app_name": "<app_name>",
+    "extra_data": {
+        "category": "rpc",
+        "kind": "service",
+        "predicate_value": None,
+        "service_language": "go",
+    },
+    "system": [{"name": "trpc", "extra_data": {"attributes.trpc.namespace": "Production"}}],
+    "platform": {},
+    "sdk": [
+        {
+            "name": "galileo",
+            "extra_data": {
+                "resource.target": None,
+                "resource.telemetry.sdk.name": "galileo",
+            },
+        }
+    ],
+    "source": ["trace", "metric"],
+    "is_permanent": True,
+}
+
+ids = [10158, 10129, 60015, 60016, 10188, 10213, 60017, 10222, 10212]
+
+for _id in ids:
+    topo_key = f"activity-microservices.activities-{_id}"
+    if TopoNode.objects.filter(bk_biz_id=base["bk_biz_id"], app_name=base["app_name"], topo_key=topo_key).exists():
+        print(f"SKIP {topo_key}")
+        continue
+
+    data = copy.deepcopy(base)
+    data["topo_key"] = topo_key
+    data["sdk"][0]["extra_data"]["resource.target"] = f"BCS.activity-microservices.activities-{_id}"
+    TopoNode.objects.create(**data)
+    print(f"OK   {topo_key}")
 ```
