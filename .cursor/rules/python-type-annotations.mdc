@@ -1,0 +1,21 @@
+---
+description: Python 变量显式类型注解偏好
+globs: **/*.py
+alwaysApply: false
+---
+
+# Python 类型注解偏好
+
+在 Python 代码中，默认遵循以下偏好：
+
+- 为局部变量添加显式类型注解（如 `x: int = 1`、`items: list[str] = []`）
+- 为中间变量（尤其是 `dict/list` 结构）补充类型，降低阅读和维护成本
+- 新增或修改代码时优先补齐类型注解，保持与既有风格一致
+
+示例：
+
+```python
+# Preferred
+query_list: list[dict[str, Any]] = super().to_unify_query_config()
+field_name: str | None = query.get("field_name")
+```
