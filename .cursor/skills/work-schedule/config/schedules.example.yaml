@@ -1,0 +1,42 @@
+# 排期配置模板
+# 复制为 schedules.yaml 并填入实际 webhook key
+# schedules.yaml 已被 gitignore，不会提交到仓库
+# 约束：
+# 1) active 必填，且必须命中 schedules 下某个周期 key
+# 2) months_start 仅支持 1 或 7（分别对应 H1/H2）
+# 3) 月份列名必须是 "N 月" 格式
+
+active: "2026H1"
+
+schedules:
+  "2026H1":
+    key: "your-webhook-key-here"
+    months_start: 1  # H1: 列对应 1-6 月
+    schema:
+      # field_id: 列名（不同文档的 field_id 不同）
+      frvG4J: "项目"
+      fzSueb: "需求"
+      fc5FyT: "需求类型"
+      f53B4X: "优先级"
+      fiWfNd: "进度"
+      fl1uff: "文档/链接"
+      f0B8fw: "事项类型"
+      ffio2F: "备注"
+      fYhKHf: "1 月"
+      f6MQpU: "2 月"
+      fYDW9O: "3 月"
+      fNocoV: "4 月"
+      fB1bqi: "5 月"
+      fxHuQY: "6 月"
+      fjgnwh: "图片"
+
+  # H2 示例（取消注释并填入实际值）:
+  # "2026H2":
+  #   key: "another-webhook-key"
+  #   months_start: 7  # H2: 列对应 7-12 月（或 1-6 月 + months_start=7）
+  #   schema:
+  #     abc123: "项目"
+  #     def456: "需求"
+  #     ghi789: "7 月"
+  #     jkl012: "8 月"
+  #     ...
