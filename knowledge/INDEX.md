@@ -16,7 +16,7 @@
 
 ## 最近更新
 
-- 2026-03-12：新增 [告警日志查询支持 Doris 数据源](./bkmonitor/issues/2026-03-12-log-query-doris-support/README.md) 至 bkmonitor
+- 2026-03-12：更新 [告警日志查询支持 Doris 数据源](./bkmonitor/issues/2026-03-12-log-query-doris-support/README.md) 至 bkmonitor（结论改为 UQ 侧修复）
 - 2026-03-10：新增 [服务关联索引集在日志检索页面部分缺失](./bkmonitor/troubleshooting/log-relation-index-set-missing.md) 至 bkmonitor
 - 2026-03-08：更新 [APM 支持应用级别配置](./bkmonitor/issues/2026-03-04-apm-app-level-config/README.md) 至 bkmonitor
 - 2026-03-05：新增 [日志 UnifyQuery 环境变量白名单与 query_string 增强](./bkmonitor/issues/2026-03-05-log-uq-env-whitelist-and-query-string/README.md) 至 bkmonitor

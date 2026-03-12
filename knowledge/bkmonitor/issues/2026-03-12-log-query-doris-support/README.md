@@ -1,7 +1,7 @@
 ---
 title: 告警日志查询支持 Doris 数据源
 tags: [log, unify-query, doris, data-source]
-description: 日志告警查询切换 UnifyQuery 后，将 _index 替换为 ES/Doris 兼容的 time 字段
+description: 根因在 UnifyQuery 的 Doris 字段转换，_index 应映射为 *，bkmonitor 无需改动
 created: 2026-03-12
 updated: 2026-03-12
 ---
@@ -12,24 +12,28 @@ updated: 2026-03-12
 
 ### a. Why
 
-Doris 不支持使用 `_index` 字段。当日志数据源切换到 UnifyQuery 后，UnifyQuery 会将请求路由到不同的存储后端（ES / Doris），需要使用两者都兼容的字段。
+Doris 不支持使用 `_index` 字段。最初判断是 `bkmonitor` 侧在构建 UnifyQuery 参数时需要做字段映射。
 
 ### b. 目标
 
-在 `LogSearchTimeSeriesDataSource` 生成 UnifyQuery 查询配置时，将 `_index` 替换为 `time`，确保 ES 和 Doris 后端均能正常处理。
+定位告警日志查询在 Doris 场景的真实责任边界，明确是否需要在 `bkmonitor` 侧修改。
 
 ## 0x02 实现路线
 
 ### a. 建议的方案
 
-重写 `LogSearchTimeSeriesDataSource.to_unify_query_config`，当 `field_name == "_index"` 时替换为 `time`。
+在 UnifyQuery 侧修复 Doris 字段转换逻辑：`_index` 在 Doris 查询应映射为 `*`，而不是 `NULL`。
 
 ### b. 约束
 
-- 仅影响 UnifyQuery 查询路径，不影响直连 ES 的老链路
-- 仅影响走 `to_unify_query_config` 的 UnifyQuery 聚合查询路径；UnifyQuery 原始日志查询会清空 `field_name`，不受此改动影响
-- `LogSearchLogDataSource` 继承自 `LogSearchTimeSeriesDataSource`，会自动继承此改动
-- `_index` 是 ES 内置元字段，语义为"文档所在索引"；替换为 `time` 后语义变为按时间字段做 COUNT 聚合，需确认 UnifyQuery 后端对 `count(time)` 的处理等价于 `count(_index)`
+- 本问题归因于 UnifyQuery 的 Doris 适配层，不属于 `bkmonitor` 数据源映射逻辑
+- `bkmonitor` 侧相关改动已回滚，不再推进该方向实现
+
+### c. 结论
+
+- 根因：UnifyQuery Doris 维度转换中，`_index` 未按预期转换为 `*`，导致下游出现 `NULL`
+- 处置：在 UnifyQuery 修复；`bkmonitor` 无需改动
+- 状态：本需求在 `bkmonitor` 侧关闭（跟踪 UQ 侧修复结果）
 
 ## 0x03 参考
 
