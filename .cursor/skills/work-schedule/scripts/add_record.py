@@ -25,7 +25,6 @@ MONTH_COL_RE = re.compile(r"^(\d{1,2})\s*月$")
 TEXT_COLUMNS = {"需求", "备注"}
 LINK_COLUMNS = {"文档/链接"}
 IMAGE_COLUMNS = {"图片"}
-PROJECT_OPTIONS = {"APM", "APM / 日常支持", "观测平台 / 文档建设", "技术学习"}
 PRIORITY_ENUM_OPTIONS = {"P0", "P1", "P2", "done"}
 PROGRESS_ENUM_OPTIONS = {
     "未启动",
@@ -129,22 +128,6 @@ def get_xun_prefix(current_day: int) -> str:
     return "P3"
 
 
-def infer_project(record: dict[str, Any]) -> str:
-    demand: str = str(record.get("需求", "")).lower()
-    remark: str = str(record.get("备注", "")).lower()
-    all_text: str = f"{demand} {remark}"
-
-    if any(keyword in all_text for keyword in ("支持", "答疑", "排障", "oncall", "值班", "协助", "配合")):
-        return "APM / 日常支持"
-    if any(keyword in all_text for keyword in ("文档", "wiki", "知识库", "规范")):
-        return "观测平台 / 文档建设"
-    if any(keyword in all_text for keyword in ("学习", "调研", "分享", "培训")):
-        return "技术学习"
-    if any(keyword in all_text for keyword in ("apm", "trace", "span", "链路", "追踪")):
-        return "APM"
-    return "APM"
-
-
 def normalize_priority_enum(value: Any) -> str | None:
     text: str = str(value).strip()
     if not text:
@@ -169,19 +152,13 @@ def normalize_record(record: dict[str, Any], schedule: dict[str, Any]) -> dict[s
 
     project_any: Any = normalized.get("项目")
     if not isinstance(project_any, str) or not project_any.strip():
-        guessed: str = infer_project(normalized)
-        normalized["项目"] = guessed
-        print(f"提示: 未提供项目，已自动猜测为 '{guessed}'", file=sys.stderr)
-    elif project_any.strip() not in PROJECT_OPTIONS:
-        print(
-            f"警告: 项目 '{project_any.strip()}' 不在推荐集合 {sorted(PROJECT_OPTIONS)} 中，将按原值发送",
-            file=sys.stderr,
-        )
+        raise UserInputError("缺少必填字段: 项目。请由上游根据 SKILL.md 的项目归属规则推测后传入。")
+    normalized["项目"] = project_any.strip()
 
     priority_raw: Any = normalized.get("优先级")
     priority_normalized: str | None = normalize_priority_enum(priority_raw)
     if priority_normalized is None:
-        priority_normalized = "P2"
+        priority_normalized = "P0"
         print(
             f"警告: 优先级 '{priority_raw}' 不在 {sorted(PRIORITY_ENUM_OPTIONS)} 中，已默认使用 '{priority_normalized}'",
             file=sys.stderr,
