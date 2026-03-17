@@ -1,0 +1,10 @@
+repos:
+  - repo: local
+    hooks:
+      - id: check-doc-style
+        name: check-doc-style
+        entry: python3 scripts/check_doc_style.py
+        language: system
+        pass_filenames: true
+        files: \.(md|mdc)$
+        exclude: '(^|/)(\.agents|\.claude)/skills/|(^|/)\.cursor/skills/|(^|/)(node_modules|\.git|__pycache__|\.venv|venv)/'
