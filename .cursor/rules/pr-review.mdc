@@ -1,0 +1,27 @@
+---
+description: PR Review 偏好
+globs:
+alwaysApply: false
+---
+
+# PR Review 偏好
+
+## 0x01 复查流程
+
+- 如果不是首次 review，先获取 PR 上已有的 review comments，结合最新 diff 逐项确认之前的建议是否已修复
+- 已修复的 review thread 自动通过 GraphQL `resolveReviewThread` 设置为 resolved
+- 未修复的明确标注，给出剩余待处理项
+
+## 0x02 评论规范
+
+- 按严重程度分级：P0（阻塞合入）> P1（建议修复）> P2（可选优化）
+- 总结性评论发到 PR conversation，行内建议用 review comment
+- 评论语言跟随项目配置：从 `repos.json` / `private/repos.json` 读取项目的 `language` 字段（`zh` 中文 / `en` 英文），未配置时默认 `zh`
+
+## 0x03 Approve
+
+Approve 时附带评论 "LGTM"：
+
+```bash
+gh pr review <number> --repo <owner>/<repo> --approve --body "LGTM"
+```
