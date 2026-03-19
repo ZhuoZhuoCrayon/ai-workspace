@@ -8,7 +8,8 @@
 
 | 需求 | 标签 | 状态 | 更新日期 |
 |------|------|------|----------|
-| [告警日志查询支持 Doris 数据源](./issues/2026-03-12-log-query-doris-support/README.md) | `log` `unify-query` `doris` `data-source` | 已关闭（UQ侧修复） | 2026-03-12 |
+| [【告警中心】APM 应用/服务页面嵌入列表页支持](./issues/2026-03-19-alert-apm-embedded-list/README.md) | `alert` `apm` `embedded-list` `frontend` | 新建 | 2026-03-19 |
+| [告警日志查询支持 Doris 数据源](./issues/2026-03-12-log-query-doris-support/README.md) | `log` `unify-query` `doris` `data-source` | 已关闭（UQ 侧修复） | 2026-03-12 |
 | [APM 支持应用级别配置](./issues/2026-03-04-apm-app-level-config/README.md) | `apm` `service-config` `log-relation` `code-redefine` `app-level` | 设计中 | 2026-03-08 |
 | [日志 UnifyQuery 环境变量白名单与 query_string 增强](./issues/2026-03-05-log-uq-env-whitelist-and-query-string/README.md) | `log` `unify-query` `data-source` `query-string` `config` | 已实现 | 2026-03-05 |
 | [APM 支持跨应用共享数据源](./issues/2026-03-03-apm-shared-datasource/README.md) | `apm` `datasource` `es` `shared-storage` | 设计中 | 2026-03-03 |
