@@ -1,35 +1,75 @@
 ---
 description: PR Review 偏好
-globs:
-alwaysApply: false
+alwaysApply: true
 ---
 
 # PR Review 偏好
 
-## 0x01 Review 前置操作
+**CRITICAL（必须执行不可协商）**：所有 GitHub 写操作（评论、review comment、approve、request changes、resolve thread、dismiss review 等）必须经用户明确授权后执行。未列举的写操作同样需授权；授权意图模糊时，先向用户确认再执行。用户说「review」仅代表在对话中输出分析报告，不代表授权发布。
 
-- 先补齐 Assignees：当前 `gh` 登录用户、PR 作者
-1. 用 `gh api user --jq .login` 获取当前登录用户
-2. 用 `gh pr view <pr> --json author --jq .author.login` 获取 PR 作者
-3. 对登录名去重后，用 `gh pr edit <pr> --add-assignee <login>` 添加 Assignees
-- 若因权限不足、仓库限制或 PR 状态导致添加失败，明确告知用户，再继续后续 review
+## 0x01 前置操作
+
+### a. 补齐 Assignees
+
+- 触发：开始 review 前。
+- 作为流程例外默认执行，失败不阻塞。
+1. `gh api user --jq .login` 获取当前登录用户。
+2. `gh pr view <pr> --json author --jq .author.login` 获取 PR 作者。
+3. 去重后 `gh pr edit <pr> --add-assignee <login>` 添加。
+- 失败时告知用户，继续 review。
 
 ## 0x02 复查流程
 
-- 如果不是首次 review，先获取 PR 上已有的 review comments，结合最新 diff 逐项确认之前的建议是否已修复
-- 已修复的 review thread 自动通过 GraphQL `resolveReviewThread` 设置为 resolved
-- 未修复的明确标注，给出剩余待处理项
+### a. 输出报告
+
+- 触发：用户说「review」。
+- 动作：拉取变更代码（diff）、PR 评论、未解决行评论，在对话中输出 review 报告（草稿），禁止自行向 PR 发布任何内容。
+- 报告包含三部分：
+  - 总结性评价：整体结论、风险点、是否建议合入。
+  - 需要新增的行 review：新发现的问题，格式见 0x03。
+  - 未解决评论的解决情况：逐项标注「已修复」或「未修复」，首次 review 时此项为空。
+- 用户在对话中协商调整报告内容，确认后授权发布。
+
+### b. 发布到 PR
+
+- 触发：用户明确说「评论到 PR」「发 review」「发到 PR」等指令视为授权；授权判定模糊时需向用户确认。
+- 动作：执行 `gh pr review` 等写操作。resolve thread 需用户授权后通过 GraphQL `resolveReviewThread` 执行。
+
+### c. Request Changes
+
+- 触发：复查结论为存在 P0 或需阻塞合入时，用户明确说「Request Changes」「请求修改」等。
+- 动作：执行 `gh pr review <number> --repo <owner>/<repo> --request-changes --body "<总结性评论>"`，行内建议以 review comment 形式发布。
 
 ## 0x03 评论规范
 
-- 按严重程度分级：P0（阻塞合入）> P1（建议修复）> P2（可选优化）
-- 总结性评论发到 PR conversation，行内建议用 review comment
-- 评论语言跟随项目配置：从 `repos.json` / `private/repos.json` 读取项目的 `language` 字段（`zh` 中文 / `en` 英文），未配置时默认 `zh`
+### a. 严重程度
+
+P0（阻塞合入）> P1（建议修复）> P2（可选优化）。
+
+### b. 发布位置
+
+总结性评论发到 PR conversation，行内建议用 review comment。
+
+### c. 行内评价
+
+格式：文件路径；行号；代码引用；问题说明；严重程度。
+
+示例：
+
+```markdown
+**`path/to/file.go:42`** [P1]
+> return nil
+
+问题：错误返回值未处理，可能导致空指针。
+```
+
+### d. 评论语言
+
+从 `repos.json`、`private/repos.json` 读取项目 `language` 字段（`zh` 中文、`en` 英文），未配置时默认 `zh`。
 
 ## 0x04 Approve
 
-Approve 时附带评论 "LGTM"：
+**CRITICAL（必须执行不可协商）**：Approve 不可逆，须先输出复查结论，等用户明确指示（如「Approve」「通过」）后再执行。
 
-```bash
-gh pr review <number> --repo <owner>/<repo> --approve --body "LGTM"
-```
+- 触发：用户明确指示 Approve。
+- 动作：执行 `gh pr review <number> --repo <owner>/<repo> --approve --body "LGTM"`。
