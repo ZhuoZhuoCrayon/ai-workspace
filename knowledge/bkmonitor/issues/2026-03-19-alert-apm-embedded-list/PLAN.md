@@ -13,37 +13,24 @@ updated: 2026-03-19
 
 ## 0x01 实现方案
 
-### a. 整体架构
+### a. 预设过滤条件生成
 
 ```mermaid
 flowchart LR
-    subgraph apmPage [APM 页面]
-        AppView[应用视角]
-        ServiceView[服务视角]
-    end
+    API["预设过滤条件接口"]
 
-    subgraph backend [后端]
-        PresetAPI["预设过滤条件接口"]
-        HostHandler["HostHandler"]
-        EntitySet["EntitySet.get_workloads"]
-        FetchItemStatus["FetchItemStatus"]
-    end
+    API --> Route{"按 target_types 路由"}
 
-    subgraph alertCenter [告警中心]
-        AlertList["告警列表页"]
-        StrategyList["策略列表页"]
-    end
+    Route -->|"APM-SERVICE"| SF["target + labels 片段"]
+    Route -->|"HOST"| HH["HostHandler"] --> HF["IP → target 片段"]
+    Route -->|"K8S-WORKLOAD"| ES["EntitySet"] --> KF["workload → tags 片段"]
 
-    AppView -->|"获取 query_string"| PresetAPI
-    ServiceView -->|"获取 query_string"| PresetAPI
-    PresetAPI -->|"HOST"| HostHandler
-    PresetAPI -->|"K8S-WORKLOAD"| EntitySet
-    PresetAPI -->|"返回 query_string"| AlertList
-    ServiceView -->|"已关联策略数"| FetchItemStatus
-    FetchItemStatus -->|"跳转"| StrategyList
+    SF --> Join(["OR 拼接"])
+    HF --> Join
+    KF --> Join
+
+    Join --> QS["query_string → 嵌入告警中心"]
 ```
-
-### b. 预设过滤条件生成
 
 **应用视角**（不传 `service_name`，不支持 `target_types`）：
 
@@ -61,7 +48,7 @@ target: "{app_name}:.+" OR labels: "APM-APP({app_name})"
 
 **时间范围限制**（HOST / K8S-WORKLOAD）：超过 2 小时取 `[end_time - 2h, end_time]`。
 
-### c. 已关联策略
+### b. 已关联策略
 
 ```mermaid
 flowchart LR
@@ -73,7 +60,7 @@ flowchart LR
 - 请求 `FetchItemStatus`：`metric_ids=[]`，`labels=["APM-APP({app_name})", "APM-SERVICE({service_name})"]`
 - 跳转策略列表页：`conditions=[{"key": "label_name", "value": ["/APM-SERVICE({service_name})/"]}]`
 
-### d. 代码变更
+### c. 代码变更
 
 | 变更 | 文件 | 说明 |
 |------|------|------|
