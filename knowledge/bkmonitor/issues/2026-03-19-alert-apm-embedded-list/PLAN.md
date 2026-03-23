@@ -35,7 +35,7 @@ flowchart LR
 **应用视角**（不传 `service_name`，不支持 `target_types`）：
 
 ```text
-target: "{app_name}:.+" OR labels: "APM-APP({app_name})"
+target: {app_name}\:* OR labels: "APM-APP({app_name})"
 ```
 
 **服务视角**（传 `service_name`，按 `target_types` 组合，各部分 OR 拼接）：
@@ -139,7 +139,7 @@ flowchart LR
     "code": 200,
     "message": "OK",
     "data": {
-        "query_string": "target: \"trpc-cluster-access-demo:.+\" OR labels: \"APM-APP(trpc-cluster-access-demo)\""
+        "query_string": "target: trpc-cluster-access-demo\:* OR labels: \"APM-APP(trpc-cluster-access-demo)\""
     }
 }
 ```
@@ -157,67 +157,83 @@ flowchart LR
 }
 ```
 
-#### 使用说明：跳转告警中心
+#### 使用说明：条件合并
 
-前端嵌入告警中心页面时，将接口返回的 `query_string` 作为内置条件，与用户查询条件合并后跳转。
+前端嵌入告警中心页面时，将接口返回的 `query_string` 作为内置条件，与用户查询条件合并，用于查询或页面跳转条件回填。
 
-**拼接规则**：`{内置 query_string} AND ({用户查询条件})`
-
-**示例**：
-
-内置 query_string（接口返回）：
+假设内置条件为：
 
 ```text
-target: "trpc-cluster-access-demo:bkm.web"
-  OR labels: ("APM-APP(trpc-cluster-access-demo)" OR "APM-SERVICE(bkm.web)")
+target: "trpc-cluster-access-demo:bkm.web" OR labels: ("APM-APP(trpc-cluster-access-demo)" OR "APM-SERVICE(bkm.web)")
 ```
 
-用户查询条件（conditions + query_string）：
+**场景 1：语句模式**
+
+合并规则：`({内置 query_string}) AND ({用户查询条件})`
+
+用户查询条件：
+
+```text
+labels: "haha"
+```
+
+合并结果：
+
+```text
+(labels: "haha") AND target: "trpc-cluster-access-demo:bkm.web" OR labels: ("APM-APP(trpc-cluster-access-demo)" OR "APM-SERVICE(bkm.web)")
+```
+
+
+
+**场景 2：UI  模式**
+
+合并规则：
+
+* 请求：用户条件（`conditions`）和内置条件（`query_string`）一并作为接口请求参数。
+* 跳转：`({内置 query_string}) AND ({用户查询条件})`。
+
+用户查询条件：
 
 ```json
 {
     "conditions": [
         {
-            "key": "tags.bcs_cluster_id",
+            "key": "labels",
             "method": "eq",
-            "value": ["BCS-K8S-00000"]
-        },
-        {
-            "key": "tags.workload_kind",
-            "method": "eq",
-            "value": ["Deployment"]
-        },
-        {
-            "key": "tags.workload_name",
-            "method": "eq",
-            "value": ["bkm-web"],
-            "condition": "and"
+            "value": ["haha"]
         }
-    ],
-    "query_string": ""
+    ]
 }
 ```
 
-生成跳转 query_string：
+请求：
+
+```json
+{
+    "conditions": [
+        {
+            "key": "labels",
+            "method": "eq",
+            "value": ["haha"]
+        }
+    ],
+    "query_string": "target: \"trpc-cluster-access-demo:bkm.web\" OR labels: (\"APM-APP(trpc-cluster-access-demo)\" OR \"APM-SERVICE(bkm.web)\")"
+}
+```
+
+跳转：
 
 ```text
-(
-  target: "trpc-cluster-access-demo:bkm.web"
-    OR labels: ("APM-APP(trpc-cluster-access-demo)" OR "APM-SERVICE(bkm.web)")
-)
-AND
-(
-  tags.bcs_cluster_id: "BCS-K8S-00000"
-    AND tags.workload_kind: "Deployment"
-    AND tags.workload_name: "bkm-web"
-)
+(labels: "haha") AND target: "trpc-cluster-access-demo:bkm.web" OR labels: ("APM-APP(trpc-cluster-access-demo)" OR "APM-SERVICE(bkm.web)")
 ```
+
+
 
 ### b. 获取已关联策略状态（FetchItemStatus 改造）
 
 #### 功能描述
 
-获取标签关联的策略数与告警数。改造点：`metric_ids` 改为非必填，支持仅基于 `labels` 过滤。
+获取标签关联的策略数与告警数。
 
 #### 请求参数
 
@@ -234,6 +250,8 @@ AND
     "bk_biz_id": 2,
     "metric_ids": [],
     "labels": ["APM-APP(trpc-cluster-access-demo)", "APM-SERVICE(bkm.web)"]
+    // 应用视角
+    // "labels": ["APM-APP(trpc-cluster-access-demo)"]
 }
 ```
 
