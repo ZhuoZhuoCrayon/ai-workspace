@@ -3,6 +3,7 @@
 
 | 文件                                                                                                     | 标签                                                        | 摘要                                                      | 更新日期       |
 |------|------|------|---------|
+| [Tracing MCP 新增服务列表工具](./2026-03-24-tracing-mcp-service-list/README.md) | `apm` `tracing` `mcp` `service-list` `entity-set` | 为 Tracing MCP 新增服务列表查询接口，优化 EntitySet 及关联组件 | 2026-03-24 |
 | [【告警中心】APM 应用/服务页面嵌入列表页支持](./2026-03-19-alert-apm-embedded-list/README.md) | `alert` `apm` `embedded-list` `frontend` | 告警中心列表页支持嵌入到 APM 应用/服务页面，提供关联告警的上下文查看能力 | 2026-03-19 |
 | [告警日志查询支持 Doris 数据源](./2026-03-12-log-query-doris-support/README.md) | `log` `unify-query` `doris` `data-source` | 根因在 UQ Doris 转换，_index 应映射为 *，bkmonitor 侧关闭该改动 | 2026-03-12 |
 | [APM 支持应用级别配置](./2026-03-04-apm-app-level-config/README.md)                                            | `apm` `service-config` `log-relation` `code-redefine` `app-level`     | 将 APM 服务关联配置从纯服务粒度扩展到应用级别，支持跨服务共享与全局配置                   | 2026-03-08 |
