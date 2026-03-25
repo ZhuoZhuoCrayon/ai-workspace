@@ -34,7 +34,7 @@ NAMESPACE="blueking"
 POD="bk-monitor-api-d76956886-84bhf"
 
 NAMESPACE="ieg-blueking-monitor-prod"
-POD="bk-monitor-api-b6f767fcb-2dxfb"
+POD="bk-monitor-api-69bbb544f7-zxwwt"
 
 LOCAL_PROJECT_ROOT="/remote-dev/Project/Github/bk/monitor/bk-monitor/bkmonitor"
 kubectl cp ${LOCAL_PROJECT_ROOT}/constants/data_source.py -n ${NAMESPACE} ${POD}:/app/code/constants/data_source.py
@@ -52,7 +52,6 @@ kubectl exec -n ${NAMESPACE} ${POD} -it -- bash
 ```bash
 OUTPUT="/tmp/bkop_stats.csv"
 python manage.py reconcile_log_strategy --mode stat --output ${OUTPUT}
-
 ```
 
 2）ieod 环境执行：
@@ -94,7 +93,7 @@ OUTPUT="/tmp/ieod_reconcile_$(date +%Y%m%d%H%M%S)_g01.csv"
 python manage.py reconcile_log_strategy --mode reconcile --output ${OUTPUT} --start-time ${START_TIME} --end-time ${END_TIME} --biz-ids 622
 ```
 
-**第 2 组**（1 个业务，5332 个策略）—— TAM前端监控：
+**第 2 组**（1 个业务，5332 个策略）—— TAM 前端监控：
 
 ```bash
 OUTPUT="/tmp/ieod_reconcile_$(date +%Y%m%d%H%M%S)_g02.csv"
