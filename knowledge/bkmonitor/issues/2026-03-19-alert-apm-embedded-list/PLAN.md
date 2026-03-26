@@ -39,13 +39,13 @@ flowchart LR
 target: {app_name}\:* OR labels: "APM-APP({app_name})"
 ```
 
-**服务视角**（传 `service_name`，按 `target_types` 组合，各部分 OR 拼接）：
+**服务视角**（传 `service_name`，按 `target_types` 组合，**各片段加括号后以 OR 拼接**）：
 
-| target_type  | 过滤规则                                                     | 数据来源                             |
+| target_type  | 过滤片段                                                     | 数据来源                             |
 | ------------ | ------------------------------------------------------------ | ------------------------------------ |
-| APM-SERVICE  | `target: "{app_name}:{service_name}" OR labels: ("APM-APP({app_name})" OR "APM-SERVICE({service_name})")` | 直接拼接                             |
-| HOST         | `target: ("{ip1}\|{cloud_id1}" OR "{ip2}\|{cloud_id2}" OR ...)` | `HostHandler.list_application_hosts` |
-| K8S-WORKLOAD | `(tags.bcs_cluster_id: "{c1}" AND tags.workload_kind: "{k1}" AND tags.workload_name: "{n1}") OR (...)` | `EntitySet.get_workloads`            |
+| APM-SERVICE  | `(target: "{app_name}:{service_name}" OR labels: ("APM-APP({app_name})" OR "APM-SERVICE({service_name})"))` | 直接拼接                             |
+| HOST         | `(target: ("{ip1}\|{cloud_id1}" OR "{ip2}\|{cloud_id2}" OR ...))` | `HostHandler.list_application_hosts` |
+| K8S-WORKLOAD | `((tags.bcs_cluster_id: "{c1}" AND tags.workload_kind: "{k1}" AND tags.workload_name: "{n1}") OR (...))` | `EntitySet.get_workloads`            |
 
 **时间范围限制**（HOST / K8S-WORKLOAD）：超过 2 小时取 `[end_time - 2h, end_time]`。
 
@@ -143,7 +143,7 @@ POST /apm/strategy/alert/builtin_filter/
     "code": 200,
     "message": "OK",
     "data": {
-        "query_string": "target: \"trpc-cluster-access-demo:bkm.web\" OR labels: (\"APM-APP(trpc-cluster-access-demo)\" OR \"APM-SERVICE(bkm.web)\") OR target: (\"10.0.0.1|0\" OR \"10.0.0.2|0\") OR (tags.bcs_cluster_id: \"BCS-K8S-00000\" AND tags.workload_kind: \"Deployment\" AND tags.workload_name: \"bkm-web\")"
+        "query_string": "(target: \"trpc-cluster-access-demo:bkm.web\" OR labels: (\"APM-APP(trpc-cluster-access-demo)\" OR \"APM-SERVICE(bkm.web)\")) OR (target: (\"10.0.0.1|0\" OR \"10.0.0.2|0\")) OR (tags.bcs_cluster_id: \"BCS-K8S-00000\" AND tags.workload_kind: \"Deployment\" AND tags.workload_name: \"bkm-web\")"
     }
 }
 ```
@@ -183,10 +183,8 @@ labels: "haha"
 合并结果：
 
 ```text
-(labels: "haha") AND target: "trpc-cluster-access-demo:bkm.web" OR labels: ("APM-APP(trpc-cluster-access-demo)" OR "APM-SERVICE(bkm.web)")
+(target: "trpc-cluster-access-demo:bkm.web" OR labels: ("APM-APP(trpc-cluster-access-demo)" OR "APM-SERVICE(bkm.web)")) AND (labels: "haha")
 ```
-
-
 
 **场景 2：UI  模式**
 
@@ -227,7 +225,7 @@ labels: "haha"
 跳转：
 
 ```text
-(labels: "haha") AND target: "trpc-cluster-access-demo:bkm.web" OR labels: ("APM-APP(trpc-cluster-access-demo)" OR "APM-SERVICE(bkm.web)")
+(target: "trpc-cluster-access-demo:bkm.web" OR labels: ("APM-APP(trpc-cluster-access-demo)" OR "APM-SERVICE(bkm.web)")) AND (labels: "haha")
 ```
 
 
