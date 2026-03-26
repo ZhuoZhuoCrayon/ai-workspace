@@ -13,6 +13,6 @@
 
 ## 可用 Skills
 
-- `.cursor/skills/knowledge_mgr/SKILL.md`：知识管理（创建/归档/索引）
-- `.cursor/skills/project_mgr/SKILL.md`：项目管理（添加/删除）
+- `.agents/skills/knowledge_mgr/SKILL.md`：知识管理（创建/归档/索引）
+- `.agents/skills/project_mgr/SKILL.md`：项目管理（添加/删除）
 

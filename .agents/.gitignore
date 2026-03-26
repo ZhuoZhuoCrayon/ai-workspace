@@ -1,0 +1,8 @@
+/*
+!.gitignore
+!skills/
+/skills/*
+!skills/knowledge_mgr/
+!skills/project_mgr/
+!skills/iwiki_sync/
+!skills/work-schedule/
