@@ -25,19 +25,18 @@ from apm.resources import QuerySpanListResource
 from apm.core.discover.node import NodeDiscover
 from apm.core.discover.endpoint import EndpointDiscover
 
-bk_biz_id = 19062
-app_name = "esp_pubgm_prod"
+bk_biz_id = 5016863
+app_name = "arashi"
 
 end_time = int(datetime.datetime.now().timestamp())
-begin_time = end_time - int(datetime.timedelta(days=7).total_seconds())
+begin_time = end_time - int(datetime.timedelta(minutes=60).total_seconds())
 
 query_params = {
     "bk_biz_id": bk_biz_id, 
     "app_name": app_name, 
     "start_time": begin_time,
     "end_time": end_time,
-    "filters": [{"key": "resource.service.name", "operator": "equal", "value": ["esp.pubgm.game"]}],
-    "filters": [],
+    "filters": [{"key": "resource.service.name", "operator": "equal", "value": ["dscenter"]}],
     "exclude_field": ["events"],
     "limit": 10000,
     "es_dsl": {}
