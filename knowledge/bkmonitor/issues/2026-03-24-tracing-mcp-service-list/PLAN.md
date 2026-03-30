@@ -67,17 +67,9 @@ updated: 2026-03-24
 | `enricher.RPCEnricher` | 从返回值读 `temporality`，用 `Vendor.is_rpc_system` 判断 |
 | `builtin.apm.discover_caller_callee` | 用 `Vendor.is_rpc_system` 设置 `exists` |
 
-### c. MetricTemporality 常量化
+### c. MetricTemporality
 
-`get_metric_config` 返回的 `server_filter_method`、`server_field`、`service_field` 均为固定值，提升为类常量（`SERVER_FILTER_METHOD`、`SERVER_FIELD`、`SERVICE_FIELD`），删除方法本身。
-
-影响点：
-
-| 调用方 | 说明 |
-|--------|------|
-| `ServiceHandler`（已改为 `get_system`） | 不再需要 |
-| `builtin.apm.discover_caller_callee` | 直接引用类常量 |
-| `TrpcMetricGroup.get_server_config` | 直接引用类常量 |
+保持原有 `get_metric_config(temporality)` 方法不变，调用方统一使用 `MetricTemporality.get_metric_config(temporality)` 获取 `server_config`。
 
 ### d. 移除冗余接口
 
