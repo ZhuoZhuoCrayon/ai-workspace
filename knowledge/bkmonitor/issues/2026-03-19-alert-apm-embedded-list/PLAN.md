@@ -43,7 +43,7 @@ target: {app_name}\:* OR labels: "APM-APP({app_name})"
 
 | target_type  | 过滤片段                                                     | 数据来源                             |
 | ------------ | ------------------------------------------------------------ | ------------------------------------ |
-| APM-SERVICE  | `(target: "{app_name}:{service_name}" OR labels: ("APM-APP({app_name})" OR "APM-SERVICE({service_name})"))` | 直接拼接                             |
+| APM-SERVICE  | `(target: "{app_name}:{service_name}" OR labels: ("APM-APP({app_name})" AND "APM-SERVICE({service_name})"))` | 直接拼接                             |
 | HOST         | `(target: ("{ip1}\|{cloud_id1}" OR "{ip2}\|{cloud_id2}" OR ...))` | `HostHandler.list_application_hosts` |
 | K8S-WORKLOAD | `((tags.bcs_cluster_id: "{c1}" AND tags.workload_kind: "{k1}" AND tags.workload_name: "{n1}") OR (...))` | `EntitySet.get_workloads`            |
 
@@ -143,7 +143,7 @@ POST /apm/strategy/alert/builtin_filter/
     "code": 200,
     "message": "OK",
     "data": {
-        "query_string": "(target: \"trpc-cluster-access-demo:bkm.web\" OR labels: (\"APM-APP(trpc-cluster-access-demo)\" OR \"APM-SERVICE(bkm.web)\")) OR (target: (\"10.0.0.1|0\" OR \"10.0.0.2|0\")) OR (tags.bcs_cluster_id: \"BCS-K8S-00000\" AND tags.workload_kind: \"Deployment\" AND tags.workload_name: \"bkm-web\")"
+        "query_string": "(target: \"trpc-cluster-access-demo:bkm.web\" OR labels: (\"APM-APP(trpc-cluster-access-demo)\" AND \"APM-SERVICE(bkm.web)\")) OR (target: (\"10.0.0.1|0\" OR \"10.0.0.2|0\")) OR (tags.bcs_cluster_id: \"BCS-K8S-00000\" AND tags.workload_kind: \"Deployment\" AND tags.workload_name: \"bkm-web\")"
     }
 }
 ```
@@ -218,7 +218,7 @@ labels: "haha"
             "value": ["haha"]
         }
     ],
-    "query_string": "target: \"trpc-cluster-access-demo:bkm.web\" OR labels: (\"APM-APP(trpc-cluster-access-demo)\" OR \"APM-SERVICE(bkm.web)\")"
+    "query_string": "target: \"trpc-cluster-access-demo:bkm.web\" OR labels: (\"APM-APP(trpc-cluster-access-demo)\" AND \"APM-SERVICE(bkm.web)\")"
 }
 ```
 
