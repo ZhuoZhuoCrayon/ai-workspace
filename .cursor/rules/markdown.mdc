@@ -58,6 +58,24 @@ globs: "**/*.{md,mdc}"
 - PLAN 中的开发方案：列变更清单和意图，不写具体实现。
 - Issue 文档职责分离：`README.md` 只写需求与方法论；调研细节与结论（含对比表、快照、语法样例）必须写入 `PLAN.md`。
 
+### f. 超链接文案规范
+
+- 链接文本必须是摘要，不使用裸 URL 作为文案。
+- 文案优先提取页面核心入口词，例如 `Quickstart`、`Usage`、`API`、`README`。
+- 源码链接使用统一前缀：`<源码>` + 项目名 + 文件路径。
+- 同一段落出现多个链接时，文案命名保持并列一致，避免一个是摘要、一个是 URL。
+- 若无法提取明确摘要，再使用“项目名 + 页面类型”作为降级文案。
+
+Good：
+
+- `[limits Quickstart](https://limits.readthedocs.io/en/stable/quickstart.html)`
+- `[<源码> limits limits/util.py](https://github.com/alisaifee/limits/blob/master/limits/util.py)`
+
+Bad：
+
+- `[https://limits.readthedocs.io/en/stable/quickstart.html](https://limits.readthedocs.io/en/stable/quickstart.html)`
+- `[limits util.py](https://github.com/alisaifee/limits/blob/master/limits/util.py)`（缺少 `<源码>` 前缀）
+
 ## 0x03 文件命名
 
 - 使用小写英文 + 短横线连接：`redis-connection-timeout.md`。
