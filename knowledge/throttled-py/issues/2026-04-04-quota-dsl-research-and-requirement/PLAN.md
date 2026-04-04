@@ -69,17 +69,12 @@ updated: 2026-04-04
 
 ## 0x04 参考
 
-### a. 语法参考
-
-- `limits` Quickstart: <https://limits.readthedocs.io/en/stable/quickstart.html>
-- `limits` API: <https://limits.readthedocs.io/en/stable/api.html>
-- `limits` source: <https://github.com/alisaifee/limits/blob/master/limits/util.py>
-- `Flask-Limiter` README: <https://github.com/alisaifee/flask-limiter/blob/master/README.rst>
-- `slowapi` docs: <https://slowapi.readthedocs.io/en/latest/>
-- `django-ratelimit` Usage: <https://django-ratelimit.readthedocs.io/en/stable/usage.html>
-
-### b. 生态参考
-
-- `fastapi-limiter` README: <https://github.com/long2ice/fastapi-limiter/blob/main/README.md>
-- `PyrateLimiter` README: <https://github.com/vutran1710/PyrateLimiter/blob/master/README.md>
-- `aiolimiter` README: <https://github.com/mjpieters/aiolimiter/blob/main/README.md>
+- [limits Quickstart](https://limits.readthedocs.io/en/stable/quickstart.html)
+- [limits API](https://limits.readthedocs.io/en/stable/api.html)
+- [<源码> limits limits/util.py](https://github.com/alisaifee/limits/blob/master/limits/util.py)
+- [Flask-Limiter README](https://github.com/alisaifee/flask-limiter/blob/master/README.rst)
+- [slowapi Docs](https://slowapi.readthedocs.io/en/latest/)
+- [django-ratelimit Usage](https://django-ratelimit.readthedocs.io/en/stable/usage.html)
+- [fastapi-limiter](https://github.com/long2ice/fastapi-limiter/blob/main/README.md)
+- [PyrateLimiter README](https://github.com/vutran1710/PyrateLimiter/blob/master/README.md)
+- [aiolimiter README](https://github.com/mjpieters/aiolimiter/blob/main/README.md)
