@@ -12,7 +12,7 @@ defineProps<{
 <template>
   <div class="doc-meta-bar">
     <span v-if="project" class="meta-item">
-      <a :href="withBase(`knowledge/${project}/INDEX`)">{{ project }}</a>
+      <a :href="withBase(`/knowledge/${project}/`)">{{ project }}</a>
     </span>
     <span v-if="updated || created" class="meta-item date">
       {{ (updated || created)?.slice(0, 10) }}
@@ -21,7 +21,7 @@ defineProps<{
       <a
         v-for="tag in tags"
         :key="tag"
-        :href="withBase(`tags#${tag}`)"
+        :href="withBase(`/tags#${encodeURIComponent(tag)}`)"
         class="meta-tag"
       >
         {{ tag }}

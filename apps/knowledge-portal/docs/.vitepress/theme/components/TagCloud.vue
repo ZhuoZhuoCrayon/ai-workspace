@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { withBase } from 'vitepress'
 
 const props = defineProps<{
-  tags: Record<string, { title: string; path: string; project: string }[]>
+  tags: Record<string, { title: string; route: string; project: string }[]>
   limit?: number
 }>()
 
@@ -20,9 +20,17 @@ const maxCount = computed(() => {
 
 function fontSize(count: number): string {
   const min = 0.78
-  const max = 1.3
+  const max = 1.2
   const scale = Math.min(count / maxCount.value, 1)
   return `${min + scale * (max - min)}rem`
+}
+
+function chipLevel(count: number): string {
+  const ratio = count / maxCount.value
+  if (ratio >= 0.75) return 'hot'
+  if (ratio >= 0.45) return 'warm'
+  if (ratio >= 0.2) return 'mild'
+  return 'cool'
 }
 </script>
 
@@ -33,6 +41,7 @@ function fontSize(count: number): string {
       :key="tag"
       :href="withBase(`tags#${tag}`)"
       class="tag-chip"
+      :data-level="chipLevel(docs.length)"
       :style="{ fontSize: fontSize(docs.length) }"
     >
       {{ tag }}
@@ -57,10 +66,10 @@ function fontSize(count: number): string {
   color: var(--vp-c-text-2);
   border: 1px solid var(--vp-c-divider);
   border-radius: 999px;
-  padding: 0.25rem 0.7rem;
+  padding: 0.27rem 0.72rem;
   text-decoration: none;
   white-space: nowrap;
-  transition: all 0.2s ease;
+  transition: transform 0.18s ease, border-color 0.18s ease, background-color 0.18s ease, color 0.18s ease;
   line-height: 1.5;
 }
 
@@ -68,6 +77,25 @@ function fontSize(count: number): string {
   background: var(--vp-c-brand-soft);
   color: var(--vp-c-brand-1);
   border-color: var(--vp-c-brand-1);
+  transform: translateY(-1px);
+}
+
+.tag-chip:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--vp-c-brand-1) 66%, transparent);
+  outline-offset: 1px;
+}
+
+.tag-chip[data-level="hot"] {
+  border-color: color-mix(in srgb, var(--vp-c-brand-1) 36%, var(--vp-c-divider));
+  background: color-mix(in srgb, var(--vp-c-brand-soft) 48%, var(--vp-c-bg-soft));
+}
+
+.tag-chip[data-level="warm"] {
+  background: color-mix(in srgb, var(--vp-c-brand-soft) 26%, var(--vp-c-bg-soft));
+}
+
+.tag-chip[data-level="cool"] {
+  opacity: 0.92;
 }
 
 .tag-chip sup {

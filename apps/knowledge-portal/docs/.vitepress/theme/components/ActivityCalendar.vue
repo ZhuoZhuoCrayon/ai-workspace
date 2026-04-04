@@ -51,25 +51,10 @@ const months = computed(() => {
   return labels
 })
 
-const totalDocs = computed(() =>
-  Object.values(props.data).reduce((s, c) => s + c, 0)
-)
 </script>
 
 <template>
   <div class="activity-calendar">
-    <div class="calendar-header">
-      <span class="calendar-summary">过去一年共更新 {{ totalDocs }} 篇文档</span>
-      <span class="calendar-legend">
-        <span>少</span>
-        <span class="cell" data-level="0" />
-        <span class="cell" data-level="1" />
-        <span class="cell" data-level="2" />
-        <span class="cell" data-level="3" />
-        <span class="cell" data-level="4" />
-        <span>多</span>
-      </span>
-    </div>
     <div class="calendar-months">
       <span
         v-for="m in months"
@@ -97,22 +82,7 @@ const totalDocs = computed(() =>
 <style scoped>
 .activity-calendar {
   overflow-x: auto;
-}
-
-.calendar-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 0.5rem;
-  font-size: 0.8rem;
-  color: var(--vp-c-text-3);
-}
-
-.calendar-legend {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 0.72rem;
+  padding-bottom: 0.2rem;
 }
 
 .calendar-months {
@@ -120,9 +90,9 @@ const totalDocs = computed(() =>
   grid-auto-columns: 14px;
   grid-auto-flow: column;
   gap: 3px;
-  margin-bottom: 4px;
-  font-size: 0.7rem;
-  color: var(--vp-c-text-3);
+  margin-bottom: 5px;
+  font-size: 0.68rem;
+  color: color-mix(in srgb, var(--vp-c-text-3) 88%, transparent);
 }
 
 .calendar-grid {
@@ -139,9 +109,15 @@ const totalDocs = computed(() =>
 .cell {
   width: 12px;
   height: 12px;
-  border-radius: 2px;
+  border-radius: 3px;
   background: var(--vp-c-bg-soft);
-  border: 1px solid transparent;
+  border: 1px solid color-mix(in srgb, var(--vp-c-divider) 38%, transparent);
+  transition: transform 0.14s ease, box-shadow 0.14s ease;
+}
+
+.cell:hover {
+  transform: translateY(-1px) scale(1.04);
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.2);
 }
 
 .cell[data-level="1"] { background: #9be9a8; }

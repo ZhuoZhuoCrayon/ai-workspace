@@ -12,6 +12,7 @@
   "devDependencies": {
     "gray-matter": "^4.0.3",
     "js-yaml": "^4.1.1",
+    "mermaid": "^11.14.0",
     "vitepress": "^1.6.3",
     "vue": "^3.5.13"
   }

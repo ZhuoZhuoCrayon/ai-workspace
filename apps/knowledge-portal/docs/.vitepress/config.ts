@@ -8,8 +8,8 @@ const sidebar = fs.existsSync(sidebarPath) ? JSON.parse(fs.readFileSync(sidebarP
 const basePath = process.env.VITE_BASE_PATH || '/'
 
 export default defineConfig({
-  title: 'Knowledge Portal',
-  description: 'AI 工作区知识资产可视化',
+  title: 'AI 工作台知识库',
+  description: '工作记录、方案与排障笔记，一站式检索',
   base: basePath,
   lang: 'zh-CN',
 
@@ -19,7 +19,7 @@ export default defineConfig({
 
   themeConfig: {
     logo: '/favicon.svg',
-    siteTitle: 'Knowledge',
+    siteTitle: 'AI 工作台',
 
     nav: [
       { text: '首页', link: '/' },
