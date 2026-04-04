@@ -13,7 +13,7 @@ from typing import Iterable
 ROOT: Path = Path(__file__).resolve().parents[1]
 DOC_SUFFIXES: set[str] = {".md", ".mdc"}
 EXCLUDED_PARTS: set[str] = {".git", "node_modules", "__pycache__", ".venv", "venv"}
-EXCLUDED_PREFIXES: tuple[str, ...] = (".agents/skills/", ".claude/skills/", ".cursor/skills/")
+EXCLUDED_PREFIXES: tuple[str, ...] = (".agents/skills/", ".claude/skills/", ".codex/skills/", ".cursor/skills/")
 SPECIAL_FILENAMES: set[str] = {
     "README.md",
     "PLAN.md",
@@ -21,10 +21,11 @@ SPECIAL_FILENAMES: set[str] = {
     "INDEX.md",
     "AGENTS.md",
     "CLAUDE.md",
+    "CODEX.md",
     "SKILL.md",
 }
 NUMBERED_SECTION_BASENAMES: set[str] = {"README.md", "PLAN.md", "PROGRESS.md", "SKILL.md"}
-STRUCTURE_EXEMPT_BASENAMES: set[str] = {"INDEX.md", "AGENTS.md", "CLAUDE.md"}
+STRUCTURE_EXEMPT_BASENAMES: set[str] = {"INDEX.md", "AGENTS.md", "CLAUDE.md", "CODEX.md"}
 FILENAME_PATTERN: re.Pattern[str] = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*\.(md|mdc)$")
 FENCE_PATTERN: re.Pattern[str] = re.compile(r"^```([A-Za-z0-9_+#.-]+)?\s*$")
 HEADING_PATTERN: re.Pattern[str] = re.compile(r"^(#{1,6})\s+(.*)$")

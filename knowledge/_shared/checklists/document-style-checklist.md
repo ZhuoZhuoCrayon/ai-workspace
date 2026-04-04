@@ -9,8 +9,8 @@
 ## 0x02 检查范围与豁免
 
 - 检查范围：`knowledge/**/*.md`、`private/knowledge/**/*.md`、`.cursor/**/*.md`、`.cursor/**/*.mdc`，以及仓库根目录下自有 Markdown 文档。
-- 排除范围：第三方目录、依赖目录、缓存目录、`.agents/skills/**`、`.cursor/skills/**`、`.claude/skills/**`，以及不由本仓维护内容规范的拷贝文档。
-- 结构性豁免：`INDEX.md`、`AGENTS.md`、`CLAUDE.md` 可使用描述性标题，但仍应满足基础格式要求。
+- 排除范围：第三方目录、依赖目录、缓存目录、`.agents/skills/**`、`.claude/skills/**`、`.codex/skills/**`、`.cursor/skills/**`，以及不由本仓维护内容规范的拷贝文档。
+- 结构性豁免：`INDEX.md`、`AGENTS.md`、`CLAUDE.md`、`CODEX.md` 可使用描述性标题，但仍应满足基础格式要求。
 
 ## 0x03 结构
 
