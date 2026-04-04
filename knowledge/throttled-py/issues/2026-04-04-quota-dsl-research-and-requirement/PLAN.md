@@ -17,7 +17,7 @@ updated: 2026-04-04
 
 | 库 | 主要语法模式 | 单规则语法 | 多规则语法（同一 cell 换行） | 适配提示 |
 |------|------|------|------|------|
-| `limits` | 字符串：`n/unit`、`n per unit` | `parse("1/minute")` | `parse_many("1/second; 5/minute")`<br />分隔符：`,` `;` `|` | 可直接作为 `quota.parse` 设计参考 |
+| `limits` | 字符串：`n/unit`、`n per unit` | `parse("1/minute")` | `parse_many("1/second; 5/minute")`<br />分隔符：逗号 `,`、分号 `;`、竖线（pipe） | 可直接作为 `quota.parse` 设计参考 |
 | `Flask-Limiter` | 字符串：`n per unit` | `@limiter.limit("1 per day")` | `default_limits=["2 per minute", "1 per second"]` | 说明“多规则列表”体验在框架侧很常见 |
 | `slowapi` | 字符串：`n/unit` | `@limiter.limit("5/minute")` | `@limiter.limit("5/minute")`<br />`@limiter.limit("100/hour")` | 与 `limits` 语法一致性高 |
 | `django-ratelimit` | 短字符串：`n/u`（`s/m/h/d`） | `rate='5/m'` | `@ratelimit(..., rate='10/s')`<br />`@ratelimit(..., rate='100/m')` | 短语法对配置项长度友好 |
@@ -33,33 +33,39 @@ updated: 2026-04-04
 
 ## 0x02 方案设计
 
-### a. 能力范围
+### a. 决策共识（2026-04-04）
 
-- 新增 `quota.parse()`，用于解析 quota 字符串。
-- 新增 `Throttled(quota="...")` 字符串入口。
-- 保持现有 `Quota`、`Rate`、`per_sec` 等 API 完整兼容。
+- 语法兼容：按 `limits` 语法兼容 `n/unit`、`n per unit`。
+- 单位兼容：`unit` 同时支持简写与全写。
+  - 简写：`s`、`m`、`h`、`d`、`w`。
+  - 全写：`second`、`minute`、`hour`、`day`、`week`，含复数形式。
+- `burst` 规则：默认 `burst = n`，同时支持显式声明覆盖。
+  - 示例：`1/s` 默认 `burst=1`。
+  - 示例：`1/s; burst=5` 显式覆盖默认值。
+- 能力边界：`parse` 支持多规则，`Throttled` 暂不支持多规则。
+- 版本定位：向前兼容 `limits`，同时提供扩展与增强。
 
-### b. DSL 语法约定（v1）
+### b. 语法与行为约束（v1）
 
-- 基础速率：支持 `100/s`、`100/m`、`100/h`、`100/d`、`100/w`。
-- 自然语言：支持 `100 per second`、`100 per minute` 等形式。
-- 爆发配置：支持 `burst=200`。
-- 多规则串联：支持分隔符拼接多条规则，优先约定 `;`。
+- 推荐分隔符：`；` 对应 ASCII 形式 `;`。
+- 兼容分隔符：兼容 `,` 与竖线（pipe）。
+- 归一化：解析后统一映射到内部标准单位模型，避免简写与全写在执行层分叉。
+- 稳定性：同一输入在 sync / async 下保持一致解析与一致判定。
 
 ### c. 错误与兼容策略
 
 - 错误信息包含非法片段、期望格式、可选示例。
+- `Throttled(quota="...")` 传入多规则时返回明确错误，不做隐式降级。
 - 对现有对象式配置无破坏性变更。
-- 对 sync / async 维持一致语义与行为。
 
 ## 0x03 实施步骤
 
-1. 定义 DSL 语法规范文档，锁定单位映射、分隔符和 burst 规则。
-2. 实现 `quota.parse()` 与 `Throttled` 字符串入口适配。
-3. 增加解析成功与失败测试，覆盖边界值与兼容场景。
-4. 增加多规则 DSL 与对象规则一致性测试。
-5. 更新 README 与 docs，补充迁移示例与反例说明。
-6. 以 M1 验收标准完成评审与合并。
+1. 定义 DSL 语法规范文档，锁定单位映射、分隔符和 `burst` 默认规则。
+2. 实现 `quota.parse()`，支持单规则与多规则解析。
+3. 实现 `Throttled(quota="...")` 单规则适配，并对多规则输入抛出明确错误。
+4. 增加解析成功与失败测试，覆盖边界值与兼容场景。
+5. 增加单位简写/全写归一化测试与 `burst` 默认值测试。
+6. 更新 README 与 docs，补充迁移示例与反例说明。
 
 ## 0x04 参考
 
@@ -77,6 +83,3 @@ updated: 2026-04-04
 - `fastapi-limiter` README: <https://github.com/long2ice/fastapi-limiter/blob/main/README.md>
 - `PyrateLimiter` README: <https://github.com/vutran1710/PyrateLimiter/blob/master/README.md>
 - `aiolimiter` README: <https://github.com/mjpieters/aiolimiter/blob/main/README.md>
-
----
-*制定日期：2026-04-04*
