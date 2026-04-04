@@ -1,0 +1,32 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Noto+Serif+SC:wght@500;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --bg: #f6f8f7;
+  --text: #1f2933;
+  --muted: #5a6672;
+  --line: #d9e1de;
+  --accent: #2f7f6f;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at 0% 0%, #ecf8f4 0%, rgba(236, 248, 244, 0) 28%),
+    radial-gradient(circle at 100% 20%, #fef8ec 0%, rgba(254, 248, 236, 0) 22%),
+    var(--bg);
+  color: var(--text);
+  font-family: 'IBM Plex Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  min-height: 100vh;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: 'Noto Serif SC', 'Songti SC', serif;
+}
