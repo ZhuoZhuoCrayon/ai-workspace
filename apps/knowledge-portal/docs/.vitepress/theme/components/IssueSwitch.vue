@@ -18,13 +18,17 @@ const tabs = computed(() => {
 
 function normalizePath(value: string): string {
   if (!value) return ''
-  const noHtml = value.replace(/\.html$/i, '')
+  const noQuery = value.split(/[?#]/)[0] || ''
+  const noHtml = noQuery.replace(/\.html$/i, '')
   if (noHtml.endsWith('/')) return noHtml.slice(0, -1)
   return noHtml
 }
 
 function isActive(targetRoute: string): boolean {
-  return normalizePath(route.path) === normalizePath(targetRoute)
+  const current = normalizePath(route.path)
+  const rawTarget = normalizePath(targetRoute)
+  const basedTarget = normalizePath(withBase(targetRoute))
+  return current === rawTarget || current === basedTarget
 }
 </script>
 
@@ -34,6 +38,7 @@ function isActive(targetRoute: string): boolean {
       v-for="tab in tabs"
       :key="tab.key"
       :href="withBase(tab.route)"
+      :aria-current="isActive(tab.route) ? 'page' : undefined"
       :class="['switch-tab', { active: isActive(tab.route) }]"
     >
       {{ tab.text }}

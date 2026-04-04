@@ -1,10 +1,10 @@
 ---
-
-## title: 优化 bk-ci-helper — 引入 bk-rpc-inspection 最佳实践
+title: 优化 bk-ci-helper — 引入 bk-rpc-inspection 最佳实践
 tags: [bkm-skills, bk-ci-helper, optimization, best-practices]
 description: 将 bk-rpc-inspection 中验证有效的工程实践迁移到 bk-ci-helper，提升脚本兼容性、路径健壮性、排查规范和报告质量
 created: 2026-03-01
 updated: 2026-03-01
+---
 
 # 优化 bk-ci-helper — 引入 bk-rpc-inspection 最佳实践
 
@@ -39,4 +39,3 @@ updated: 2026-03-01
 
 - 源：`skills/bk-rpc-inspection/SKILL.md`（0x02.b、0x02.c、0x02.d、0x05）
 - 目标：`skills/bk-ci-helper/SKILL.md`
-

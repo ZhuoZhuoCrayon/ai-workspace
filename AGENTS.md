@@ -4,18 +4,48 @@
 
 ## 0x01 强制规则
 
-- `RULE-LOCATE-001`：消息中提到具体项目名时，第一步必须并行读取 `repos.json` + `private/repos.json` 获取 `local_path`；定位后优先检查 `<local_path>/AGENTS.md` 获取项目级规范。
-- `RULE-WD-001`：涉及外部项目的 git / 文件操作，必须在 `local_path` 目录执行，禁止在 `ai-workspace` 根目录直接操作其他项目仓库。
-- `RULE-KNOWLEDGE-001`：任何项目定位或知识检索，必须并行读取公开 + 私有两条路径，禁止只读一侧后下结论。
-- `RULE-KNOWLEDGE-002`：回答项目问题或执行项目任务时，按以下优先级检索并采信：
-  1. 会话上下文
-  2. 任务上下文 → `knowledge/<project>/issues/<YYYY-MM-DD-title>/`
-  3. 项目知识库 → `knowledge/<project>/` + `private/knowledge/<project>/`（含 issues / snippets / troubleshooting）
-  4. 项目自身规范 → `<local_path>/AGENTS.md`、`<local_path>/.cursor/rules/`
-  5. 项目源码 → `<local_path>`（仅 1–4 未命中时）
-  6. 通用知识 → `knowledge/_shared/` + `private/knowledge/_shared/`
-  7. 工作区全局 → `AGENTS.md`、`.cursor/rules/`、`.agents/skills/`、`.cursor/skills/`
-- `RULE-ISSUE-001`：Issue 目录只使用 `README.md` + `PLAN.md` 两文件；任务进展写回 `PLAN.md`，不创建 `PROGRESS.md`。
+### a. RULE-LOCATE-001
+
+消息中提到具体项目名时，第一步必须并行读取 `repos.json` 与 `private/repos.json`。  
+目标是获取项目的 `local_path`。  
+定位后优先检查 `<local_path>/AGENTS.md`。  
+先读取项目级规范，再执行后续动作。
+
+### b. RULE-WD-001
+
+涉及外部项目的 git 或文件操作时，必须在 `local_path` 目录执行。  
+禁止在 `ai-workspace` 根目录直接操作其他项目仓库。
+
+### c. RULE-KNOWLEDGE-001
+
+任何项目定位或知识检索，都必须并行读取公开与私有两条路径。  
+禁止只读取一侧后直接下结论。
+
+### d. RULE-KNOWLEDGE-002
+
+回答项目问题或执行项目任务时，按以下优先级检索并采信：
+
+1. 会话上下文
+2. 任务上下文 → `knowledge/<project>/issues/<YYYY-MM-DD-title>/`
+3. 项目知识库 → `knowledge/<project>/` + `private/knowledge/<project>/`（含 issues / snippets / troubleshooting）
+4. 项目自身规范 → `<local_path>/AGENTS.md`、`<local_path>/.cursor/rules/`
+5. 项目源码 → `<local_path>`（仅 1–4 未命中时）
+6. 通用知识 → `knowledge/_shared/` + `private/knowledge/_shared/`
+7. 工作区全局 → `AGENTS.md`、`.cursor/rules/`、`.agents/skills/`、`.cursor/skills/`
+
+### e. RULE-ISSUE-001
+
+Issue 目录只使用 `README.md` 与 `PLAN.md` 两个文件。  
+任务进展统一写回 `PLAN.md`。  
+不创建 `PROGRESS.md`。
+
+### f. RULE-ISSUE-002
+
+基于 issue 的迭代在出现实质变更后，交付前必须主动询问是否同步 `PLAN.md`。  
+
+1. 实质变更包括代码、文档或配置修改。  
+2. 询问使用固定句式：`是否需要我将本轮进展与关键结论同步到该 issue 的 PLAN.md？`  
+3. 若用户明确拒绝，可跳过本次写回。
 
 ## 0x02 快速入口
 

@@ -29,6 +29,13 @@ function safeRead(filePath) {
   }
 }
 
+function platformLabel(gitUrl) {
+  if (!gitUrl) return ''
+  if (/github\.com/i.test(gitUrl)) return 'GitHub'
+  if (/git\.woa\.com/i.test(gitUrl)) return 'Git WOA'
+  return 'Git'
+}
+
 function parseRegistryFile(filePath, format) {
   const raw = safeRead(filePath)
   if (!raw) return []
@@ -226,6 +233,7 @@ function collectRepos(warnings) {
           description: String(row.description ?? ''),
           git_url: String(row.git_url ?? ''),
           branch: String(row.branch ?? ''),
+          local_path: String(row.local_path ?? ''),
           language: String(row.language ?? ''),
           visibility: src.visibility,
         })
@@ -501,12 +509,13 @@ function writeProjectsPage(projects) {
     '',
     '# 项目概览',
     '',
-    '| 项目 | 文档数 | 描述 |',
-    '|------|--------|------|',
+    '| 项目 | 文档数 | 描述 | 仓库 |',
+    '|------|--------|------|------|',
   ]
 
   for (const project of projects) {
-    lines.push(`| [${project.project}](${project.route}) | ${project.docs_count} | ${project.description || ''} |`)
+    const repoCell = project.repo_url ? `[${project.repo_platform || '仓库'}](${project.repo_url})` : '—'
+    lines.push(`| [${project.project}](${project.route}) | ${project.docs_count} | ${project.description || ''} | ${repoCell} |`)
   }
   lines.push('')
   fs.writeFileSync(path.join(DOCS_DIR, 'projects.md'), lines.join('\n'), 'utf-8')
@@ -522,6 +531,7 @@ function build() {
   const sidebar = buildSidebar(docsForNav)
   const tags = buildTagIndex(docsForNav)
   const calendar = buildCalendar(docsForNav)
+  const repoByName = new Map(repos.map((repo) => [repo.name, repo]))
 
   const projectMap = new Map()
   for (const doc of docsForNav) {
@@ -531,6 +541,8 @@ function build() {
       docs_count: 0,
       route: `/knowledge/${doc.project}/`,
       description: '',
+      repo_url: '',
+      repo_platform: '',
     }
 
     current.docs_count += 1
@@ -538,8 +550,12 @@ function build() {
       current.route = doc.route
     }
 
-    const repo = repos.find((item) => item.name === doc.project)
+    const repo = repoByName.get(doc.project)
     if (repo && !current.description) current.description = repo.description
+    if (repo && !current.repo_url) {
+      current.repo_url = repo.git_url
+      current.repo_platform = platformLabel(repo.git_url)
+    }
 
     projectMap.set(key, current)
   }

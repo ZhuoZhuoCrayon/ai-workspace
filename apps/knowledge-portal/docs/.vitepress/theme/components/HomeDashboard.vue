@@ -10,7 +10,7 @@ interface Meta {
   recent_docs: { title: string; route: string; project: string; updated: string }[]
   calendar: Record<string, number>
   tags: Record<string, { title: string; route: string; project: string }[]>
-  projects: { project: string; docs_count: number; route: string }[]
+  projects: { project: string; docs_count: number; route: string; repo_url?: string; repo_platform?: string }[]
 }
 
 const meta = metaData as Meta
@@ -131,7 +131,19 @@ const tagCount = computed(() => {
         <ul class="project-list">
           <li v-for="p in meta.projects" :key="p.project">
             <a :href="withBase(p.route)">{{ p.project }}</a>
-            <span class="project-count">{{ p.docs_count }}</span>
+            <div class="project-actions">
+              <a
+                v-if="p.repo_url"
+                class="repo-link"
+                :href="p.repo_url"
+                target="_blank"
+                rel="noopener noreferrer"
+                :title="`打开 ${p.project} 仓库`"
+              >
+                {{ p.repo_platform || 'Git' }}
+              </a>
+              <span class="project-count">{{ p.docs_count }}</span>
+            </div>
           </li>
         </ul>
       </section>
@@ -379,6 +391,29 @@ h3 {
   align-items: center;
   padding: 0.49rem 0;
   border-bottom: 1px solid var(--vp-c-divider);
+}
+
+.project-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.repo-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.12rem 0.42rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--vp-c-brand-1) 28%, var(--vp-c-divider));
+  background: color-mix(in srgb, var(--vp-c-brand-soft) 56%, transparent);
+  color: var(--vp-c-brand-1);
+  font-size: 0.69rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.repo-link:hover {
+  background: color-mix(in srgb, var(--vp-c-brand-soft) 74%, transparent);
 }
 
 .project-count {

@@ -82,6 +82,80 @@ updated: 2026-04-04
 - 更新 CI workflow：`npm run docs:build`，产物路径改为 `docs/.vitepress/dist`。
 - 端到端验证：构建 2.96s / 4.8MB，全部页面 200，sidebar/TOC/搜索/标签跳转/站内链接均可用。
 
+### c. 2026-04-04（v2：体验优化与稳定性修复）
+
+#### 目标与问题定位
+
+- 首页 Hero 文案（`AI 工作台知识库`）与顶部导航搜索框视觉距离过近，首屏呼吸感不足。
+- 首页「最近更新 / 项目分布」两列内容起始线不齐，存在明显错位。
+- Issue/Plan 页面 Mermaid 未渲染，影响方案阅读体验（例如 `knowledge/bkmonitor/issues/2026-03-03-apm-shared-datasource/PLAN.md`）。
+
+#### 根因与关键决策
+
+- Mermaid 根因：VitePress 实际输出容器为 `.language-mermaid`，旧逻辑仅匹配 `pre code.language-mermaid`，导致未命中替换。
+- 两列错位根因：通用规则 `.panel + .panel` 作用到 grid 内第二张卡片，导致右列整体下移。
+- 对齐策略：统一首页内容栅格（Hero 与 Dashboard 同一左右边界），并给两列工具栏预留等高行。
+
+#### 变更清单（文件级）
+
+| 文件 | 关键变更 |
+|------|----------|
+| `apps/knowledge-portal/docs/.vitepress/theme/index.ts` | Mermaid 渲染逻辑升级：支持 `.language-mermaid` 容器，保留旧选择器兼容；`mermaid.run` 启用 `suppressErrors`。 |
+| `apps/knowledge-portal/docs/.vitepress/theme/style/custom.css` | 首页视觉体系升级：Hero 间距、背景层次、字体与按钮状态；加大 Hero 顶部留白，缓解与搜索栏距离过近问题。 |
+| `apps/knowledge-portal/docs/.vitepress/theme/components/HomeDashboard.vue` | 首页卡片化重构；最近更新类型筛选；项目分布工具栏；修复 grid 内额外 margin 导致的列错位。 |
+| `apps/knowledge-portal/docs/.vitepress/theme/components/ActivityCalendar.vue` | 日历视觉细化：月份标签可读性、格子 hover 反馈与边框。 |
+| `apps/knowledge-portal/docs/.vitepress/theme/components/TagCloud.vue` | 标签云热度分层与 focus/hover 可访问性增强。 |
+| `apps/knowledge-portal/docs/.vitepress/theme/components/IssueSwitch.vue` | Issue 内入口文案优化：`README/PLAN` → `需求概述/方案`。 |
+
+#### 验证矩阵
+
+| 页面 | 验证项 | 结果 |
+|------|--------|------|
+| `/` | Hero 与 Dashboard 左边界对齐（桌面/移动） | 通过 |
+| `/` | 最近更新 / 项目分布 首行对齐 | 通过 |
+| `/` | 活动日志文案与数字链接展示 | 通过 |
+| `/knowledge/bkmonitor/issues/2026-03-03-apm-shared-datasource/plan.html` | Mermaid 图渲染（多图） | 通过（10/10） |
+| 全站 | `npm run docs:build` | 通过 |
+
+#### 版本锚点
+
+- 提交：`9c525bb`
+- Commit Message：`feat(knowledge-portal): polish portal UX and fix mermaid rendering`
+- 推送：`main -> origin/main`（`bdcff21..9c525bb`）
+
+#### 接手提示（给后续 Agent）
+
+- 本地验收优先使用：`npm run docs:build` + `npm run docs:preview -- --port 4175`，避免陈旧进程导致静态资源 hash 404。
+- 验证 Mermaid 时优先检查两点：页面中是否存在 `.language-mermaid`，以及是否替换为 `.vp-mermaid svg`。
+- 首页布局改动需同时验收桌面与移动，尤其关注 Hero 顶部留白与两列列表起始线对齐。
+
+### d. 2026-04-04（v2：交互补强与规则固化）
+
+#### 本轮新增优化
+
+- 修复 Issue 内 `需求概述 / 方案` 切换选中态：兼容 GitHub Pages `base` 路径，避免 `plan.html` 下无高亮。
+- 项目入口补充仓库跳转交互：
+  - 首页「项目分布」增加 Git 平台按钮（`GitHub` / `Git WOA`）。
+  - `projects.md` 新增「仓库」列并输出可点击链接。
+- 补齐缺失仓库描述：为 `throttled-py` 回填 description（来源：GitHub 仓库描述）。
+- 修复历史 frontmatter 异常：`knowledge/bkm-skills/issues/2026-03-01-ci-helper-best-practices/README.md`。
+
+#### 规范固化（减少重复沟通）
+
+- 在 `AGENTS.md` 新增 `RULE-ISSUE-002`：基于 issue 的迭代在交付前必须主动询问是否同步 `PLAN.md`。
+- 在 `knowledge_mgr` 新增「0x05 迭代收口（Issue 场景）」：固定提问句与写回模板（变更摘要 / 关键结论 / 验证结果 / 风险后续 / 版本锚点）。
+- 在 `project_mgr` 新增「描述补齐策略」：`Git 平台描述 -> README 首段 -> 占位描述`，并允许巡检时只补齐空描述字段。
+
+#### 验证结果
+
+| 验证项 | 结果 |
+|------|------|
+| `需求概述 / 方案` 在 `plan.html` 页选中态 | 通过 |
+| 首页项目分布 Git 平台跳转可见且可点击 | 通过 |
+| `projects.md` 仓库列渲染 | 通过 |
+| frontmatter 异常告警（`ci-helper-best-practices`） | 已消除 |
+| 文档规范检查（规则文档 + PLAN） | 通过 |
+
 ## 0x06 参考
 
 - [VitePress Deploy](https://vitepress.dev/guide/deploy)
