@@ -77,4 +77,4 @@ updated: 2026-04-04
 - [django-ratelimit Usage](https://django-ratelimit.readthedocs.io/en/stable/usage.html)
 - [fastapi-limiter](https://github.com/long2ice/fastapi-limiter/blob/main/README.md)
 - [PyrateLimiter README](https://github.com/vutran1710/PyrateLimiter/blob/master/README.md)
-- [aiolimiter README](https://github.com/mjpieters/aiolimiter/blob/main/README.md)
+- [aiolimiter](https://github.com/mjpieters/aiolimiter/blob/main/README.md)
