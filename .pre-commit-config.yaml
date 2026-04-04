@@ -1,10 +1,24 @@
 repos:
   - repo: local
     hooks:
+      - id: lint-md
+        name: lint-md
+        entry: npx --yes @lint-md/cli -c config/lint/lint-md.json
+        language: system
+        pass_filenames: true
+        files: \.md$
+        exclude: '(^|/)(node_modules|\.git|__pycache__|\.venv|venv)/'
+      - id: markdownlint-cli2
+        name: markdownlint-cli2
+        entry: npx --yes markdownlint-cli2 --config config/lint/markdownlint-cli2.jsonc
+        language: system
+        pass_filenames: true
+        files: \.(md|mdc)$
+        exclude: '(^|/)(node_modules|\.git|__pycache__|\.venv|venv)/'
       - id: check-doc-style
         name: check-doc-style
         entry: python3 scripts/check_doc_style.py
         language: system
         pass_filenames: true
         files: \.(md|mdc)$
-        exclude: '(^|/)(\.agents|\.claude)/skills/|(^|/)\.cursor/skills/|(^|/)(node_modules|\.git|__pycache__|\.venv|venv)/'
+        exclude: '(^|/)(node_modules|\.git|__pycache__|\.venv|venv)/'

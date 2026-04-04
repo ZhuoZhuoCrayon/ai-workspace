@@ -6,6 +6,7 @@ on:
       - "**/*.md"
       - "**/*.mdc"
       - "scripts/check_doc_style.py"
+      - "config/lint/**"
       - ".pre-commit-config.yaml"
       - ".github/workflows/docs-style-check.yml"
   push:
@@ -13,6 +14,7 @@ on:
       - "**/*.md"
       - "**/*.mdc"
       - "scripts/check_doc_style.py"
+      - "config/lint/**"
       - ".pre-commit-config.yaml"
       - ".github/workflows/docs-style-check.yml"
   workflow_dispatch:
@@ -20,6 +22,9 @@ on:
 jobs:
   docs-style-check:
     runs-on: ubuntu-latest
+    env:
+      python-version: "3.11"
+      node-version: "20.18.3"
 
     steps:
       - name: Checkout repository
@@ -30,60 +35,46 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ env.python-version }}
 
-      - name: Run document style check
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PUSH_BEFORE_SHA: ${{ github.event.before }}
-          PUSH_HEAD_SHA: ${{ github.sha }}
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.node-version }}
+
+      - name: Install pre-commit
+        run: python -m pip install --upgrade pip pre-commit
+
+      - name: Pre-commit run (changed files only)
+        shell: bash
         run: |
-          python3 - <<'PY'
-          from __future__ import annotations
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            FROM_SHA="${{ github.event.pull_request.base.sha }}"
+          else
+            FROM_SHA="${{ github.event.before }}"
+          fi
+          TO_SHA="${{ github.sha }}"
 
-          import os
-          import subprocess
-          import sys
-          from pathlib import Path
+          if [[ -z "${FROM_SHA}" || "${FROM_SHA}" == "0000000000000000000000000000000000000000" ]]; then
+            if git rev-parse HEAD^ >/dev/null 2>&1; then
+              FROM_SHA="$(git rev-parse HEAD^)"
+            else
+              echo "No base commit detected (first commit). Running pre-commit on all files."
+              pre-commit run --show-diff-on-failure --color=always --verbose --all-files
+              exit 0
+            fi
+          fi
 
-          EXCLUDED_PARTS: set[str] = {".git", "node_modules", "__pycache__", ".venv", "venv"}
-          EXCLUDED_PREFIXES: tuple[str, ...] = (".agents/skills/", ".claude/skills/", ".cursor/skills/")
+          CHANGED_FILES="$(git diff --name-only --diff-filter=ACMR "${FROM_SHA}" "${TO_SHA}")"
+          if [[ -z "${CHANGED_FILES}" ]]; then
+            echo "No changed files between ${FROM_SHA} and ${TO_SHA}; skipping pre-commit."
+            exit 0
+          fi
 
-          def get_commit_range() -> tuple[str | None, str]:
-              event_name: str = os.environ["EVENT_NAME"]
-              if event_name == "pull_request":
-                  return os.environ["PR_BASE_SHA"], os.environ["PR_HEAD_SHA"]
-              if event_name == "push":
-                  before_sha: str = os.environ.get("PUSH_BEFORE_SHA", "")
-                  if before_sha and set(before_sha) != {"0"}:
-                      return before_sha, os.environ["PUSH_HEAD_SHA"]
-                  return None, os.environ["PUSH_HEAD_SHA"]
-              return None, os.environ["PUSH_HEAD_SHA"]
+          echo "Running pre-commit for range ${FROM_SHA}..${TO_SHA}"
+          echo "Files to scan (one per line):"
+          echo "${CHANGED_FILES}" | sed 's/^/  - /'
 
-          def is_doc_file(path_text: str) -> bool:
-              path: Path = Path(path_text)
-              if path.suffix not in {".md", ".mdc"}:
-                  return False
-              if any(part in EXCLUDED_PARTS for part in path.parts):
-                  return False
-              return not any(path.as_posix().startswith(prefix) for prefix in EXCLUDED_PREFIXES)
-
-          base_sha, head_sha = get_commit_range()
-          if base_sha:
-              diff_cmd: list[str] = ["git", "diff", "--name-only", base_sha, head_sha]
-          else:
-              diff_cmd = ["git", "ls-files"]
-
-          changed_files: list[str] = subprocess.check_output(diff_cmd, text=True).splitlines()
-          targets: list[str] = [item for item in changed_files if item and is_doc_file(item)]
-
-          if not targets:
-              print("No Markdown or MDC changes to check.")
-              raise SystemExit(0)
-
-          cmd: list[str] = [sys.executable, "scripts/check_doc_style.py", *targets]
-          print("Running:", " ".join(cmd))
-          raise SystemExit(subprocess.call(cmd))
-          PY
+          pre-commit run --show-diff-on-failure --color=always --verbose \
+            --from-ref "${FROM_SHA}" --to-ref "${TO_SHA}"
