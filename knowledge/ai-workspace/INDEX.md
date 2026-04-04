@@ -2,15 +2,21 @@
 
 > AI 工作区 — 知识管理与多项目协作中枢
 
-## 索引
+## 0x01 索引
 
 | 分类 | 路径 | 数量 | 说明 |
 |------|------|------|------|
-| 已归档 Issues | [issues/](./issues/) | 1 篇 | 已完结的任务记录 |
+| Issues | [issues/](./issues/INDEX.md) | 1 篇 | 进行中任务与需求调研 |
+| 已归档 Issues | [issues/](./issues/INDEX.md) | 1 篇 | 已完结的任务记录 |
 
-### 已归档 Issues
+## 0x02 Issues
+
+| 文件 | 标签 | 摘要 | 更新日期 |
+|------|------|------|---------|
+| [文档规范检查工具替代调研](./issues/2026-04-04-doc-style-tooling-research/README.md) | `ai-workspace` `docs` `tooling` `lint` | 调研成熟文档检查工具是否可替代 scripts/check_doc_style.py | 2026-04-04 |
+
+## 0x03 已归档 Issues
 
 | 文件 | 标签 | 摘要 | 归档日期 |
 |------|------|------|---------|
-| [AI 工作区项目启动](./issues/2026-02-06-AI工作区项目启动/README.md) | `ai-workspace` `规划` | AI 工作区的整体规划和建设 | 2026-02-09 |
-
+| [AI 工作区项目启动](./issues/2026-02-06-AI%E5%B7%A5%E4%BD%9C%E5%8C%BA%E9%A1%B9%E7%9B%AE%E5%90%AF%E5%8A%A8/README.md) | `ai-workspace` `规划` | AI 工作区的整体规划和建设 | 2026-02-09 |

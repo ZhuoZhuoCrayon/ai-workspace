@@ -19,7 +19,7 @@ description: 创建、更新、归档、迁移、删除和索引知识对象（i
 | 对象              | 位置                                    | 命名规则        | 模板                      |
 |-----------------|---------------------------------------|-------------|-------------------------|
 | issue           | `issues/<YYYY-MM-DD-title>/README.md` | 目录名：小写英文短横线 | Issue（需求）模板             |
-| plan            | `issues/<YYYY-MM-DD-title>/PLAN.md`   | 同 issue 目录  | Plan（计划/实施方案）模板         |
+| plan            | `issues/<YYYY-MM-DD-title>/PLAN.md`   | 同 issue 目录  | Plan（计划/实施方案，含进展记录）模板 |
 | snippet         | `snippets/<title>.md`                 | 文件名：小写英文短横线 | Snippet（代码片段）模板         |
 | troubleshooting | `troubleshooting/<title>.md`          | 文件名：小写英文短横线 | Troubleshooting（排障经验）模板 |
 
@@ -135,7 +135,7 @@ knowledge/<project>/troubleshooting/INDEX.md ← 三级：troubleshooting 列表
 | [标题](./<文件或目录>/README.md) | `tag1` `tag2` | 一句话摘要 | YYYY-MM-DD |
 ```
 
-> issue 的附属文件（PLAN.md、PROGRESS.md）不单独列出，仅以 issue（README.md）为条目代表整个 issue 目录。
+> issue 的附属文件（PLAN.md）不单独列出，仅以 issue（README.md）为条目代表整个 issue 目录。
 
 **二级**（`knowledge/<project>/INDEX.md`）：
 
@@ -172,7 +172,7 @@ knowledge/<project>/troubleshooting/INDEX.md ← 三级：troubleshooting 列表
 - YYYY-MM-DD：<动作> [<标题>](<相对路径>) <补充说明>
 ```
 
-**数量统计**：按逻辑单元计数——issue + 附属文件（PLAN / PROGRESS）合计 1 篇，snippet / troubleshooting 每文件 1 篇。仅统计当前可见性路径内的数量，不跨域合并。
+**数量统计**：按逻辑单元计数——issue + 附属文件（PLAN）合计 1 篇，snippet / troubleshooting 每文件 1 篇。仅统计当前可见性路径内的数量，不跨域合并。
 
 **最近更新**：保留最近 5 条。动作词：`新增` / `更新` / `归档` / `迁移` / `删除`。迁移注明方向如 `（private → public）`，删除操作无需链接。
 
