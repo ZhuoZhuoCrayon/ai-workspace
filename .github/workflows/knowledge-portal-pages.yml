@@ -50,7 +50,7 @@ jobs:
 
       - name: Build Site
         working-directory: apps/knowledge-portal
-        run: npm run build
+        run: npm run docs:build
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
@@ -58,7 +58,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: apps/knowledge-portal/dist
+          path: apps/knowledge-portal/docs/.vitepress/dist
 
   deploy:
     needs: build
