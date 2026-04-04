@@ -1,0 +1,73 @@
+name: Deploy Knowledge Portal
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/knowledge-portal/**
+      - knowledge/**
+      - repos.json
+      - .github/workflows/knowledge-portal-pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-knowledge-portal
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/knowledge-portal/package-lock.json
+
+      - name: Resolve Base Path
+        run: |
+          REPO_NAME="${GITHUB_REPOSITORY#*/}"
+          OWNER_NAME="${GITHUB_REPOSITORY%/*}"
+          if [ "$REPO_NAME" = "${OWNER_NAME}.github.io" ]; then
+            echo "VITE_BASE_PATH=/" >> "$GITHUB_ENV"
+          else
+            echo "VITE_BASE_PATH=/$REPO_NAME/" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install Dependencies
+        working-directory: apps/knowledge-portal
+        run: npm ci
+
+      - name: Build Site
+        working-directory: apps/knowledge-portal
+        run: npm run build
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/knowledge-portal/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
