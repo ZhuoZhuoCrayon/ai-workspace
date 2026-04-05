@@ -56,6 +56,15 @@ Issue 文档职责必须分离，禁止混写。
 3. 在 `README.md` 中允许出现“调研对象列表”（例如主流库名单），但不得展开为结论性内容。  
 4. 若发现 `README.md` 混入调研细节，必须先回收至 `PLAN.md` 再继续后续工作。
 
+### h. RULE-PR-001
+
+PR review 中可定位到文件与行号的问题，必须优先发布到对应代码位置。  
+禁止仅用 PR conversation 总结替代行级评论。
+
+1. 可定位问题：使用行级 review comment（inline）发布到精确 `path:line`。  
+2. 总结性结论：发布到 PR conversation。  
+3. 仅当无法定位到单行或受工具限制时，才允许退化到 conversation；并且必须标注 `path:line` 与退化原因。
+
 ## 0x02 快速入口
 
 | 目标 | 路径 | 说明 |

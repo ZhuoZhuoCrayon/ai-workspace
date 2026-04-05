@@ -48,7 +48,11 @@ P0（阻塞合入）> P1（建议修复）> P2（可选优化）。
 
 ### b. 发布位置
 
-总结性评论发到 PR conversation，行内建议用 review comment。
+**CRITICAL（必须执行不可协商）**：可定位到文件与行号的问题，必须发布行级 review comment（inline），不得只发 conversation 总结替代。
+
+- 默认顺序：先逐条发布行级 review comment，再发布一条总结性 conversation 评论（如有必要）。
+- 用户仅说「发评论」「发表 P1/P2」时，默认按“发布到对应代码位置”执行。
+- 仅当问题无法定位到单行，或受 GitHub API/工具限制无法 inline 时，才可退化为 conversation 评论；并在评论中注明 `path:line` 与退化原因。
 
 ### c. 行内评价
 
@@ -65,7 +69,12 @@ P0（阻塞合入）> P1（建议修复）> P2（可选优化）。
 
 ### d. 评论语言
 
-从 `repos.json`、`private/repos.json` 读取项目 `language` 字段（`zh` 中文、`en` 英文），未配置时默认 `zh`。
+**CRITICAL（必须执行不可协商）**：对话与发布使用不同语言基准：
+
+1. **对话中的草稿报告**：遵循当前工作区语言（即 `general.mdc` 中的沟通语言规范），与用户在对话中保持一致。
+2. **发布到 PR 的所有评论**（conversation、inline review comment、approve body）：从 `repos.json`、`private/repos.json` 读取目标项目 `language` 字段（`zh` 中文、`en` 英文），未配置时默认 `zh`。
+
+即：在 ai-workspace（`zh`）中 review throttled-py（`en`）时，对话草稿用中文，发布到 PR 用英文。
 
 ## 0x04 Approve
 
