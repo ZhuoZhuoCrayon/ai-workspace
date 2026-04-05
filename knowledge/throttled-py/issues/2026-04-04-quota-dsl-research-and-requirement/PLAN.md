@@ -4,7 +4,7 @@ tags: [throttled-py, quota, dsl, planning, research]
 issue: knowledge/throttled-py/issues/2026-04-04-quota-dsl-research-and-requirement/README.md
 description: 基于主流库语法调研，定义 throttled-py quota DSL 的实现方案与步骤
 created: 2026-04-04
-updated: 2026-04-04
+updated: 2026-04-05
 ---
 
 # throttled-py 可读容量配置 DSL —— 实施方案
@@ -78,3 +78,35 @@ updated: 2026-04-04
 - [fastapi-limiter](https://github.com/long2ice/fastapi-limiter/blob/main/README.md)
 - [PyrateLimiter](https://github.com/vutran1710/PyrateLimiter/blob/master/README.md)
 - [aiolimiter](https://github.com/mjpieters/aiolimiter/blob/main/README.md)
+
+## 0x05 实施进展（2026-04-05）
+
+### a. 变更摘要
+
+- 新增解析模块：`throttled/rate_limiter/quota_parser.py`。
+- `Throttled` 支持字符串 quota，并接入 `quota_parser`。
+- `parse` 支持多规则；`Throttled(quota=...)` 暂不支持多规则执行并抛出明确错误。
+- 新增 `tests/test_quota.py`，并补充 `tests/asyncio/test_throttled.py` 相关用例。
+
+### b. 关键结论
+
+- 解析能力归类到 `rate_limiter` 领域，不新增顶层 `quota` 兼容层。
+- 语法兼容 `limits` 主流写法（`n/unit`、`n per unit`），并支持 `burst` 默认值与显式覆盖。
+- 先稳定单规则主路径，后续再开放多规则执行。
+
+### c. 验证结果
+
+- `uv run pytest -q tests/test_quota.py tests/test_throttled.py tests/asyncio/test_throttled.py`：`46 passed`。
+- 提交门禁通过：`prek`（含 `ruff`、`ruff-format`）。
+
+### d. 风险与后续
+
+- 当前限制：`Throttled` 仍不支持多规则执行，仅解析层支持多规则表达。
+- 后续：落地多规则执行模型，并补齐跨 store 一致性测试。
+- 说明：pre-commit 与类型检查调整已拆分到独立分支。
+
+### e. 版本锚点
+
+- 分支：`feat/260405_quota_parser_dsl`
+- 提交：`e43b340`
+- push 状态：已 push

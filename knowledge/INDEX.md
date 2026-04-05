@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-04-04
+> 最后更新：2026-04-05
 
 ## 0x01 项目知识
 
@@ -16,8 +16,8 @@
 
 ## 0x02 最近更新
 
+- 2026-04-05：更新 [throttled-py 可读容量配置 DSL 需求定义](./throttled-py/issues/2026-04-04-quota-dsl-research-and-requirement/README.md) 至 throttled-py（补充 PLAN 实施进展与版本锚点）
 - 2026-04-04：更新 [throttled-py 可读容量配置 DSL 需求定义](./throttled-py/issues/2026-04-04-quota-dsl-research-and-requirement/README.md) 至 throttled-py
 - 2026-04-04：更新 [throttled-py 半年 RoadMap 优势评估](./throttled-py/issues/2026-04-04-2026h1-roadmap/README.md) 至 throttled-py
 - 2026-04-04：新增 [AI 工作区知识资产可视化页面](./ai-workspace/issues/2026-04-04-knowledge-visualization-site/README.md) 至 ai-workspace
 - 2026-04-04：新增 [文档规范检查工具替代调研](./ai-workspace/issues/2026-04-04-doc-style-tooling-research/README.md) 至 ai-workspace
-- 2026-03-27：新增 [Taf 服务上报适配环境字段](./bkmonitor-datalink/issues/2026-03-27-taf-set-env-field-adapter/README.md) 至 bkmonitor-datalink
