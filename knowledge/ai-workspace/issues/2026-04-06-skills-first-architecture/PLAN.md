@@ -151,5 +151,6 @@ updated: 2026-04-06
 ## 0x06 参考
 
 - [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills)
+- [GeminiLight/MindOS](https://github.com/GeminiLight/MindOS)
 - [skill-creator 规范](./../../../.agents/skills/skill-creator/SKILL.md)
 - [create-skill 规范](~/.cursor/skills-cursor/create-skill/SKILL.md)

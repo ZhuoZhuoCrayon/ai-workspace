@@ -48,5 +48,6 @@ updated: 2026-04-06
 ## 0x03 参考
 
 - [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills)：19 个工程类 skills，覆盖 define → plan → build → verify → review → ship 全生命周期
+- [GeminiLight/MindOS](https://github.com/GeminiLight/MindOS)：可作为多 Agent 工作流与技能编排的参考实现
 - 工作区现有 skills 清单：`.agents/skills/` 下 13 个 skill
 - skill-creator 规范：`.agents/skills/skill-creator/SKILL.md` + `~/.cursor/skills-cursor/create-skill/SKILL.md`
