@@ -16,12 +16,12 @@ description: 创建、更新、归档、迁移、删除和索引知识对象（i
 
 所有知识对象均归属于项目，存放在 `knowledge/<project>/` 下：
 
-| 对象              | 位置                                    | 命名规则        | 模板                      |
-|-----------------|---------------------------------------|-------------|-------------------------|
-| issue           | `issues/<YYYY-MM-DD-title>/README.md` | 目录名：小写英文短横线 | Issue（需求）模板             |
-| plan            | `issues/<YYYY-MM-DD-title>/PLAN.md`   | 同 issue 目录  | Plan（计划/实施方案，含进展记录）模板 |
-| snippet         | `snippets/<title>.md`                 | 文件名：小写英文短横线 | Snippet（代码片段）模板         |
-| troubleshooting | `troubleshooting/<title>.md`          | 文件名：小写英文短横线 | Troubleshooting（排障经验）模板 |
+| 对象 | 位置 | 命名规则 | 模板 |
+|------|------|----------|------|
+| issue | `issues/<YYYY-MM-DD-title>/README.md` | 目录名：小写英文短横线 | Issue（需求）模板 |
+| plan | `issues/<YYYY-MM-DD-title>/PLAN.md` | 同 issue 目录 | Plan（计划/实施方案，含进展记录）模板 |
+| snippet | `snippets/<title>.md` | 文件名：小写英文短横线 | Snippet（代码片段）模板 |
+| troubleshooting | `troubleshooting/<title>.md` | 文件名：小写英文短横线 | Troubleshooting（排障经验）模板 |
 
 > 模板详见 [templates.md](templates.md)。创建文档时必须先阅读模板获取完整结构，并遵循 `.cursor/rules/markdown.mdc` 规范。
 
@@ -33,15 +33,15 @@ description: 创建、更新、归档、迁移、删除和索引知识对象（i
 
 所有知识文件必须包含以下 frontmatter 字段：
 
-| 字段          | 必填 | 说明                  |
-|-------------|----|---------------------|
-| title       | 是  | 文档标题                |
-| tags        | 是  | 标签数组，如 `[k8s, ops]` |
-| description | 是  | 一句话摘要               |
-| language    | 否  | 仅 snippet，代码语言      |
-| issue       | 否  | 仅 plan，关联 issue 路径  |
-| created     | 是  | 创建日期，`YYYY-MM-DD`   |
-| updated     | 是  | 最后更新日期，`YYYY-MM-DD` |
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| title | 是 | 文档标题 |
+| tags | 是 | 标签数组，如 `[k8s, ops]` |
+| description | 是 | 一句话摘要 |
+| language | 否 | 仅 snippet，代码语言 |
+| issue | 否 | 仅 plan，关联 issue 路径 |
+| created | 是 | 创建日期，`YYYY-MM-DD` |
+| updated | 是 | 最后更新日期，`YYYY-MM-DD` |
 
 ## 0x02 操作流程
 
@@ -190,21 +190,55 @@ updated: 2026-02-12
 ---
 ```
 
-## 0x05 迭代收口（Issue 场景）
+## 0x05 知识管理规则
 
-当任务是“基于 issue 的迭代”且已产生实质变更（代码、文档、配置任一项）时，在交付前执行以下动作：
+以下规则由 `AGENTS.md` 引用为强制约束。
 
-1. 先做简短复盘：本轮做了什么、修了什么、验证了什么。
-2. 主动询问用户是否写回 PLAN，使用固定句式：
-   - `是否需要我将本轮进展与关键结论同步到该 issue 的 PLAN.md？`
-3. 用户确认后，将以下内容追加到 `knowledge/<project>/issues/<date-title>/PLAN.md`（或 private 对应路径）：
+### a. RULE-KNOWLEDGE-002 — 知识检索优先级
 
-| 模块 | 必填内容 |
-|------|----------|
-| 变更摘要 | 本轮新增/修改文件与核心行为变化 |
-| 关键结论 | 根因、关键决策、取舍理由 |
-| 验证结果 | 构建/测试/页面验证及结论 |
-| 风险与后续 | 未覆盖风险、建议下一步 |
-| 版本锚点 | commit sha / 分支 / push 状态（若有） |
+回答项目问题或执行项目任务时，按以下优先级检索并采信：
 
-> 若用户明确表示“本轮不更新 PLAN”，需尊重并跳过；但下一轮迭代仍需再次主动询问。
+1. 会话上下文
+2. 任务上下文 → `knowledge/<project>/issues/<YYYY-MM-DD-title>/`
+3. 项目知识库 → `knowledge/<project>/` + `private/knowledge/<project>/`（含 issues / snippets / troubleshooting）
+4. 项目自身规范 → `<local_path>/AGENTS.md`、`<local_path>/.cursor/rules/`
+5. 项目源码 → `<local_path>`（仅 1–4 未命中时）
+6. 通用知识 → `knowledge/_shared/` + `private/knowledge/_shared/`
+7. 工作区全局 → `AGENTS.md`、`.cursor/rules/`、`.agents/skills/`、`.cursor/skills/`
+
+### b. RULE-ISSUE-001 — Issue 目录结构
+
+- Issue 目录只使用 `README.md` 与 `PLAN.md` 两个文件。
+- 任务进展统一写回 `PLAN.md`，不创建 `PROGRESS.md`。
+
+### c. RULE-ISSUE-002 — 迭代交付写回
+
+基于 issue 的迭代在出现实质变更（代码、文档或配置修改）后，交付前必须主动询问是否同步 `PLAN.md`。
+
+- 固定句式：`是否需要我将本轮方案细节并入 0x02 方案设计，并更新 0x05 实施进展表？`
+- 若用户拒绝可跳过，但下一轮仍需再次询问。
+
+### d. RULE-ISSUE-003 — Issue 文档职责分离
+
+1. `README.md` 只记录需求定义与方法论，不记录调研细节、对比表、语法样例结论。
+2. `PLAN.md` 承载调研结论、对比分析、实现路径、验收与进展。
+3. `README.md` 中允许出现"调研对象列表"，但不得展开为结论性内容。
+4. 若发现 `README.md` 混入调研细节，必须先回收至 `PLAN.md` 再继续。
+
+### e. RULE-ISSUE-004 — PLAN 迭代模式
+
+`PLAN.md` 的迭代必须采用"方案主干融合 + 进展表格化"模式，禁止仅以补丁式追加替代主干更新。
+
+1. 结论性变更并入 `0x02 方案设计`（或对应主设计章节），保证只看主干也能获得当前有效方案。
+2. 实施进展记录在统一表格中，表头：`时间`、`结论调整概要`、`改动`。
+3. 表格单元内用 `<br />` 或 `[1]`、`[2]` 角标换行，禁止松散段落。
+4. 版本锚点只记录 `分支` 与 `PR`。
+5. 每次写回后同步 frontmatter `updated` 为当日日期。
+
+**迭代收口流程**：
+
+1. 简短复盘：本轮做了什么、修了什么、验证了什么。
+2. 按 RULE-ISSUE-002 主动询问用户。
+3. 用户确认后，将结论并入方案主干，进展写入表格，同步 `updated` 日期。
+
+> 若用户明确表示"本轮不更新 PLAN"，需尊重并跳过；但下一轮迭代仍需再次主动询问。
