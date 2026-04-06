@@ -5,7 +5,9 @@ alwaysApply: true
 
 # PR Review 偏好
 
-**CRITICAL（必须执行不可协商）**：所有 GitHub 写操作（评论、review comment、approve、request changes、resolve thread、dismiss review 等）必须经用户明确授权后执行。未列举的写操作同样需授权；授权意图模糊时，先向用户确认再执行。用户说「review」仅代表在对话中输出分析报告，不代表授权发布。
+**CRITICAL（必须执行不可协商）**：GitHub 写操作默认需要用户明确授权。
+唯一例外：用户触发「review」后，针对**已确认修复**的已存在未解决 review 线程，允许自动执行 `resolve thread`（无需二次确认）。
+除该例外外，评论、approve、request changes、dismiss review 等写操作仍需授权。
 
 ## 0x01 前置操作
 
@@ -13,9 +15,10 @@ alwaysApply: true
 
 - 触发：开始 review 前。
 - 作为流程例外默认执行，失败不阻塞。
-1. `gh api user --jq .login` 获取当前登录用户。
-2. `gh pr view <pr> --json author --jq .author.login` 获取 PR 作者。
-3. 去重后 `gh pr edit <pr> --add-assignee <login>` 添加。
+- 步骤：
+  1. `gh api user --jq .login` 获取当前登录用户。
+  2. `gh pr view <pr> --json author --jq .author.login` 获取 PR 作者。
+  3. 去重后 `gh pr edit <pr> --add-assignee <login>` 添加。
 - 失败时告知用户，继续 review。
 
 ## 0x02 复查流程
@@ -23,22 +26,33 @@ alwaysApply: true
 ### a. 输出报告
 
 - 触发：用户说「review」。
-- 动作：拉取变更代码（diff）、PR 评论、未解决行评论，在对话中输出 review 报告（草稿），禁止自行向 PR 发布任何内容。
-- 报告包含三部分：
-  - 总结性评价：整体结论、风险点、是否建议合入。
-  - 需要新增的行 review：新发现的问题，格式见 0x03。
-  - 未解决评论的解决情况：逐项标注「已修复」或「未修复」，首次 review 时此项为空。
-- 用户在对话中协商调整报告内容，确认后授权发布。
+- 动作：拉取变更代码（diff）、PR 评论、未解决行评论，在对话中输出 review 报告（草稿）。
+- 报告必须按以下结构输出（按顺序）：
+  1. `汇总评论`：整体结论、风险点、是否建议合入。
+  2. `新增问题`：本轮新发现的问题列表（格式见 0x03）。
+  3. `已存在未解决 review 线程的解决情况`：使用 Markdown 表格输出。
+- 第 3 部分表格至少包含：`评论/线程`、`位置`、`状态`、`处理动作`、`证据` 五列。
+- 该表格状态值统一为：`已修复`、`未修复`、`待确认`。
+- 对话阶段默认不发布新增评论到 PR；如需发布，按 0x02.b 执行。
 
 ### b. 发布到 PR
 
 - 触发：用户明确说「评论到 PR」「发 review」「发到 PR」等指令视为授权；授权判定模糊时需向用户确认。
-- 动作：执行 `gh pr review` 等写操作。resolve thread 需用户授权后通过 GraphQL `resolveReviewThread` 执行。
+- 动作：执行 `gh pr review` 等写操作。
 
 ### c. Request Changes
 
 - 触发：复查结论为存在 P0 或需阻塞合入时，用户明确说「Request Changes」「请求修改」等。
 - 动作：执行 `gh pr review <number> --repo <owner>/<repo> --request-changes --body "<总结性评论>"`，行内建议以 review comment 形式发布。
+
+### d. 已存在未解决 Review 线程收口
+
+- 触发：用户触发「review」后，且已完成既有未解决 review 评论逐项核对。
+- 动作：对判定为 `已修复` 的已存在未解决 review 线程，自动执行 `resolve thread`，并在报告表格的"处理动作"列标注 `resolved`。
+- 约束：
+  1. 仅处理"已存在未解决 review 线程"，不对本轮新增评论执行自动 resolve。
+  2. 证据不足或存在争议时标记为 `待确认`，不得自动 resolve。
+  3. 若用户明确要求"本轮不要自动 resolve"，则遵循用户要求。
 
 ## 0x03 评论规范
 
@@ -51,7 +65,7 @@ P0（阻塞合入）> P1（建议修复）> P2（可选优化）。
 **CRITICAL（必须执行不可协商）**：可定位到文件与行号的问题，必须发布行级 review comment（inline），不得只发 conversation 总结替代。
 
 - 默认顺序：先逐条发布行级 review comment，再发布一条总结性 conversation 评论（如有必要）。
-- 用户仅说「发评论」「发表 P1/P2」时，默认按“发布到对应代码位置”执行。
+- 用户仅说「发评论」「发表 P1/P2」时，默认按"发布到对应代码位置"执行。
 - 仅当问题无法定位到单行，或受 GitHub API/工具限制无法 inline 时，才可退化为 conversation 评论；并在评论中注明 `path:line` 与退化原因。
 
 ### c. 行内评价
