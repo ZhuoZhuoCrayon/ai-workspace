@@ -93,17 +93,19 @@ updated: 2026-04-06
 
 ## 0x04 验收与验证
 
-- 单测：`uv run pytest -q tests/test_quota.py tests/test_throttled.py tests/asyncio/test_throttled.py`。
-- 门禁：`prek --files`（`ruff`、`ruff-format`、`mypy-strict`）。
+- 目标用例：`uv run pytest -n auto tests/rate_limiter/test_quota_parser.py tests/test_throttled.py tests/asyncio/test_throttled.py`。
+- 全量回归（2026-04-06）：`uv run pytest -n auto tests/`，结果 `679 passed, 51 skipped`。
+- 门禁：`uv run prek run --files ...`（`ruff`、`ruff-format`、`mypy-strict`）。
 - 文档：`cd docs && uv run make html` 构建通过。
 
 ## 0x05 实施进展（表格）
 
 | 时间 | 结论调整概要 | 改动 |
 |------|------|------|
-| 2026-04-05 | [1] 解析能力归类到 `rate_limiter` 领域，不新增顶层 `quota` 兼容层。<br />[2] 语法兼容 `n/unit`、`n per unit`。<br />[3] `parse` 支持多规则，`Throttled` 暂不支持多规则执行。 | [1] 新增 `throttled/rate_limiter/quota_parser.py`。<br />[2] `Throttled` 接入字符串 `quota`。<br />[3] 新增 `tests/test_quota.py`，并补充 sync/async 相关用例。 |
+| 2026-04-05 | [1] 解析能力归类到 `rate_limiter` 领域，不新增顶层 `quota` 兼容层。<br />[2] 语法兼容 `n/unit`、`n per unit`。<br />[3] `parse` 支持多规则，`Throttled` 暂不支持多规则执行。 | [1] 新增 `throttled/rate_limiter/quota_parser.py`。<br />[2] `Throttled` 接入字符串 `quota`。<br />[3] 新增 `tests/rate_limiter/test_quota_parser.py`，并补充 sync/async 相关用例。 |
 | 2026-04-05 | [1] 统一 `burst` 语法为关键字空格 `<rate> burst <n>`。<br />[2] 保留逗号分隔符兼容（与 `limits` 一致）。 | [1] 解析规则调整并补充测试。<br />[2] 文档中同步语法决策说明。 |
 | 2026-04-06 | [1] 文档结构采用 pattern-first。<br />[2] 字符串模式下 `burst` 默认取同一规则中的 `n`（如 `1/s == 1/s burst 1`）。<br />[3] 结论性规则并入方案设计主干，避免“追加修正”割裂阅读。 | [1] `docs/source/quickstart/quota-configuration.rst` 重构并修复 `Malformed table`。<br />[2] `README.md` / `README_ZH.md` quota 区块统一为字符串主路径，并补充默认 `burst` 规则。<br />[3] `examples/quickstart`（含 async）统一 quota 字符串写法。 |
+| 2026-04-06 | [1] PR 内过程性结论统一收敛到本 `PLAN.md`。<br />[2] PR review threads 全部标记 resolved（含已采纳与有结论不改动项）。<br />[3] 针对 DSL 变更完成全量回归复验。 | [1] 精简 PR conversation / inline 过程记录并改为指向 `PLAN`。<br />[2] resolved review threads：`quota_parser` 分隔符讨论、`BaseThrottledMixin` 类型收敛讨论、文档 discoverability 讨论。<br />[3] 复验：`679 passed, 51 skipped`。 |
 
 ## 0x06 参考
 
