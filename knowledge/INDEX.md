@@ -11,13 +11,13 @@
 | bkm-skills | [bkm-skills/](./bkm-skills/INDEX.md) | 6 篇 | BlueKing Monitor Skills |
 | bkmonitor_mcp | [bkmonitor_mcp/](./bkmonitor_mcp/INDEX.md) | 1 篇 | 蓝鲸监控 MCP Server |
 | bkmonitor-datalink | [bkmonitor-datalink/](./bkmonitor-datalink/INDEX.md) | 1 篇 | 蓝鲸监控数据链路 |
-| throttled-py | [throttled-py/](./throttled-py/INDEX.md) | 3 篇 | |
+| throttled-py | [throttled-py/](./throttled-py/INDEX.md) | 4 篇 | High-performance Python rate limiting library |
 | 通用知识 | [_shared/](./_shared/INDEX.md) | 1 篇 | 跨项目通用知识 |
 
 ## 0x02 最近更新
 
+- 2026-04-06：新增 [同步异步共用 Mixin 的泛型类型窄化](./throttled-py/troubleshooting/generic-mixin-type-narrowing.md) 至 throttled-py
 - 2026-04-06：新增 [Skills-First 架构演进](./ai-workspace/issues/2026-04-06-skills-first-architecture/README.md) 至 ai-workspace
 - 2026-04-05：更新 [throttled-py 可读容量配置 DSL 需求定义](./throttled-py/issues/2026-04-04-quota-dsl-research-and-requirement/README.md) 至 throttled-py（补充 PLAN 实施进展与版本锚点）
 - 2026-04-04：更新 [throttled-py 可读容量配置 DSL 需求定义](./throttled-py/issues/2026-04-04-quota-dsl-research-and-requirement/README.md) 至 throttled-py
 - 2026-04-04：更新 [throttled-py 半年 RoadMap 优势评估](./throttled-py/issues/2026-04-04-2026h1-roadmap/README.md) 至 throttled-py
-- 2026-04-04：新增 [AI 工作区知识资产可视化页面](./ai-workspace/issues/2026-04-04-knowledge-visualization-site/README.md) 至 ai-workspace
