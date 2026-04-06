@@ -31,6 +31,12 @@
 - **RULE-ISSUE-003**：Issue 文档职责分离（README 需求 vs PLAN 方案）
 - **RULE-ISSUE-004**：PLAN 迭代采用主干融合 + 进展表格化
 
+### e. 规则与 Skill 治理
+
+- **RULE-GOVERN-001**：错误预防、行为规范类规则，必须写入对应方向的 skill 或 rule 文件，禁止堆积到 `AGENTS.md`。本文件仅保留全局结构性约束与导航。
+- **RULE-GOVERN-002**：`.cursor/rules/*.mdc` 是过渡态，所有 rules 最终都应演进为 skills（agent-agnostic、可迁移）。当某条 rule 新增内容时，主动提醒用户是否启动向 skill 的迁移。演进路线见 `knowledge/ai-workspace/issues/2026-04-06-skills-first-architecture/PLAN.md`。
+- **RULE-GOVERN-003**：skill 新增或修改前，必须先读取 skill-creator 规范并严格审查。
+
 ## 0x02 快速入口
 
 | 目标 | 路径 | 说明 |
@@ -44,7 +50,6 @@
 | 项目注册表 | `repos.json` + `private/repos.json` | 并行读取获取 `local_path` |
 | 知识入口 | `knowledge/INDEX.md` + `private/knowledge/INDEX.md` | 并行读取后按项目下钻 |
 | 工作区 Skills | `.agents/skills/` | 通用技能 |
-| Cursor Skills | `.cursor/skills/` | Cursor 兼容技能目录 |
 
 规则读取策略（通用）：
 
