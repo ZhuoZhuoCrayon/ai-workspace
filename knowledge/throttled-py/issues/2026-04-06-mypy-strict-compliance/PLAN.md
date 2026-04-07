@@ -4,7 +4,7 @@ tags: [throttled-py, typing, mypy, strict]
 issue: ./README.md
 description: 四阶段修复 248 个 mypy --strict 错误的实施方案
 created: 2026-04-06
-updated: 2026-04-06
+updated: 2026-04-07
 ---
 
 # mypy strict 模式合规改造 —— 实施方案
@@ -40,19 +40,29 @@ BaseRateLimiterMixin
 
 ## 0x02 方案设计
 
-### a. async 侧类型窄化（属性重注解）
+### a. async 侧类型窄化（属性重注解与集中 accessor）
 
 `BaseRateLimiterMixin` 存在 CoreMixin 菱形继承 + `RateLimiterMeta` 元类，Generic 化成本高且引入 MRO 风险。
 
-**方案**：在 async `BaseRateLimiter` 中直接声明更窄的属性类型（类型窄化，非 Generic）。
+**方案**：分两层窄化。
+
+**第一层 —— `_store` 属性重注解**：`_AsyncStoreP` 是 `StoreP`（`_SyncStoreP | _AsyncStoreP`）的子类型，不涉及容器 invariance，mypy 允许子类收窄简单属性类型。
+
+**第二层 —— `_atomic_actions` 集中 accessor**：`dict` 是 invariant 容器，`dict[K, _AsyncAtomicActionP]` 不是 `dict[K, AtomicActionP]` 的子类型，直接属性窄化会报 `Incompatible types in assignment`。改用集中 accessor 方法，cast 仅出现一处。
 
 涉及文件：`throttled/asyncio/rate_limiter/base.py`
 
 ```python
 class BaseRateLimiter(rate_limiter.BaseRateLimiterMixin, metaclass=RateLimiterMeta):
-    _store: _AsyncStoreP                                        # 窄化
-    _atomic_actions: dict[AtomicActionTypeT, _AsyncAtomicActionP]  # 窄化
+    _store: _AsyncStoreP  # 属性窄化 — OK
+
+    def _get_atomic_action(self, action_type: AtomicActionTypeT) -> _AsyncAtomicActionP:
+        return cast("_AsyncAtomicActionP", self._atomic_actions[action_type])
 ```
+
+sync 侧同理：在 `throttled/rate_limiter/base.py` 的 `BaseRateLimiter` 中加 `_get_atomic_action() -> _SyncAtomicActionP`。
+
+`_limit`/`_peek` 方法统一通过 `self._get_atomic_action(...)` 获取 action，不再逐个 cast。
 
 同理，`throttled/asyncio/store/memory.py` 中窄化 lock 类型：
 
@@ -69,7 +79,17 @@ class MemoryStoreBackend(store.MemoryStoreBackend):
 
 mypy 按**方法定义所在类**解析属性类型，mixin 内看到的仍是 union 类型，不会与 async 子类的窄化声明冲突。
 
-**已知折中**：`make_atomic` 返回类型暂不拆分为 sync/async 两个 Protocol。
+**已知折中**：
+
+- `make_atomic` 返回类型暂不拆分为 sync/async 两个 Protocol。`type[Protocol]` 在 mypy 中不可直接调用，需 `cast("Any", action_cls)(...)` 绕过。外层 cast 用变量注解替代，减少嵌套：
+
+```python
+def make_atomic(self, action_cls: type[AtomicActionP]) -> AtomicActionP:
+    instance: AtomicActionP = cast("Any", action_cls)(backend=self._backend)
+    return instance
+```
+
+- `_get_lock` 返回 `asyncio.Lock()` 在 PyCharm 中会产生 `Expected type '_AsyncLockP', got 'Lock'` 警告，属 PyCharm 类型检查器 false positive。mypy 通过即可，不阻塞。
 
 ### b. AtomicAction Protocol 修复
 
@@ -154,14 +174,18 @@ else:
 | `throttled/asyncio/store/base.py` | async `BaseAtomicAction.do()` 同步修改 |
 | 所有 rate limiter CoreMixin + concrete | [1] `_DEFAULT_ATOMIC_ACTION_CLASSES` 从 `list` → `Sequence`<br />[2] `do()` 调用处按算法精确 cast 返回类型 |
 
-### c. async 侧联合类型窄化
+### c. sync 和 async 侧联合类型窄化
 
 | 文件 | 改动 |
 |------|------|
-| `throttled/asyncio/rate_limiter/base.py` | [1] `_store: _AsyncStoreP`<br />[2] `_atomic_actions: dict[..., _AsyncAtomicActionP]` |
+| `throttled/asyncio/rate_limiter/base.py` | [1] `_store: _AsyncStoreP`（属性窄化）<br />[2] 新增 `_get_atomic_action()` 集中 accessor *[c]* |
+| `throttled/rate_limiter/base.py` | 新增 sync 侧 `_get_atomic_action() -> _SyncAtomicActionP` |
 | `throttled/asyncio/store/memory.py` | [1] `_get_lock` → `@classmethod`<br />[2] `lock: _AsyncLockP` |
-| async rate limiter concrete 类（5 个） | [1] `no-any-return` 修复（Redis script 返回值 cast）<br />[2] `int \| float → int` 赋值修复<br />[3] 分支变量 redef 修复 |
+| async rate limiter concrete 类（5 个） | [1] `_limit`/`_peek` 改用 `self._get_atomic_action(...)`<br />[2] `no-any-return` 修复（Redis script 返回值 cast）<br />[3] `int \| float → int` 赋值修复<br />[4] 分支变量 redef 修复 |
+| sync rate limiter concrete 类（5 个） | 同上，改用 `self._get_atomic_action(...)` |
 | `throttled/asyncio/rate_limiter/__init__.py` | 修复 `GCRARateLimiterCoreMixin` 导出 |
+
+- *[c]* `_atomic_actions` 因 `dict` invariance 不可直接属性窄化，改用集中 accessor 方法 cast 一次。
 
 ### d. 验证
 
@@ -181,7 +205,7 @@ else:
 
 | 时间 | 结论调整概要 | 改动 |
 |------|------|------|
-| | | |
+| 2026-04-07 | 按 PR #145 review 对齐方案，回归“属性窄化 + 精确 cast + 行为不变”原则；收敛过度分散 cast 并恢复关键初始化链路；完成 commitlint 合规提交。 | [1] async/sync `BaseRateLimiter` 增加 `_store` 窄化入口与 `_get_atomic_action` 统一窄化调用<br />[2] `types.py` 移除 AtomicAction Protocol `__init__`，`make_atomic` 调整为兼容构造调用<br />[3] Redis `hset` 恢复直接透传调用，避免行为漂移<br />[4] 5 个 sync + 5 个 async rate limiter 改为精确元组 cast，去除 `_raw + int/float` 双转换<br />[5] CoreMixin 恢复 `super().__init__(backend)` 并移除无用 `backend` property<br />[6] 校验通过：`ruff`、`mypy --strict`、`pytest`、`pre-commit --files` 全绿<br />[7] PR：[#145](https://github.com/ZhuoZhuoCrayon/throttled-py/pull/145)，提交：`20eb1ee`（`refactor: align codebase with mypy strict compliance`）<br />[8] 严格按 `0x02.a/0x03.c` 落地 async memory lock 窄化：`lock: _AsyncLockP` + `_get_lock() -> _AsyncLockP` + `async with self._backend.lock`，提交：`5639a49`<br />[9] `make_atomic` 进一步对齐“集中 accessor”章节建议：改为变量注解单层 cast（去掉嵌套 cast），提交：`ad34a00` |
 
 ## 0x06 参考
 
@@ -192,4 +216,5 @@ else:
 ## 0x07 版本锚点
 
 - 分支：`fix/260406_mypy_strict`
-- PR：待定
+- PR：[#145](https://github.com/ZhuoZhuoCrayon/throttled-py/pull/145)
+- 提交：`ad34a00`
