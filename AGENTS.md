@@ -23,13 +23,7 @@
 
 ### d. 知识与 Issue 管理规则
 
-以下规则的完整定义见 `.agents/skills/knowledge_mgr/SKILL.md` § 0x05：
-
-- **RULE-KNOWLEDGE-002**：知识检索优先级（会话 > 任务 > 知识库 > 项目规范 > 源码 > 通用 > 全局）
-- **RULE-ISSUE-001**：Issue 目录仅含 `README.md` 与 `PLAN.md`
-- **RULE-ISSUE-002**：迭代交付前主动询问 PLAN 写回
-- **RULE-ISSUE-003**：Issue 文档职责分离（README 需求 vs PLAN 方案）
-- **RULE-ISSUE-004**：PLAN 迭代采用主干融合 + 进展表格化
+以下规则入口与摘要见 `.agents/skills/knowledge_mgr/SKILL.md` 的 `0x03 规则锚点`。
 
 ### e. 规则与 Skill 治理
 
@@ -64,7 +58,7 @@
 3. 制定 `knowledge/<project>/issues/<YYYY-MM-DD-title>/PLAN.md`。
 4. 按 PLAN 执行。
 5. 将实施进展、阶段结论与后续动作更新到同目录 `PLAN.md`。
-   更新时遵循 RULE-ISSUE-004：结论并入方案主干，进展写入表格。
+   更新时遵循 RULE-ISSUE-004：先更新受影响的方案主干片段，再写入实施进展表格。
 
 ## 0x04 冲突处理
 

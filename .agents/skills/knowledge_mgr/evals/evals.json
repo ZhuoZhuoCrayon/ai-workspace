@@ -1,0 +1,105 @@
+{
+  "skill_name": "knowledge-mgr",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我们在 ai-workspace 之前怎么定义 skills-first 路线的？请先查 public/private 知识再回答。",
+      "expected_output": "优先触发 knowledge_mgr，给出 knowledge 证据路径，并基于已有 issue 与 PLAN 回答。",
+      "files": [],
+      "expectations": [
+        "输出中明确先经 knowledge_mgr 的入口再按需读取检索 references",
+        "输出中至少给出 1 条 public 与 1 条 private 知识证据路径",
+        "输出中明确说明知识证据充分时不回退源码"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "把这次限流故障排查过程整理成 troubleshooting，并更新项目索引。",
+      "expected_output": "触发 knowledge_mgr，创建或更新 troubleshooting，并维护 frontmatter 与 INDEX。",
+      "files": [],
+      "expectations": [
+        "输出中明确这是 knowledge 资产写操作",
+        "输出中明确包含 frontmatter 与索引更新",
+        "输出中提到会读取 operations.md 或 references/templates.md"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "帮我修一下这个 Python 函数的类型报错，先别写文档。",
+      "expected_output": "不应默认触发 knowledge_mgr，除非发现答案依赖历史知识决策。",
+      "files": [],
+      "expectations": [
+        "输出中明确这不是 knowledge 资产任务",
+        "输出中明确不会默认读取 knowledge/ 与 private/knowledge/",
+        "输出中明确后续应进入源码排查链路"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "把 iWiki 上那篇服务配置规范同步到本地，并补齐映射关系。",
+      "expected_output": "默认不触发 knowledge_mgr；外部系统文档同步与映射补齐不属于本 skill。只有同时要求修改工作区 knowledge 资产时才让 knowledge_mgr 参与。",
+      "files": [],
+      "expectations": [
+        "输出中明确主对象不在工作区 knowledge 资产内",
+        "输出中不出现其他 skill 名称作为路由依据",
+        "输出中明确没有 knowledge 写回要求时不读取 knowledge 路径"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "这个 issue 今天收口，帮我把结论并入 PLAN 主干，并按固定句式确认是否写回。",
+      "expected_output": "应触发 knowledge_mgr，更新 PLAN 主干与进展表，并主动确认是否需要将本轮结论写回当前 PLAN 结构。",
+      "files": [],
+      "expectations": [
+        "输出中提到会读取 issue 与 PLAN 相关规则",
+        "输出中明确主动确认是否需要写回 PLAN",
+        "输出中明确先更新受影响的方案主干片段，再记录实施进展",
+        "输出中明确 PLAN 不是流水账"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "把 private/knowledge/_inbox/ 里的排障记录归档到 bkmonitor，并确保源侧索引清理完成；如果 public 和 private 证据冲突，先列出冲突点再决定是否看源码。",
+      "expected_output": "应触发 knowledge_mgr，完成归档与源侧索引清理；遇到证据冲突时先输出证据，再决定是否回退源码。",
+      "files": [],
+      "expectations": [
+        "输出中明确执行 inbox 归档流程",
+        "输出中明确同时处理目标侧索引更新和源侧索引清理",
+        "输出中明确先列冲突点再决定是否看源码"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "把下周需求排期录入企业微信智能表格，不要写回 knowledge/。",
+      "expected_output": "不触发 knowledge_mgr；排期录入不属于本 skill，且不应检索 knowledge/ 与 private/knowledge/。",
+      "files": [],
+      "expectations": [
+        "输出中明确主对象不在工作区 knowledge 资产内",
+        "输出中明确不会读取 knowledge/ 与 private/knowledge/",
+        "输出中明确 knowledge_mgr 不适用"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "现在只做 knowledge 检索，不改文档。请先说明你会先看 knowledge_mgr 的入口，再按需读取哪些 reference 文件，然后回答如何查某个项目已有的排障经验。",
+      "expected_output": "应先经 knowledge_mgr 的 SKILL 入口，再按检索场景读取 retrieval-rules 与 retrieval，并说明会到 troubleshooting 分类中查找证据。",
+      "files": [],
+      "expectations": [
+        "输出中明确先看 knowledge_mgr 的 SKILL 入口",
+        "输出中明确按需读取 retrieval-rules.md 与 retrieval.md",
+        "输出中明确排障经验优先到对应知识对象分类目录检索"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "bkmonitor 的 snippets 索引数量不对，顺手把最近更新条目也修一下。先说明你会读哪些 knowledge_mgr reference 文件，再开始处理。",
+      "expected_output": "应触发 knowledge_mgr，先读 operations，再在索引维护场景补读 index-maintenance，并明确会同步数量统计与最近更新。",
+      "files": [],
+      "expectations": [
+        "输出中明确先读 operations.md",
+        "输出中明确索引维护场景会补读 index-maintenance.md",
+        "输出中明确同步数量统计与最近更新条目"
+      ]
+    }
+  ]
+}

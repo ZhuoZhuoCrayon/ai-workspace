@@ -22,5 +22,6 @@ alwaysApply: true
 
 - 回答简洁直接，避免冗余
 - 优先给出可执行的方案
-- 涉及工作区操作时，先检查相关 `.cursor/skills/` 下的 Skill
+- 涉及工作区知识目录检索或知识管理时，优先检查 `.agents/skills/knowledge_mgr/SKILL.md`，再按需进入同目录 `references/`
+- 涉及工作区操作时，先检查相关 `.agents/skills/` 下的 Skill
 - 文档检查默认执行三轨：`lint-md`（中文文案规范）+ `markdownlint-cli2`（Markdown 结构）+ `scripts/check_doc_style.py`（仓库定制规则）
