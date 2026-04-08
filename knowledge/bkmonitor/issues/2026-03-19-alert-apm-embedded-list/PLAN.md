@@ -4,7 +4,7 @@ tags: [alert, apm, embedded-list, frontend]
 issue: ./README.md
 description: 预设 Lucene query_string 实现 APM 视角告警列表嵌入，含接口协议与实现方案
 created: 2026-03-19
-updated: 2026-03-19
+updated: 2026-04-08
 
 ---
 
@@ -16,22 +16,15 @@ updated: 2026-03-19
 
 ### a. 预设过滤条件生成
 
-```mermaid
-flowchart LR
-    API["预设过滤条件接口"]
+流程：
 
-    API --> Route{"按 target_types 路由"}
-
-    Route -->|"APM-SERVICE"| SF["target + labels 片段"]
-    Route -->|"HOST"| HH["HostHandler"] --> HF["IP → target 片段"]
-    Route -->|"K8S-WORKLOAD"| ES["EntitySet"] --> KF["workload → tags 片段"]
-
-    SF --> Join(["OR 拼接"])
-    HF --> Join
-    KF --> Join
-
-    Join --> QS["query_string → 嵌入告警中心"]
-```
+1. 调用预设过滤条件接口。
+2. 按 `target_types` 路由生成各目标类型过滤片段：
+   - `APM-SERVICE`：`target + labels` 片段；
+   - `HOST`：`HostHandler` 产出 IP 目标片段；
+   - `K8S-WORKLOAD`：`EntitySet` 产出 workload 标签片段。
+3. 将各片段用 `OR` 拼接。
+4. 输出 `query_string`，用于告警中心嵌入页。
 
 **应用视角**（不传 `service_name`，不支持 `target_types`）：
 
@@ -51,17 +44,42 @@ target: {app_name}\:* OR labels: "APM-APP({app_name})"
 
 ### b. 已关联策略
 
-```mermaid
-flowchart LR
-    ServicePage["服务页面"] -->|"labels 过滤"| FetchItemStatus
-    FetchItemStatus -->|"策略数 + 告警数"| Badge["该服务已关联 N 个告警策略"]
-    Badge -->|"点击跳转"| StrategyList["策略列表"]
-```
+流程：
+
+1. 服务页以 `labels` 过滤调用 `FetchItemStatus`。
+2. 返回策略数与告警数，展示“该服务已关联 N 个告警策略”。
+3. 点击后跳转策略列表页，并带入对应筛选条件。
 
 - 请求 `FetchItemStatus`：`metric_ids=[]`，`labels=["APM-APP({app_name})", "APM-SERVICE({service_name})"]`
 - 跳转策略列表页：`conditions=[{"key": "label_name", "value": ["/APM-SERVICE({service_name})/"]}]`
 
-### c. 代码变更
+### c. conditions → query_string 转换接口（告警列表 UI 模式）
+
+为支持 APM 嵌入页将 UI 模式查询条件并入内置条件，需要补一个“`conditions` 转 Lucene `query_string`”接口。
+
+转换链路（无额外字段转换）：
+
+1. 读取 `conditions[]`（`key/value/method/condition`）。
+2. 对每条条件调用 `QueryStringGenerator` 生成单条件片段。
+3. 按 `condition`（and/or）将片段折叠为整体表达式。
+4. 输出 `query_string`。
+
+核心约束：
+
+- 参数结构与 `AlertSearchSerializer.conditions` 对齐（`key/value/method/condition`）。
+- 操作符映射复用 `QueryStringGenerator`：
+  - `eq -> equal`
+  - `neq -> not_equal`
+  - `include -> include`
+  - `exclude -> not_include`
+  - `gt/gte/lt/lte -> gt/gte/lt/lte`
+- 条件间关系按 `condition` 折叠：
+  - `or`：OR 连接
+  - `and` / `""`：AND 连接
+  - 首个条件的 `condition` 忽略（作为起始表达式）
+- 空 `conditions` 返回空字符串 `""`。
+
+### d. 代码变更
 
 | 变更              | 文件                                         | 说明                                                         |
 | ----------------- | -------------------------------------------- | ------------------------------------------------------------ |
@@ -70,6 +88,11 @@ flowchart LR
 | 容器关联下沉      | `apm_web/strategy/dispatch/`                 | 新增工具函数封装 `EntitySet.get_workloads`，供新接口调用     |
 | 新增接口          | `apm_web/strategy/views.py`                  | 预设过滤条件接口                                             |
 | metric_ids 非必填 | `monitor_web/strategies/resources/public.py` | `FetchItemStatus.RequestSerializer` 中 `metric_ids` 改为 `required=False, default=[]` |
+| 新增资源          | `fta_web/alert/resources.py`                 | 新增 `GenerateQueryString` 资源：输入 `conditions`，输出 `query_string` |
+| 新增路由（v1）    | `fta_web/alert/views.py`                     | `AlertViewSet.resource_routes` 增加 `generate_query_string` |
+| 新增路由（v2）    | `fta_web/alert_v2/views.py`                  | `AlertV2ViewSet.resource_routes` 显式增加 `generate_query_string`，确保 `/alert/v2/` 可访问 |
+| 参数定义对齐      | `fta_web/alert/serializers.py`（可选）       | 新增专用 Serializer（或在 Resource 内复用 `SearchConditionSerializer`） |
+| 权限放行          | `fta_web/alert/views.py`                     | `check_permissions` 将 `generate_query_string` 与 `validate_query_string` 同级放行 |
 
 ---
 
@@ -287,6 +310,78 @@ labels: "haha"
 }
 ```
 
+### c. conditions 转 query_string
+
+POST `/alert/generate_query_string/`  
+POST `/alert/v2/generate_query_string/`
+
+#### 功能描述
+
+将告警列表 UI 模式的 `conditions` 转换为 Lucene `query_string`，用于：
+
+- APM 嵌入页内置条件与用户条件合并；
+- 前端从 UI 模式切到语句模式时的条件回填。
+
+#### 请求参数
+
+| 字段       | 类型         | 必选 | 描述 |
+| ---------- | ------------ | ---- | ---- |
+| conditions | List[object] | 否   | 过滤条件列表，结构与 `AlertSearchSerializer.conditions` 一致，默认 `[]` |
+
+`conditions[]` 子项：
+
+| 字段      | 类型         | 必选 | 描述 |
+| --------- | ------------ | ---- | ---- |
+| key       | string       | 是   | 字段名 |
+| value     | List[Any]    | 是   | 匹配值列表 |
+| method    | string       | 是   | `eq` / `neq` / `include` / `exclude` / `gt` / `gte` / `lt` / `lte` |
+| condition | string       | 否   | 与前一个条件的关系：`and` / `or` / `""`（默认 `""` 视为 `and`） |
+
+#### 请求示例
+
+```json
+{
+    "conditions": [
+        {
+            "key": "labels",
+            "method": "eq",
+            "value": ["APM-APP(trpc-cluster-access-demo)"],
+            "condition": ""
+        },
+        {
+            "key": "target",
+            "method": "include",
+            "value": ["bkm.web"],
+            "condition": "and"
+        },
+        {
+            "key": "severity",
+            "method": "eq",
+            "value": ["1"],
+            "condition": "or"
+        }
+    ]
+}
+```
+
+#### 响应示例
+
+```json
+{
+    "result": true,
+    "code": 200,
+    "message": "OK",
+    "data": "(labels: \"APM-APP(trpc-cluster-access-demo)\" AND target: *bkm.web*) OR severity: \"1\""
+}
+```
+
+#### 组装规则
+
+- 单条件内部复用 `QueryStringGenerator` 的值转义与操作符模板。
+- 不做字段别名/展示名翻译，输入 `key` 需为统一字段名。
+- 条件间按 `condition` 从左到右折叠，建议每个条件片段外层加括号以避免优先级歧义。
+- 当 `conditions=[]` 时，返回空字符串 `""`。
+
 ---
 
 ## 0x03 参考
@@ -297,6 +392,13 @@ labels: "haha"
 - `apm_web/handlers/host_handler.py`：`HostHandler.list_application_hosts`
 - `apm_web/strategy/dispatch/entity.py`：`EntitySet.get_workloads`
 - `monitor_web/strategies/resources/public.py`：`FetchItemStatus`
+- `bkmonitor/utils/elasticsearch/handler.py`：`QueryStringGenerator`
+- `monitor_web/data_explorer/event/resources.py`：`EventGenerateQueryStringResource`
+- `apm_web/trace/resources.py`：`TraceGenerateQueryStringResource`
+- `fta_web/alert/serializers.py`：`AlertSearchSerializer.conditions`
+- `fta_web/alert/resources.py`：告警资源定义
+- `fta_web/alert/views.py`：`AlertViewSet.resource_routes`
+- `fta_web/alert_v2/views.py`：`AlertV2ViewSet.resource_routes`
 
 ---
 
