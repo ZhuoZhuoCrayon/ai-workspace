@@ -100,6 +100,30 @@
         "输出中明确索引维护场景会补读 index-maintenance.md",
         "输出中明确同步数量统计与最近更新条目"
       ]
+    },
+    {
+      "id": 10,
+      "prompt": "帮我找下返回码重定义的代码，我希望进行一次 build 并刷新。先查知识库，不要直接看源码。",
+      "expected_output": "应命中 bkmonitor 的返回码重定义 snippet，直接给出代码片段，并解释其中 build / publish 的业务含义，而不是执行前端构建。",
+      "files": [],
+      "expectations": [
+        "输出中命中 knowledge/bkmonitor/snippets/apm-code-redefine.md",
+        "输出中包含 snippet 里的关键代码或完整代码块，而不是只给路径",
+        "输出中解释 build_code_relabel_config 与 publish_code_relabel_to_apm 的用途",
+        "输出中明确知识证据已足够，不回退源码，也不执行 webpack 或 shell build"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "先帮我查一下 bkmonitor 里日志关联索引集缺失的历史排障，直接把排查和修复步骤给我，路径放后面就行。",
+      "expected_output": "应命中 troubleshooting，先输出现象、根因、排查链路和修复步骤，再附证据路径。",
+      "files": [],
+      "expectations": [
+        "输出中命中 knowledge/bkmonitor/troubleshooting/log-relation-index-set-missing.md",
+        "输出中优先给出现象、根因、排查过程、解决方案",
+        "输出中可附关键代码片段，但不能只返回路径",
+        "输出中明确知识层足够时不回退源码"
+      ]
     }
   ]
 }
