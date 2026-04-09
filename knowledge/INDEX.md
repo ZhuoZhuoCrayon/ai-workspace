@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-04-06
+> 最后更新：2026-04-09
 
 ## 0x01 项目知识
 
@@ -16,8 +16,8 @@
 
 ## 0x02 最近更新
 
+- 2026-04-09：更新 [APM 支持应用级别配置](./bkmonitor/issues/2026-03-04-apm-app-level-config/README.md) 至 bkmonitor（补充返回码备注应用级方案与 tRPC 内置码表）
 - 2026-04-06：新增 [mypy strict 模式合规改造](./throttled-py/issues/2026-04-06-mypy-strict-compliance/README.md) 至 throttled-py
 - 2026-04-06：新增 [同步异步共用 Mixin 的泛型类型窄化](./throttled-py/troubleshooting/generic-mixin-type-narrowing.md) 至 throttled-py
 - 2026-04-06：新增 [Skills-First 架构演进](./ai-workspace/issues/2026-04-06-skills-first-architecture/README.md) 至 ai-workspace
 - 2026-04-05：更新 [throttled-py 可读容量配置 DSL 需求定义](./throttled-py/issues/2026-04-04-quota-dsl-research-and-requirement/README.md) 至 throttled-py（补充 PLAN 实施进展与版本锚点）
-- 2026-04-04：更新 [throttled-py 可读容量配置 DSL 需求定义](./throttled-py/issues/2026-04-04-quota-dsl-research-and-requirement/README.md) 至 throttled-py
