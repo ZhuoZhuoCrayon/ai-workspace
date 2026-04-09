@@ -21,7 +21,7 @@
 
 | 分类 | 路径 | 数量 | 说明 |
 |------|------|------|------|
-| 排障经验 | [troubleshooting/](./troubleshooting/INDEX.md) | 1 篇 | 问题排查与修复记录 |
+| 排障经验 | [troubleshooting/](./troubleshooting/INDEX.md) | 2 篇 | 问题排查与修复记录 |
 
 ### c. Snippets
 
