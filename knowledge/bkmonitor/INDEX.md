@@ -8,7 +8,8 @@
 
 | 需求 | 标签 | 状态 | 更新日期 |
 |------|------|------|----------|
-| [APM 支持应用级别配置](./issues/2026-03-04-apm-app-level-config/README.md) | `apm` `service-config` `log-relation` `code-redefine` `code-remark` `app-level` | 设计中 | 2026-04-09 |
+| [APM 返回码重定义规则清空不生效](./issues/2026-04-10-apm-code-redefine-clear-not-effective/README.md) | `apm` `code-redefine` `code-relabel` `config-refresh` | 设计中 | 2026-04-10 |
+| [APM 支持应用级别配置](./issues/2026-03-04-apm-app-level-config/README.md) | `apm` `service-config` `log-relation` `code-redefine` `code-remark` `app-level` | 设计中 | 2026-04-10 |
 | [APM 策略模板下发更新不覆盖部分非管理配置](./issues/2026-03-27-apm-strategy-template-no-overwrite/README.md) | `apm` `strategy` `template` `dispatch` | 新建 | 2026-03-27 |
 | [Tracing MCP 新增服务列表工具](./issues/2026-03-24-tracing-mcp-service-list/README.md) | `apm` `tracing` `mcp` `service-list` `entity-set` | 新建 | 2026-03-24 |
 | [【告警中心】APM 应用/服务页面嵌入列表页支持](./issues/2026-03-19-alert-apm-embedded-list/README.md) | `alert` `apm` `embedded-list` `frontend` | 新建 | 2026-03-19 |
