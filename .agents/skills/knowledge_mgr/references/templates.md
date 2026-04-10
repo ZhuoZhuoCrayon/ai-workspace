@@ -3,7 +3,7 @@ title: 知识对象模板
 tags: [template, documentation]
 description: 知识对象（issue、plan、snippet、troubleshooting）的标准文档模板
 created: 2026-02-09
-updated: 2026-02-09
+updated: 2026-04-10
 ---
 
 # 知识对象模板
@@ -132,7 +132,7 @@ updated: <YYYY-MM-DD>
 
 | 时间 | 对应设计片段 | 结论调整概要 | 改动 / 验证 |
 |------|----------------|----------------|-------------|
-| YYYY-MM-DD | [1] ...<br />[2] ... | [1] ...<br />[2] ... | [1] ...<br />[2] ... |
+| `YYYY-MM-DD HH:00` | [1] ...<br />[2] ... | [1] ...<br />[2] ... | [1] ...<br />[2] ... |
 
 ## 0x06 参考
 

@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DOC_SUFFIXES = {".md", ".mdc"}
 EXCLUDED_PARTS = {".git", "node_modules", "__pycache__", ".venv", "venv"}
+MAX_PROSE_LINE_LENGTH = 120
 
 LOWERCASE_FILENAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*\.(md|mdc)$")
 UPPERCASE_MD_FILENAME = re.compile(r"^[A-Z0-9]+\.md$")
@@ -19,6 +20,8 @@ UPPERCASE_MD_FILENAME = re.compile(r"^[A-Z0-9]+\.md$")
 HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.*)$")
 H2_NUMBERING = re.compile(r"^0x\d{2}\s+")
 H3_NUMBERING = re.compile(r"^[a-z]\.\s+")
+TABLE_SEPARATOR_PATTERN = re.compile(r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$")
+INLINE_CODE_PATTERN = re.compile(r"`[^`]*`")
 
 
 @dataclass(frozen=True)
@@ -79,6 +82,29 @@ def check_mdc_frontmatter(lines: list[str], rel_path: str) -> list[Issue]:
     return issues
 
 
+def get_frontmatter_lines(lines: list[str]) -> set[int]:
+    if not lines or lines[0].strip() != "---":
+        return set()
+    for index in range(1, len(lines)):
+        if lines[index].strip() == "---":
+            return set(range(1, index + 2))
+    return set()
+
+
+def is_table_line(stripped: str) -> bool:
+    return stripped.startswith("|") or TABLE_SEPARATOR_PATTERN.match(stripped) is not None
+
+
+def is_url_only_line(stripped: str) -> bool:
+    return stripped.startswith("http://") or stripped.startswith("https://") or (
+        stripped.startswith("<http://") or stripped.startswith("<https://")
+    )
+
+
+def strip_inline_code(line: str) -> str:
+    return INLINE_CODE_PATTERN.sub("", line)
+
+
 def check_file(path: Path) -> list[Issue]:
     rel_path = path.relative_to(ROOT).as_posix()
     issues: list[Issue] = []
@@ -95,13 +121,39 @@ def check_file(path: Path) -> list[Issue]:
     if path.suffix == ".mdc":
         issues.extend(check_mdc_frontmatter(lines, rel_path))
 
+    frontmatter_lines = get_frontmatter_lines(lines)
     in_fence = False
     for line_no, line in enumerate(lines, start=1):
+        if line_no in frontmatter_lines:
+            continue
         if line.strip().startswith("```"):
             in_fence = not in_fence
             continue
         if in_fence:
             continue
+
+        stripped = line.strip()
+        prose = strip_inline_code(line)
+        prose_stripped = prose.strip()
+        is_table = is_table_line(stripped)
+        if prose_stripped:
+            if not is_table and prose_stripped.count("。") >= 2:
+                issues.append(Issue(rel_path, line_no, "sentence-split-period", "一句话内不要出现两个句号，说明这一行需要拆分"))
+            if ";" in prose or "；" in prose:
+                issues.append(Issue(rel_path, line_no, "sentence-split-semicolon", "单行出现分号说明需要拆分，请改成分句、列表或换行"))
+            if (
+                len(line) > MAX_PROSE_LINE_LENGTH
+                and not is_table
+                and not is_url_only_line(stripped)
+            ):
+                issues.append(
+                    Issue(
+                        rel_path,
+                        line_no,
+                        "line-too-long",
+                        f"单行避免过长，请控制在 {MAX_PROSE_LINE_LENGTH} 个字符内，或拆行改写",
+                    )
+                )
 
         heading = HEADING_PATTERN.match(line)
         if heading is None:
