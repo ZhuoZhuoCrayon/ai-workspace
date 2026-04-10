@@ -1,10 +1,10 @@
 ---
 title: UnifyQuery 查询
 tags: [unify-query, promql, metrics]
-description: UnifyQuery 相关的查询和指标缓存操作
+description: UnifyQuery 相关的查询、指标缓存和自定义时序指标同步排障
 language: python
 created: 2026-02-09
-updated: 2026-02-09
+updated: 2026-04-10
 ---
 
 # UnifyQuery 查询
@@ -57,3 +57,21 @@ for t in self.get_tables():
     for m in self.get_metrics_by_table(t):
         print(m["metric_field_name"], m['data_type_label'], m['data_source_label'])
 ```
+
+### d. 自定义时序指标同步排障
+
+```bash
+python manage.py diagnose_ts_metric_sync \
+  --data_id 1579347 \
+  --metrics cost_ms
+```
+
+- 用途：排查自定义时序指标从 `source` 到 `metadata`、再到
+  `web` 指标缓存的同步链路。
+- 关键字段：`结论环节`、`source.backend`、
+  `metadata.TimeSeriesMetric`、`web.MetricListCache`、
+  `近期最大上报时间`。
+- 当前样例：`cost_ms` 在 `bkdata` source、`metadata`
+  和 `web` 指标缓存三层均已命中，命令结论为 `ok`。
+- 备注：当前样例的 `source=bkdata`，因此
+  `metrics_key`、`dimensions_key` 不使用 Redis。

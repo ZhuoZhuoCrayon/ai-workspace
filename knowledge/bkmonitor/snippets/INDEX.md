@@ -1,8 +1,8 @@
 # bkmonitor Snippets 索引
 
-> 最后更新：2026-02-09
+> 最后更新：2026-04-10
 
-## 策略 & 告警
+## 0x01 策略 & 告警
 
 | 文件 | 标签 | 摘要 | 更新日期 |
 |------|------|------|---------|
@@ -10,13 +10,13 @@
 | [轮值配置](./duty-rotation.md) | `duty` `rotation` `user-group` | 告警组轮值配置的 API 请求示例 | 2026-02-09 |
 | [策略查询与操作](./strategy-scan.md) | `strategy` `query-config` `scan` | 扫描和分析策略配置的代码片段 | 2026-02-09 |
 
-## 自定义上报
+## 0x02 自定义上报
 
 | 文件 | 标签 | 摘要 | 更新日期 |
 |------|------|------|---------|
 | [自定义上报](./custom-report.md) | `custom-report` `metrics` `datasource` | 自定义指标上报相关的数据模型和流程 | 2026-02-09 |
 
-## APM
+## 0x03 APM
 
 | 文件 | 标签 | 摘要 | 更新日期 |
 |------|------|------|---------|
@@ -28,19 +28,19 @@
 | [APM 告警通知模板](./apm-notice-template.md) | `apm` `alert` `notice` `template` | APM 告警通知模板渲染和发送测试 | 2026-02-09 |
 | [APM 返回码重定义](./apm-code-redefine.md) | `apm` `code-redefine` `error-code` | 批量设置 APM 服务返回码重定义规则 | 2026-02-09 |
 
-## 统一数据源查询
+## 0x04 统一数据源查询
 
 | 文件 | 标签 | 摘要 | 更新日期 |
 |------|------|------|---------|
-| [UnifyQuery 查询](./unify-query.md) | `unify-query` `promql` `metrics` | UnifyQuery 相关的查询和指标缓存操作 | 2026-02-09 |
+| [UnifyQuery 查询](./unify-query.md) | `unify-query` `promql` `metrics` | UnifyQuery 相关的查询、指标缓存和自定义时序指标同步排障 | 2026-04-10 |
 
-## Kubernetes
+## 0x05 Kubernetes
 
 | 文件 | 标签 | 摘要 | 更新日期 |
 |------|------|------|---------|
 | [Kubernetes 事件查询](./kubernetes-event.md) | `kubernetes` `k8s` `event` `bcs` | 查询 Kubernetes 事件日志和聚合统计 | 2026-02-09 |
 
-## 其他
+## 0x06 其他
 
 | 文件 | 标签 | 摘要 | 更新日期 |
 |------|------|------|---------|

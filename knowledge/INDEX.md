@@ -16,6 +16,7 @@
 
 ## 0x02 最近更新
 
+- 2026-04-10：更新 [UnifyQuery 查询](./bkmonitor/snippets/unify-query.md) 至 bkmonitor
 - 2026-04-10：更新 [APM 支持应用级别配置](./bkmonitor/issues/2026-03-04-apm-app-level-config/README.md) 至 bkmonitor
   （调整 PR 拆分，返回码备注改造独立为 PR-4）
 - 2026-04-10：新增 [APM 返回码重定义规则清空不生效](./bkmonitor/issues/2026-04-10-apm-code-redefine-clear-not-effective/README.md)
