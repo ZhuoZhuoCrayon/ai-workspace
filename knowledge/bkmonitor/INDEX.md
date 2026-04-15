@@ -8,6 +8,7 @@
 
 | 需求 | 标签 | 状态 | 更新日期 |
 |------|------|------|----------|
+| [新版告警详情支持查看主机关联采集项日志](./issues/2026-04-15-alert-detail-host-collector-log-relation/README.md) | `alert` `log` `host-target` `collector` `log-relation` | 设计中 | 2026-04-15 |
 | [APM 返回码重定义规则清空不生效](./issues/2026-04-10-apm-code-redefine-clear-not-effective/README.md) | `apm` `code-redefine` `code-relabel` `config-refresh` | 设计中 | 2026-04-10 |
 | [APM 支持应用级别配置](./issues/2026-03-04-apm-app-level-config/README.md) | `apm` `service-config` `log-relation` `code-redefine` `code-remark` `app-level` | 设计中 | 2026-04-10 |
 | [APM 策略模板下发更新不覆盖部分非管理配置](./issues/2026-03-27-apm-strategy-template-no-overwrite/README.md) | `apm` `strategy` `template` `dispatch` | 新建 | 2026-03-27 |

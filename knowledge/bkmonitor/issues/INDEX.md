@@ -3,6 +3,7 @@
 
 | 文件                                                                                                     | 标签                                                        | 摘要                                                      | 更新日期       |
 |------|------|------|---------|
+| [新版告警详情支持查看主机关联采集项日志](./2026-04-15-alert-detail-host-collector-log-relation/README.md) | `alert` `log` `host-target` `collector` `log-relation` | 在新版告警详情后端聚合主机关联采集项日志索引，复用旧版 listIndexByHost 逻辑并扩展 HostTarget 与 BaseK8STarget | 2026-04-15 |
 | [APM 返回码重定义规则清空不生效](./2026-04-10-apm-code-redefine-clear-not-effective/README.md) | `apm` `code-redefine` `code-relabel` `config-refresh` | 修复 APM 返回码重定义在清空保存后未同步删除下游配置的问题 | 2026-04-10 |
 | [APM 支持应用级别配置](./2026-03-04-apm-app-level-config/README.md)                                            | `apm` `service-config` `log-relation` `code-redefine` `code-remark` `app-level`     | 将 APM 服务关联配置与返回码备注从纯服务粒度扩展到应用级别，支持跨服务共享与全局配置                   | 2026-04-10 |
 | [APM 策略模板下发更新不覆盖部分非管理配置](./2026-03-27-apm-strategy-template-no-overwrite/README.md) | `apm` `strategy` `template` `dispatch` | APM 策略模板下发更新时，不覆盖用户自定义的非管理配置项 | 2026-03-27 |
