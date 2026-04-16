@@ -1,0 +1,4 @@
+interface:
+  display_name: "Doc Style"
+  short_description: "Markdown 文档写作、结构重构、对象适配与交付前润色流程"
+  default_prompt: "Use $doc-style to structure, polish, and validate a Markdown document before delivery."

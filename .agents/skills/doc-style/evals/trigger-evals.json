@@ -1,0 +1,34 @@
+[
+  {
+    "query": "帮我创建一个需求 README，先把目标、范围、非目标和验收标准整理出来。",
+    "should_trigger": true
+  },
+  {
+    "query": "把这份实施方案草稿整理成结构化的 PLAN，顺便补齐验证与风险。",
+    "should_trigger": true
+  },
+  {
+    "query": "整理一下这次问题排查，产出一篇 troubleshooting 文档。",
+    "should_trigger": true
+  },
+  {
+    "query": "把这段零散 Markdown 笔记重构成清晰的方案文档，结论放前面。",
+    "should_trigger": true
+  },
+  {
+    "query": "帮我润色这份 Markdown 文档，让结构更稳、表达更紧。",
+    "should_trigger": true
+  },
+  {
+    "query": "帮我修一下这个 Python 函数的类型报错，只改代码，不写文档。",
+    "should_trigger": false
+  },
+  {
+    "query": "把下周需求排期录入企业微信智能表格，不要整理成文档。",
+    "should_trigger": false
+  },
+  {
+    "query": "看一下这个 PR 为什么 CI 挂了，先别改 README 或 PLAN。",
+    "should_trigger": false
+  }
+]

@@ -1,0 +1,44 @@
+{
+  "skill_name": "doc-style",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "基于 `evals/files/requirement-notes.md`，整理成一份 `README.md` 风格的需求文档。保留目标、范围、非目标、方法论和验收标准，并在交付前执行一次润色闭环。",
+      "expected_output": "输出结构化需求文档，章节职责正确，需求主干与实现细节分离，并明确说明已做润色检查。",
+      "files": [
+        "evals/files/requirement-notes.md"
+      ],
+      "expectations": [
+        "文档包含目标、需求范围、非目标、方法论或调研路径、验收标准",
+        "文档不把实现细节或文件级改造塞进 README 主干",
+        "输出中体现先结构化后润色的流程，而不是直接堆叠原始草稿"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "基于 `evals/files/plan-draft.md`，重写为清晰的 `PLAN.md` 初稿。要求补齐方案主干、开发落点、验证与风险，并参考优秀 `PLAN` 的组织方式做一次润色打磨。",
+      "expected_output": "输出结构化 PLAN，主干结论先行，开发方案与实现方案分层明确，包含验证、风险和实施进展位点。",
+      "files": [
+        "evals/files/plan-draft.md"
+      ],
+      "expectations": [
+        "文档体现实现方案与开发方案的职责拆分",
+        "文档包含验证与回归、风险与约束，且不是流水账",
+        "输出中体现回读 exemplars 或对象特化 reference 进行润色"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "基于 `evals/files/troubleshooting-notes.md`，产出一篇 troubleshooting 文档。用“现象 → 根因 → 排查过程 → 修复步骤 / 注意事项”的结构整理，并在交付前执行文档润色。",
+      "expected_output": "输出排障文档，结构固定，命令与关键证据清晰，可直接复用到后续排障场景。",
+      "files": [
+        "evals/files/troubleshooting-notes.md"
+      ],
+      "expectations": [
+        "文档命中 troubleshooting 固定骨架",
+        "排查过程按顺序展开，保留关键命令或日志线索",
+        "修复步骤和注意事项可直接复用，而不是只有背景描述"
+      ]
+    }
+  ]
+}
