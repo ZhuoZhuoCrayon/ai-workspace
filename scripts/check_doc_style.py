@@ -22,6 +22,11 @@ H2_NUMBERING = re.compile(r"^0x\d{2}\s+")
 H3_NUMBERING = re.compile(r"^[a-z]\.\s+")
 TABLE_SEPARATOR_PATTERN = re.compile(r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$")
 INLINE_CODE_PATTERN = re.compile(r"`[^`]*`")
+LIST_ITEM_PATTERN = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+")
+TABLE_CELL_SPLIT_PATTERN = re.compile(r"(?<!\\)\|")
+TABLE_CELL_BREAK_PATTERN = re.compile(r"<br\s*/?>", re.IGNORECASE)
+TABLE_CELL_END_PUNCT_PATTERN = re.compile(r"[。！？!?]")
+PROSE_END_PUNCT_PATTERN = re.compile(r"[。！？!?]")
 
 
 @dataclass(frozen=True)
@@ -105,6 +110,96 @@ def strip_inline_code(line: str) -> str:
     return INLINE_CODE_PATTERN.sub("", line)
 
 
+def iter_prose_blocks(lines: list[str], frontmatter_lines: set[int]) -> list[tuple[int, list[str], str]]:
+    blocks: list[tuple[int, list[str], str]] = []
+    in_fence = False
+    current_lines: list[str] = []
+    start_line = 0
+
+    def flush() -> None:
+        nonlocal current_lines, start_line
+        if not current_lines:
+            return
+        text = " ".join(strip_inline_code(line).strip() for line in current_lines).strip()
+        if text:
+            blocks.append((start_line, current_lines[:], text))
+        current_lines = []
+        start_line = 0
+
+    for line_no, line in enumerate(lines, start=1):
+        if line_no in frontmatter_lines:
+            flush()
+            continue
+        if line.strip().startswith("```"):
+            flush()
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+
+        stripped = line.strip()
+        if not stripped:
+            flush()
+            continue
+        if is_table_line(stripped) or HEADING_PATTERN.match(line):
+            flush()
+            continue
+        if LIST_ITEM_PATTERN.match(line):
+            flush()
+            current_lines = [line]
+            start_line = line_no
+            continue
+
+        if not current_lines:
+            current_lines = [line]
+            start_line = line_no
+            continue
+
+        current_lines.append(line)
+
+    flush()
+    return blocks
+
+
+def split_table_cells(line: str) -> list[str]:
+    parts: list[str] = TABLE_CELL_SPLIT_PATTERN.split(line.strip())
+    if parts and not parts[0].strip():
+        parts = parts[1:]
+    if parts and not parts[-1].strip():
+        parts = parts[:-1]
+    return [part.strip() for part in parts if part.strip()]
+
+
+def split_table_cell_segments(cell: str) -> list[str]:
+    return [segment.strip() for segment in TABLE_CELL_BREAK_PATTERN.split(cell) if segment.strip()]
+
+
+def iter_table_cells(lines: list[str], frontmatter_lines: set[int]) -> list[tuple[int, str]]:
+    cells: list[tuple[int, str]] = []
+    in_fence = False
+
+    for line_no, line in enumerate(lines, start=1):
+        if line_no in frontmatter_lines:
+            continue
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+
+        stripped = line.strip()
+        if not stripped or not is_table_line(stripped):
+            continue
+        if TABLE_SEPARATOR_PATTERN.match(stripped) is not None:
+            continue
+
+        for cell in split_table_cells(line):
+            cell_text = strip_inline_code(cell).strip()
+            if cell_text:
+                cells.append((line_no, cell_text))
+    return cells
+
+
 def check_file(path: Path) -> list[Issue]:
     rel_path = path.relative_to(ROOT).as_posix()
     issues: list[Issue] = []
@@ -137,10 +232,6 @@ def check_file(path: Path) -> list[Issue]:
         prose_stripped = prose.strip()
         is_table = is_table_line(stripped)
         if prose_stripped:
-            if not is_table and prose_stripped.count("。") >= 2:
-                issues.append(Issue(rel_path, line_no, "sentence-split-period", "一句话内不要出现两个句号，说明这一行需要拆分"))
-            if ";" in prose or "；" in prose:
-                issues.append(Issue(rel_path, line_no, "sentence-split-semicolon", "单行出现分号说明需要拆分，请改成分句、列表或换行"))
             if (
                 len(line) > MAX_PROSE_LINE_LENGTH
                 and not is_table
@@ -167,6 +258,65 @@ def check_file(path: Path) -> list[Issue]:
             issues.append(Issue(rel_path, line_no, "section-number", "二级标题应使用 `## 0x01 标题` 格式"))
         if level == 3 and H3_NUMBERING.match(title) is None:
             issues.append(Issue(rel_path, line_no, "subsection-format", "三级标题应使用 `### a. 标题` 格式"))
+
+    for line_no, source_lines, block in iter_prose_blocks(lines, frontmatter_lines):
+        if block.count("。") >= 2:
+            issues.append(
+                Issue(
+                    rel_path,
+                    line_no,
+                    "sentence-split-period",
+                    "同一 Markdown 段落或列表项里不要出现两个句号，请拆分",
+                )
+            )
+        if ";" in block or "；" in block:
+            issues.append(
+                Issue(
+                    rel_path,
+                    line_no,
+                    "sentence-split-semicolon",
+                    "同一 Markdown 段落或列表项里不要出现分号，请改成分句、列表或拆段",
+                )
+            )
+        raw_block = " ".join(line.strip() for line in source_lines).strip()
+        end_punct_count = len(PROSE_END_PUNCT_PATTERN.findall(block))
+        if len(source_lines) > 1 and len(raw_block) <= MAX_PROSE_LINE_LENGTH and end_punct_count <= 1:
+            issues.append(
+                Issue(
+                    rel_path,
+                    line_no,
+                    "single-sentence-soft-wrap",
+                    f"单句内容合并后不超过 {MAX_PROSE_LINE_LENGTH} 个字符时，不要拆成多行",
+                )
+            )
+
+    table_semicolon_lines: set[int] = set()
+    table_multi_end_punct_lines: set[int] = set()
+    for line_no, cell in iter_table_cells(lines, frontmatter_lines):
+        if (";" in cell or "；" in cell) and line_no not in table_semicolon_lines:
+            table_semicolon_lines.add(line_no)
+            issues.append(
+                Issue(
+                    rel_path,
+                    line_no,
+                    "table-cell-semicolon",
+                    "表格单元格内不要出现分号，请改成换行、列表或表格外脚注",
+                )
+            )
+        if line_no in table_multi_end_punct_lines:
+            continue
+        for segment in split_table_cell_segments(cell):
+            if len(TABLE_CELL_END_PUNCT_PATTERN.findall(segment)) >= 2:
+                table_multi_end_punct_lines.add(line_no)
+                issues.append(
+                    Issue(
+                        rel_path,
+                        line_no,
+                        "table-cell-multi-end-punct",
+                        "表格单元格未分段时不要出现多个结束符，请改成 `<br />` 编号或表格外脚注",
+                    )
+                )
+                break
     return issues
 
 
