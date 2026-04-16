@@ -4,7 +4,7 @@ tags: [apm, service-config, log-relation, code-redefine, code-remark, app-level]
 issue: ./README.md
 description: 通过 ServiceBase 全局能力与 ApmMetaConfig 应用级备注配置，将日志关联、返回码重定义与返回码备注扩展到应用级别
 created: 2026-03-04
-updated: 2026-04-10
+updated: 2026-04-16
 ---
 
 # APM 支持应用级别配置 —— 实施方案
@@ -62,7 +62,7 @@ classDiagram
 
 ### c. 返回码备注配置模型
 
-返回码备注统一维护在应用级 `ApmMetaConfig`：
+返回码备注统一维护在应用级 `ApmMetaConfig` 中，不再拆分到关系表或其他独立存储。它是一个应用维度的配置协议，固定使用以下载体：
 
 - `config_level = application_level`
 - `config_key = "code_remarks"`
@@ -89,12 +89,13 @@ classDiagram
 }
 ```
 
-| 级别 | `is_global` | `service_names` | 唯一语义 | 说明 |
-|:--|:--|:--|:--|:--|
-| 全局备注 | `true` | `[]` | `kind + code` | 同一 `(kind, code)` 只允许 1 条全局备注。 |
-| 服务备注 | `false` | `["svc-a", ...]` | `kind + code + remark` | 同一服务在同一 `(kind, code)` 下最终只能命中 1 条服务级备注。 |
+| 规则类型 | 数据特征 | 唯一语义 | 说明 |
+|:--|:--|:--|:--|
+| 全局规则 | `<is_global=true, service_names=[]>` | `kind + code` | 同一 `(kind, code)` 只允许 1 条全局规则。 |
+| 服务规则 | `<is_global=false, service_names=[svc-a, svc-b, ...]>` | `kind + code + remark` | 同一 `(kind, code)` 下可存在多条不同 `remark` 的服务规则，但各规则的 `service_names` 不得重叠。 |
 
 - *[1]* 仅保存用户覆盖项，内置错误码默认备注不落库，由服务视角 `get` 后置补齐。
+- *[2]* `service_names` 只表达这条规则的作用范围，不参与规则身份判定。
 
 ### d. 查询机制
 
@@ -114,13 +115,19 @@ classDiagram
 
 #### d-2. 返回码备注查询
 
-| 视角 | 输入 | 输出 | 处理规则 |
-|:--|:--|:--|:--|
-| 全局视角 | `service_name` 不传 | `{"remarks": [...]}` | 只返回应用级 `code_remarks` 中的用户配置。 |
-| 服务视角 | `service_name + kind` | `{code: remark}` | 读取应用级 `code_remarks` 后，按 `内置默认 < 服务规则 < 全局规则` 合并，再输出旧结构。 |
+这部分协议分成两个消费视角：一个面向“应用级统一维护”，一个面向“服务侧兼容读取”。
 
-- 服务视角返回结构保持兼容，不返回 `remarks` 数组。
-- 全局视角不返回内置默认备注，也不展开成 `{code: remark}`。
+两者底层都读取同一份应用级 `code_remarks`，但对外暴露的结构不同。
+
+| 视角 | 典型场景 | 请求特征 | 返回语义 |
+|:--|:--|:--|:--|
+| 应用视角 | 配置页、运营侧做统一备注管理 | 不传 `service_name` | 直接返回应用级 `code_remarks` 中的 `remarks[]`，只展示用户显式配置的备注。 |
+| 服务视角 | 服务侧按旧协议读取备注 | 传 `service_name + kind` | 先读取应用级 `code_remarks`，再按 `内置默认 < 服务规则 < 全局规则` 合并，最后仍输出旧版 `{code: remark}` 结构。 |
+
+- 应用视角关注的是“配置本身”，因此返回的是备注列表，不补默认值，也不展开成 `{code: remark}`。
+- 服务视角关注的是“最终生效结果”，因此保持旧结构兼容。
+- 当用户没有显式配置时，再按 [0x05 附录](#0x05-附录) 的默认备注表做后置补齐。
+- 两个视角读取的是同一份配置，差异不在存储，而在对外协议和消费形态。
 
 ### e. 写入机制
 
@@ -142,26 +149,17 @@ flowchart LR
 
 #### e-2. 返回码备注写入
 
-**全局视角 `set`**：
+返回码备注写入虽然保留“全局批量维护”和“服务视角兼容写入”两种入口，但两条入口都统一写入应用级 `code_remarks`，不再分裂为多套存储。
 
-- 以 `remarks` 数组整体编辑应用级配置。
-- 每条 `remark item` 至少包含：`kind` `code` `remark` `is_global` `service_names`。
-- 校验：
-  - `is_global=true` 时，`service_names` 必须为空数组。
-  - `is_global=true` 的记录以 `kind + code` 唯一。
-  - `is_global=false` 的记录之间，`service_names` 不允许在相同 `(kind, code)` 下重叠。
+| 写入视角 | 输入协议 | 写入目标 |
+|:--|:--|:--|
+| 全局视角 | `remarks[]` 批量编辑 | 应用级 `code_remarks` |
+| 服务视角 | 兼容 `service_name + kind + code + remark`，新增 `is_global` | 同一份应用级 `code_remarks` |
 
-**服务视角 `set`**（兼容旧协议）：
-
-- 外层继续接收 `service_name` `kind` `code` `remark`，新增 `is_global`。
-- `is_global=true`：更新或创建全局备注，键为 `kind + code`。
-- `is_global=false`：按以下步骤维护服务级备注：
-  1. 找出所有 `is_global=false && kind=当前kind && code=当前code` 且 `service_names` 包含当前 `service_name` 的旧记录。
-  2. 若旧记录 `remark != 当前 remark`，则从其 `service_names` 中移除当前服务。
-  3. 按 `is_global=false && kind && code && remark` 查找目标记录：
-     - 已存在：将当前 `service_name` 合并进 `service_names`
-     - 不存在：新建目标记录，`service_names=[service_name]`
-  4. 清理 `service_names` 为空的记录。
+- 新增 `is_global`，用于区分全局规则写入和服务规则写入。
+- 全局规则按 `kind + code` 唯一维护。
+- 服务规则按 `kind + code + remark` 维护，每条规则声明其生效服务范围。
+- 同一 `(kind, code)` 下可存在多条不同 `remark` 的服务规则，但各规则的 `service_names` 不得重叠。
 
 ### f. 配置下发
 
@@ -180,7 +178,7 @@ flowchart LR
 | #  | 风险                                              | 等级       | 应对                                         |
 |:---|:------------------------------------------------|:---------|:-------------------------------------------|
 | R1 | 返回码重定义无联合唯一约束，并发写入可能重复                          | High     | 本期记为风险，后续独立 PR 修复。                         |
-| R2 | bk-collector `source="*"` 匹配优先级未确认              | Critical | 上线前必须验证：下发全局 + 服务级规则，断言服务级优先生效。若不支持，需调整方案。 |
+| R2 | bk-collector `source="*"` 匹配优先级未确认              | Critical | [1] 上线前必须验证：下发全局 + 服务级规则，断言服务级优先生效。<br />[2] 若不支持，需调整方案。 |
 | R3 | 返回码备注若允许同一服务在相同 `(kind, code)` 下命中多条服务级记录，会导致服务视角读取歧义 | Medium | 服务视角 `set` 强制做“旧记录移除 + 新记录合并”，全局视角 `set` 校验 `service_names` 不重叠。 |
 | R4 | ORM 写入不经过 `full_clean`，`service_name` 无 `blank` | Low      | 无实际影响，记录备忘。                                |
 | R5 | `is_global` 查询可能不走索引                            | Low      | 数据量小，可接受。                                  |
@@ -256,31 +254,21 @@ flowchart LR
 
 #### c-1. 存储与接口
 
-`apm_web/models/application.py`、`apm_web/service/resources.py`、`apm_web/service/serializers.py`
-
-| 变更点 | 说明 |
-|:--|:--|
-| `ApmMetaConfig` | 新增/复用应用级 `config_key="code_remarks"`，通过 `application_id` 维护统一备注配置。 |
-| `GetCodeRemarksResource` | 同时支持全局视角与服务视角：`service_name` 不传时返回 `remarks` 数组，传 `service_name + kind` 时返回兼容的 `{code: remark}`。 |
-| `SetCodeRemarkResource` | 同时支持全局批量编辑与服务视角兼容写入，服务视角外层新增 `is_global`。 |
-| 序列化器 | 为全局 `get/set` 单独定义 serializer，避免复用当前强依赖 `service_name + kind` 的基类。 |
-
-- 全局备注存取步骤：
-  1. 通过 `Application.get_application_id_by_app_name` 获取 `application_id`。
-  2. 使用 `ApmMetaConfig.get_application_config_value(application_id, "code_remarks")` 读取应用级配置。
-  3. 为空时按 `{"remarks": []}` 兜底。
-- 旧 `code_remarks_caller` / `code_remarks_callee` 读写逻辑下线，不保留双写。
+| 文件 | 场景 | 变更点 | 说明 |
+|:--|:--|:--|:--|
+| `apm_web/models/application.py` | 存储 | `ApmMetaConfig` | [1] 统一承载应用级 `code_remarks`。<br />[2] 固定使用 `config_key="code_remarks"` 与 `{"remarks": [...]}` 存储结构。<br />[3] 以 `application_id` 维护配置，读取为空时返回 `{"remarks": []}`。 |
+| `apm_web/service/resources.py` | 查询 | `GetCodeRemarksResource` | [1] 应用视角：`service_name` 不传，返回 `remarks` 数组。<br />[2] 服务视角：兼容原参数及 `{code: remark}` 返回结构。 |
+| `apm_web/service/resources.py` | 写入 | `SetCodeRemarkResource` | [1] 应用视角：新增 `remarks` 参数，流程以 `remarks` 作为写入对象。<br />[2] 服务视角：兼容原参数，新增 `is_global`。 |
+| `apm_web/service/serializers.py` | 协议 | serializer | [1] 应用视角 `Get/Set` 单独定义 serializer。<br />[2] 服务视角保留 `service_name + kind + code + remark` 兼容输入。<br />[3] 在序列化层显式校验 `is_global`。 |
+| `apm_web/service/resources.py` | 下线 | 旧路径下线 | [1] 移除 `code_remarks_caller` / `code_remarks_callee` 读写逻辑。<br />[2] 不保留双写。 |
 
 #### c-2. 写入规则固化
 
-| 落点 | 说明 |
-|:--|:--|
-| 全局视角资源 | 新增 `remarks[]` 的请求序列化与资源处理，批量维护应用级 `code_remarks`。 |
-| 服务视角兼容 | 保留 `service_name + kind + code + remark` 的单码编辑协议，并新增外层 `is_global`。 |
-| 读取合并 | 服务视角 `{code: remark}` 的合并顺序、全局唯一性与服务列表不重叠校验统一复用 `0x01.d-2`、`0x01.e-2` 规则。 |
-| 旧路径下线 | 旧 `code_remarks_caller` / `code_remarks_callee` 读写逻辑直接下线，不保留双写。 |
-
-- 服务视角缺失备注时，按 [0x05 附录](#0x05-附录) 的默认备注表做后置补齐。
+| 规则类型 | 数据特征 | 唯一键 | 写入处理 |
+|:--|:--|:--|:--|
+| 全局规则 | `<service_names=[], is_global=true>` | `<kind, code>` | [1] 应用视角与服务视角命中全局规则时，都按唯一键更新。<br />[2] `service_names` 必须为空数组。 |
+| 服务规则 | `<service_names=[svc-a, svc-b, ...], is_global=false>` | `<kind, code, remark>` | [1] 按 `<kind, code>` 检查当前服务已命中的旧规则。<br />[2] 从旧规则的 `service_names` 中删除当前服务。<br />[3] 按唯一键归并到目标规则。<br />[4] 若目标规则已存在，则合并 `service_names`。<br />[5] 服务迁移后若旧规则 `service_names` 为空，则清理该规则。 |
+| 一致性约束 | `同一服务在同一 <kind, code> 下只能归属一条服务规则` | `按 <kind, code> 检查` | 写入结束后，`service_names` 必须满足两两不相交。 |
 
 ### d. 日志关联
 
@@ -339,6 +327,7 @@ flowchart LR
 
 | 时间 | 对应设计片段 | 结论调整概要 | 改动 / 验证 |
 |:--|:--|:--|:--|
+| `2026-04-16 15:00` | `0x01.c` `0x01.d-2` `0x01.e-2` `0x02.c-1` `0x02.c-2` | [1] 同日持续打磨返回码备注方案，统一收敛 `0x01` 与 `0x02` 的职责边界<br />[2] `0x01` 改成面向评审的协议 / 场景描述，强调应用视角、服务视角与规则模型<br />[3] `0x02.c-1` 改成按文件归属的开发方案，`0x02.c-2` 改成按全局规则 / 服务规则展开写入处理<br />[4] 压缩 `c` 小节篇幅，把可结构化信息尽量收进表格 | [1] 已明确服务规则按 `kind + code + remark` 维护，并要求同一 `(kind, code)` 下 `service_names` 不重叠<br />[2] 已将默认备注补齐移回查询语义，把实现级步骤从 `0x01` 下沉到 `0x02`<br />[3] 已补充服务规则的数据特征、唯一键、写入约束和空规则清理<br />[4] 已通过 `check_doc_style.py` 与 `markdownlint-cli2` |
 | `2026-04-10 16:00` | `0x03.a` `0x03.b` `0x03.c` | [1] 将“日志关联、返回码重定义与返回码备注改造”拆分为两个交付阶段<br />[2] PR-3 聚焦日志关联与返回码重定义<br />[3] PR-4 单独承接返回码备注改造，以降低单 PR 变更面并拉直联调节奏 | [1] 已更新 PR 拆分数量<br />[2] 已更新子需求跟进表<br />[3] 已更新测试节奏建议 |
 | `2026-04-09 21:00` | `0x01.a` `0x01.c` `0x01.e` `0x02.c` | [1] 确认返回码备注不进入关系表，改为统一落在应用级 `ApmMetaConfig.code_remarks`<br />[2] 保留 `kind` 作为备注维度<br />[3] 服务视角 `set` 以 `kind + code + remark` 合并 `service_names`，并强制移除同 `(kind, code)` 下的旧冲突记录<br />[4] 服务视角 `get` 仅做后置补齐内置默认备注，全局视角不返回内置项 | [1] 已核对 `GetCodeRemarksResource` / `SetCodeRemarkResource`<br />[2] 已核对 `ApmMetaConfig` 与 `CodeRedefinedConfigRelation`<br />[3] 已核对现有前端调用面和 tRPC 内置错误码来源<br />[4] 已据此更新方案主干与默认备注表 |
 
@@ -412,4 +401,4 @@ flowchart LR
 
 ---
 
-*制定日期：2026-03-04 ｜ 更新日期：2026-04-10*
+*制定日期：2026-03-04 ｜ 更新日期：2026-04-16*

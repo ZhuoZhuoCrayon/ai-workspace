@@ -4,7 +4,7 @@ tags: [apm, datasource, es, shared-storage, architecture]
 issue: knowledge/bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md
 description: APM 跨应用共享数据源的实现方案与开发方案
 created: 2026-03-03
-updated: 2026-03-04
+updated: 2026-04-16
 ---
 
 # APM 跨应用共享数据源 —— 实施方案
@@ -56,9 +56,10 @@ classDiagram
 
 **关键决策**：
 
-* **职责分离**：SharedDataSource 仅负责池管理（容量 + 元数据），不包含创建链路资源逻辑；链路资源创建由 `ApmDataSourceConfigBase` 的 `create_data_id` / `create_or_update_result_table` 以 `global_mode` 完成。
-* **关联方式**：`shared_datasource_id` 为 IntegerField（可空，不建外键）；通过 `SHARED_DS_REGISTRY` 按 data_type 映射子类，便于扩展 Log/Metric。
-* **Draft 模式**：reserve 创建草稿（`is_enabled=False`），外部 API 调用完成后由 activate 填充元数据并启用；allocate 仅选取 `is_enabled=True` 的实例，草稿不可见。
+- **职责分离**：SharedDataSource 仅负责池管理（容量 + 元数据），外部链路资源创建与回填由 `ApmDataSourceConfigBase` 负责。
+- **创建口径分层**：共享模式下，`create_data_id` 与 `create_or_update_result_table` 可使用不同业务口径，详见 `0x01.d` 与 `0x02.b`。
+- **关联与扩展**：应用数据源通过 `shared_datasource_id` 引用共享池，共享池类型通过 `SHARED_DS_REGISTRY` 按 `data_type` 扩展。
+- **草稿激活模型**：共享源先 reserve 为草稿，外部资源创建成功后再 activate，allocate 仅面向已启用实例。
 
 ### c. 共享机制
 
@@ -92,15 +93,19 @@ flowchart LR
 ### d. 命名规则
 
 
-| 项                   | 独占模式                                 | 共享模式                                |
-| ------------------- | ------------------------------------ | ----------------------------------- |
-| **bk_biz_id**       | 实际业务 ID                              | 0（全局注册）                             |
-| **data_name**       | `{bk_biz_id}_bkapm_trace_{app_name}` | `bkapm_shared_trace_{seq:04d}`      |
+| 项 | 独占模式 | 共享模式 |
+| ---- | ---- | ---- |
+| **create_data_id.bk_biz_id** | 实际业务 ID | 环境变量 `SHARED_DATASOURCE_PRIVILEGED_BK_BIZ_ID`，默认 `2` |
+| **create_result_table.bk_biz_id** | 实际业务 ID | `GLOBAL_CONFIG_BK_BIZ_ID`，固定 `0` |
+| **create_result_table.bk_biz_id_alias** | 不涉及 | 字符串 `bk_biz_id` |
+| **data_name** | `{bk_biz_id}_bkapm_trace_{app_name}` | `bkapm_shared_trace_{seq:04d}` |
 | **result_table_id** | `{bk_biz_id}_bkapm.trace_{app_name}` | `apm_global.shared_trace_{seq:04d}` |
 
-> `seq` ：共享数据源表主键（AUTO_INCREMENT），每个子类独立编号。
->
-> `data_name` ：property 推导，不单独存储。
+- `seq`：共享数据源表主键（AUTO_INCREMENT）。
+- `seq` 的编号在每个子类内独立递增。
+- `data_name`：property 推导，不单独存储。
+- `bk_biz_id_alias`：共享模式下创建结果表时传入字符串 `bk_biz_id`。
+- `bk_biz_id_alias` 的用途：查询阶段按业务 ID 做业务隔离。
 
 ### e. 数据链路
 
@@ -129,7 +134,11 @@ flowchart LR
 
 #### 模型概览
 
-两条继承链：共享数据源池（BaseSharedDataSource）管理容量与元数据；应用数据源（ApmDataSourceConfigBase）通过 `shared_datasource_id` 引用共享池。完整类图如下：
+共享数据源池（BaseSharedDataSource）负责管理容量与元数据。
+
+应用数据源（ApmDataSourceConfigBase）通过 `shared_datasource_id` 引用共享池。
+
+完整类图如下：
 
 ```mermaid
 classDiagram
@@ -240,9 +249,9 @@ flowchart LR
 | index_set_id   | IntegerField | 索引集 ID（可选） |
 | index_set_name | CharField    | 索引集名称（可选）  |
 
- `to_shared_info()`：在基类返回的字典基础上追加上述扩展字段。
-
-该字典由 `TraceDataSource.set_from_shared()` 消费。`to_shared_info()` 与 `to_link_info()` 的字段集相同（bk_data_id、result_table_id、index_set_id 等），方向相反：前者从 SharedDS 导出，后者从 DataSource 导出。
+- `to_shared_info()`：在基类字段上追加 trace 特有元数据，并作为 `TraceDataSource.set_from_shared()` 的输入。
+- `to_shared_info()` 与 `to_link_info()` 维持同构字段集，例如 `bk_data_id`、`result_table_id` 与 `index_set_id`。
+- 两者分别承担 SharedDS 导出与 DataSource 导出的相反方向。
 
 #### 注册表
 
@@ -270,6 +279,17 @@ SHARED_DS_REGISTRY = {
 | **[Method]**  `set_from_shared`              | 由子类覆写，从共享链路信息字典提取各自字段并赋值。           |
 | **[Method]** `is_shared`                     | 是否共享，通过 `shared_datasource_id` 判断。                 |
 | **[Method]** `start / stop`                  | 共享模式下不执行。                                           |
+
+**共享模式下创建参数结论**：
+
+- `create_data_id(global_mode=True)`：
+  - `bk_biz_id` 使用环境变量 `SHARED_DATASOURCE_PRIVILEGED_BK_BIZ_ID`。
+  - 默认值为 `2`。
+  - 目的：将共享 DataID 统一收口到单一业务空间管理。
+- `create_or_update_result_table(global_mode=True)`：
+  - `bk_biz_id` 使用 `GLOBAL_CONFIG_BK_BIZ_ID`，固定为 `0`。
+  - `bk_biz_id_alias` 传入字符串 `bk_biz_id`。
+  - 目的：保持结果表注册在全局业务下，并声明查询按业务 ID 做隔离。
 
 **apply_datasource 共享数据源处理流程**（详见 [0x01/c 共享机制](#c-共享机制) 流程图）：
 
@@ -307,9 +327,11 @@ flowchart TD
     class K,Q dedicated
 ```
 
-> API 失败回滚：`create_data_id` 或 `create_or_update_result_table` 抛异常时，删除草稿（`reserved.delete()`）并向上传播。
->
-> 迁出：`release()` 释放共享源占用后，清空 `shared_datasource_id` 及共享链路字段，随后进入独占创建流程。
+**补充约束**：
+
+- `API 失败回滚`：`create_data_id` 或 `create_or_update_result_table` 抛异常时，删除草稿（`reserved.delete()`）并向上传播。
+- `迁出清理`：`release()` 释放共享源占用后，清空 `shared_datasource_id` 及共享链路字段。
+- `迁出后续`：随后进入独占创建流程。
 
 
 
@@ -380,6 +402,17 @@ flowchart LR
 
 
 > 上线前需对代码库执行 `rg "QueryConfigBuilder.*BK_APM"` 和 `rg "es_client\.search"` 全量检索，确认所有查询路径已适配。
+
+## 0x03 实施进展
+
+| 时间 | 对应设计片段 | 结论调整概要 | 改动 / 验证 |
+|:--|:--|:--|:--|
+| `2026-04-16 15:32` | `0x01.d` `0x02.b` | [1] 修正 `bk_biz_id_alias` 的语义<br />[2] 明确其值不是实际业务 ID，而是字符串 `bk_biz_id`<br />[3] 明确该参数用于查询阶段按业务 ID 做隔离 | [1] 已修正命名规则与方法级参数结论中的错误表述<br />[2] 已统一改为字符串 `bk_biz_id`<br />[3] 本次仅修正文档结论，未改代码 |
+| `2026-04-16 15:25` | `0x02.a` | [1] 收敛 `SharedTraceDataSource` 的接口说明<br />[2] 将逐句解释改成接口约定式表述<br />[3] 保留字段关系与调用方向，不再逐项口水化展开 | [1] 已将 6 个说明点压缩为 2 条接口约定<br />[2] 保留 `to_shared_info()` / `to_link_info()` 的字段同构关系与消费方向<br />[3] 本次仅优化方案文案，未改代码 |
+| `2026-04-16 15:22` | `0x01.b` `0x01.d` `0x02.b` | [1] 收敛关键决策，只保留方向性结论<br />[2] 将 DataID、结果表与业务口径等细则下沉到命名规则和开发方案<br />[3] 保持方案语义不变，提升主干连贯性 | [1] 已将关键决策压缩为职责分离、创建口径分层、关联与扩展、草稿激活模型 4 项<br />[2] 细节继续由 `0x01.d` 与 `0x02.b` 承接<br />[3] 本次仅优化方案结构与表述，未改代码 |
+| `2026-04-16 14:51` | `0x01.b` `0x02.a` `0x02.b` | [1] 按“单句合并后不超 120 字必须单行”规则继续清理软换行<br />[2] 修正会在 Markdown 渲染时仍呈现为同一句的续行写法<br />[3] 保持方案语义不变，仅统一文档表达方式 | [1] 已合并关键决策、共享字段说明与补充约束中的单句续行<br />[2] 已按最新规则补齐文档治理记录<br />[3] 本次仅优化方案文案，未改代码 |
+| `2026-04-16 10:45` | `0x01.b` `0x01.d` `0x02.a` `0x02.b` | [1] 按“同一 Markdown 段落或列表项”规则重构多句列表项<br />[2] 将表格后说明、共享字段说明与迁移备注改成原子化列表/段落<br />[3] 保持方案语义不变，仅优化文档结构与可读性 | [1] 已拆分关键决策、命名规则补充说明与 `SharedTraceDataSource` 字段说明<br />[2] 已重写 `apply_datasource` 补充约束区块，避免软换行规避规则<br />[3] 本次仅优化方案文案，未改代码 |
+| `2026-04-16 10:28` | `0x01.b` `0x01.d` `0x02.b` | [1] 共享模式下的 DataID 与结果表创建口径拆分<br />[2] `create_data_id` 改为使用特权业务 ID，默认从环境变量读取，默认值 `2`<br />[3] `create_or_update_result_table` 继续使用 `GLOBAL_CONFIG_BK_BIZ_ID=0`，并显式透传 `bk_biz_id_alias=\`bk_biz_id\`` | [1] 已更新关键决策与命名规则<br />[2] 已补充 `ApmDataSourceConfigBase` 的方法级创建参数约束<br />[3] 本次仅更新方案文档，尚未改代码 |
 
 ---
 
