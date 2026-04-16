@@ -32,13 +32,14 @@
 | --- | --- | --- |
 | 无序列表 | 并列结论、约束、验证点 | 每个列表项只承载一条信息。 |
 | 有序列表 | 多步操作、流程 | 每步只写一个动作，不用分号串联。 |
-| 表格 | 字段固定且项数超过 `1` | 方案比较、规则条件、风险分级、文件归属优先用表格。 |
+| 表格 | 字段固定且项数超过 `1`，或存在“对象 -> 规则 / 动作 / 入口 / 归属”映射 | 方案比较、规则条件、风险分级、文件归属、文档类型到必读 reference 的对应关系优先用表格。 |
 
 表格单元格补充规则：
 
 - 不用分号串联多项内容。
 - 多项内容优先用 `[1] xxx<br />[2] xxx`。
 - 需要脚注时使用 `*[1]*`、`*[a]*` 这类斜体角标。
+- 如果读者需要横向比较多个对象和各自处置方式，优先改成表格，不要保留无序列表。
 
 ## 0x05 链接与微观格式
 
@@ -103,4 +104,24 @@ Good：
 - **旧协议兼容**：服务视角继续输出原有结构。
 
 开发落点放到后文文件级变更表，不在主干小节提前展开。
+```
+
+### c. 对象与处置映射必须表格化
+
+Bad：
+
+```md
+- `README.md`：读 `common-writing.md` 和 `issue-readme-writing.md`
+- `PLAN.md`：读 `common-writing.md` 和 `plan-writing.md`
+- `troubleshooting`：读 `common-writing.md` 和 `troubleshooting-writing.md`
+```
+
+Good：
+
+```md
+| 文档类型 | 必读 reference | 说明 |
+| --- | --- | --- |
+| `README.md` | `common-writing.md`、`issue-readme-writing.md` | 先写需求主干 |
+| `PLAN.md` | `common-writing.md`、`plan-writing.md` | 先写方案主干 |
+| `troubleshooting` | `common-writing.md`、`troubleshooting-writing.md` | 固定排障结构 |
 ```
