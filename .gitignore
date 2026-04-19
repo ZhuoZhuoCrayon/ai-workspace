@@ -13,6 +13,7 @@ private/
 !.claude/skills/project_mgr
 !.claude/skills/iwiki_sync
 !.claude/skills/work-schedule
+!.claude/skills/doc-style
 .DS_Store
 __pycache__/
 *.pyc
