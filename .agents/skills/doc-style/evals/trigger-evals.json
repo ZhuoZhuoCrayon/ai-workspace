@@ -20,6 +20,10 @@
     "should_trigger": true
   },
   {
+    "query": "帮我把这条 PR review 评论整理成高密度总结。根因保留叙述。修复点改成表格。",
+    "should_trigger": true
+  },
+  {
     "query": "帮我修一下这个 Python 函数的类型报错，只改代码，不写文档。",
     "should_trigger": false
   },
