@@ -23,11 +23,16 @@
 - 任何项目定位或知识检索，都必须并行读取公开与私有两条路径
 - 禁止只读取一侧后直接下结论
 
-### d. 知识与 Issue 管理规则
+### d. 语言
+
+- 对话：以工作区项目配置的 `language` 字段为准，默认中文。
+- 其他（如代码注释、文档）：以目标项目配置的 `language` 字段为准，默认中文。
+
+### e. 知识与 Issue 管理规则
 
 以下规则入口与摘要见 `.agents/skills/knowledge_mgr/SKILL.md` 的 `0x03 规则锚点`。
 
-### e. 规则与 Skill 治理
+### f. 规则与 Skill 治理
 
 - **RULE-GOVERN-001**：错误预防、行为规范类规则，必须写入对应方向的 skill 或 rule 文件，禁止堆积到 `AGENTS.md`
 - 本文件仅保留全局结构性约束与导航
@@ -35,20 +40,21 @@
 - 当某条 rule 新增内容时，主动提醒用户是否启动向 skill 的迁移
 - 演进路线见 `knowledge/ai-workspace/issues/2026-04-06-skills-first-architecture/PLAN.md`
 - **RULE-GOVERN-003**：skill 新增或修改前，必须先读取 skill-creator 规范并严格审查。
+- **RULE-GOVERN-004**：禁止修改第三方 skills。
+- **RULE-GOVERN-005**：自研 skill 新增或修改后，必须执行 `make skills-mount`。
 
 ## 0x02 快速入口
 
-| 目标 | 路径 | 说明 |
-|------|------|------|
-| 通用规范 | `.cursor/rules/general.mdc` | 语言、路径、输出偏好 |
-| 文档规范 | `.agents/skills/doc-style/SKILL.md` | Markdown 写作、重构与润色流程 |
-| Git 规范 | `.cursor/rules/git.mdc` | Conventional Commits 与提交策略 |
-| PR Review | `.agents/skills/code_review/SKILL.md` | PR 复查流程与评论规范 |
-| Python 规范 | `.cursor/rules/python-type-annotations.mdc` | 类型标注与风格 |
-| Go 规范 | `.cursor/rules/go-dev.mdc` | Go 开发环境与 gvm |
-| 项目注册表 | `repos.json` + `private/repos.json` | 并行读取获取 `local_path` |
-| 知识入口 | `knowledge/INDEX.md` + `private/knowledge/INDEX.md` | 并行读取后按项目下钻 |
-| 工作区 Skills | `.agents/skills/` | 通用技能 |
+| 目标         | 路径                                                  | 说明                         |
+|------------|-----------------------------------------------------|----------------------------|
+| 文档规范       | `.agents/skills/doc-style/SKILL.md`                 | Markdown 写作、重构与润色流程        |
+| Git 规范     | `.cursor/rules/git.mdc`                             | Conventional Commits 与提交策略 |
+| PR Review  | `.agents/skills/code_review/SKILL.md`               | PR 复查流程与评论规范               |
+| Python 规范  | `.cursor/rules/python-type-annotations.mdc`         | 类型标注与风格                    |
+| Go 规范      | `.cursor/rules/go-dev.mdc`                          | Go 开发环境与 gvm               |
+| 项目注册表      | `repos.json` + `private/repos.json`                 | 并行读取获取 `local_path`        |
+| 知识入口       | `knowledge/INDEX.md` + `private/knowledge/INDEX.md` | 并行读取后按项目下钻                 |
+| 工作区 Skills | `.agents/skills/`                                   | 通用技能                       |
 
 规则读取策略（通用）：
 
