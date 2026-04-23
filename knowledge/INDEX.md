@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-04-21
+> 最后更新：2026-04-23
 
 ## 0x01 项目知识
 
@@ -16,15 +16,15 @@
 
 ## 0x02 最近更新
 
+- 2026-04-23：更新 [APM 支持跨应用共享数据源](./bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md)
+  至 bkmonitor
+  （收口 PR review 中的共享判定、启停边界与运维操作约束）
 - 2026-04-21：新增
   [优化 APM 接口统计偶现查询报错](./bkmonitor/issues/2026-04-21-apm-endpoint-stat-hot-window-divide-by-zero/README.md)
   至 bkmonitor
 - 2026-04-16：更新 [APM 支持应用级别配置](./bkmonitor/issues/2026-03-04-apm-app-level-config/README.md)
   至 bkmonitor
   （将返回码备注写入的实现细节从“实现方案”下沉到“开发方案”）
-- 2026-04-16：更新 [APM 支持跨应用共享数据源](./bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md)
-  至 bkmonitor
-  （补充共享模式下 `create_data_id` / `create_result_table` 的创建口径）
 - 2026-04-16：新增
   [endpoint stat 查询指定 SpanName 无数据](./bkmonitor/troubleshooting/endpoint-stat-no-data-for-http-server-span.md)
   至 bkmonitor

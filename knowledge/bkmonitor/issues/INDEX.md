@@ -12,5 +12,5 @@
 | [【告警中心】APM 应用/服务页面嵌入列表页支持](./2026-03-19-alert-apm-embedded-list/README.md) | `alert` `apm` `embedded-list` `frontend` | 告警中心列表页支持嵌入到 APM 应用/服务页面，提供关联告警的上下文查看能力 | 2026-03-19 |
 | [告警日志查询支持 Doris 数据源](./2026-03-12-log-query-doris-support/README.md) | `log` `unify-query` `doris` `data-source` | 根因在 UQ Doris 转换，_index 应映射为 *，bkmonitor 侧关闭该改动 | 2026-03-12 |
 | [日志 UnifyQuery 环境变量白名单与 query_string 增强](./2026-03-05-log-uq-env-whitelist-and-query-string/README.md) | `log` `unify-query` `data-source` `query-string` `config` | 为日志 UnifyQuery 灰度白名单增加环境变量配置层，并对齐日志平台 query_string 处理逻辑 | 2026-03-05 |
-| [APM 支持跨应用共享数据源](./2026-03-03-apm-shared-datasource/README.md)                                         | `apm` `datasource` `es` `shared-storage`                  | 支持多 APM 应用复用同一数据源，压缩 ES 索引数量，降低数据链路资源消耗                 | 2026-04-16 |
+| [APM 支持跨应用共享数据源](./2026-03-03-apm-shared-datasource/README.md)                                         | `apm` `datasource` `es` `shared-storage`                  | 支持多 APM 应用复用同一数据源，压缩 ES 索引数量，降低数据链路资源消耗                 | 2026-04-23 |
 | [日志数据源切换 unify-query](./2026-02-10-log-ds-to-unify-query/README.md)                                    | `log` `unify-query` `data-source`                         | 将日志查询数据源从原有实现切换到 unify-query 统一查询层                      | 2026-02-10 |

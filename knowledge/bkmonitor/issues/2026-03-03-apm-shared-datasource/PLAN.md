@@ -4,7 +4,7 @@ tags: [apm, datasource, es, shared-storage, architecture]
 issue: knowledge/bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md
 description: APM 跨应用共享数据源的实现方案与开发方案
 created: 2026-03-03
-updated: 2026-04-16
+updated: 2026-04-23
 ---
 
 # APM 跨应用共享数据源 —— 实施方案
@@ -115,6 +115,7 @@ flowchart LR
 
 * 逻辑层（应用级别隔离）：所有查询路径统一追加 `bk_biz_id` + `app_name` 过滤条件。
 * 路由层（业务级别隔离）：支持以 `bk_biz_id` 作为 filter 查询业务 0 的全局结果表。
+* 本能力可拆分到后续 PR，但共享 Trace 数据正式开放前必须补齐，否则同业务共享池内应用存在互读风险。
 
 ### f. 风险与约束
 
@@ -278,7 +279,7 @@ SHARED_DS_REGISTRY = {
 | **[Method]** `to_link_info`                  | 导出链路元数据字典（bk_data_id、result_table_id 等），子类覆写追加特有字段。 |
 | **[Method]**  `set_from_shared`              | 由子类覆写，从共享链路信息字典提取各自字段并赋值。           |
 | **[Method]** `is_shared`                     | 是否共享，通过 `shared_datasource_id` 判断。                 |
-| **[Method]** `start / stop`                  | 共享模式下不执行。                                           |
+| **[Method]** `start / stop`                  | 共享模式下不执行结果表启停，也不修改共享池 `usage_count`。     |
 
 **共享模式下创建参数结论**：
 
@@ -332,10 +333,65 @@ flowchart TD
 - `API 失败回滚`：`create_data_id` 或 `create_or_update_result_table` 抛异常时，删除草稿（`reserved.delete()`）并向上传播。
 - `迁出清理`：`release()` 释放共享源占用后，清空 `shared_datasource_id` 及共享链路字段。
 - `迁出后续`：随后进入独占创建流程。
+- `存量迁移边界`：存量独占应用不自动迁入共享池，如需支持则必须补齐独占资源释放、共享资源分配与回滚流程。
+- `启停边界`：`start()` / `stop()` 只处理独占结果表启停，共享池占用只允许在分配、删除或显式迁出生命周期内变化。
 
 
 
-### c. TraceDataSource 查询适配
+### c. 共享判定机制
+
+`SharedDatasourceRuleFactory` 是 `is_shared` 的统一决策入口。
+
+它根据 `bk_biz_id`、`app_name` 与全局规则配置输出 `shared_datasource_types`，调用方只根据返回列表判断某类数据源是否使用共享模式。
+
+配置示例：
+
+```json
+{
+  "trace": {
+    "list": [
+      {
+        "connector": "AND",
+        "rules": [
+          {
+            "type": "SPACE_TYPE",
+            "params": {
+              "space_types": ["bksaas"]
+            }
+          },
+          {
+            "type": "APP_NAME_PREFIX",
+            "params": {
+              "prefixes": ["bk_ai"]
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+以上配置命中时返回 `["trace"]`，调用方据此将 Trace 数据源设置为共享模式。
+
+协议结构：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `<datasource_type>` | `object` | 是 | 数据源类型维度的规则配置，命中后返回该数据源类型，例如 `trace`。 |
+| `<datasource_type>.list` | `array<object>` | 是 | 规则组列表，组间为 OR 关系，任一规则组命中即该数据源类型命中。 |
+| `<datasource_type>.list[].connector` | `string` | 是 | 规则组内的组合关系，可选值为 `AND` / `OR`。 |
+| `<datasource_type>.list[].rules` | `array<object>` | 是 | 规则列表，按 `connector` 汇总命中结果。 |
+| `<datasource_type>.list[].rules[].type` | `string` | 是 | 规则类型，映射到具体 Rule 实现，例如 `SPACE_TYPE`、`APP_NAME_PREFIX`。 |
+| `<datasource_type>.list[].rules[].params` | `object` | 否 | 具体 Rule 对象入参，结构由 `type` 对应的 Rule 定义。 |
+
+调用边界：
+
+- `CreateApplicationResource` 未显式传 `shared_datasource_types` 时，通过工厂解析默认共享类型。
+- `ApplyDatasourceResource` 更新存储配置时也必须走同一入口，并优先保留已有共享状态。
+- 规则命中不自动迁移存量独占应用，存量迁入共享池必须走显式迁移流程。
+
+### d. TraceDataSource 查询适配
 
 `apm/models/datasource.py`
 
@@ -346,7 +402,7 @@ flowchart TD
 | `update_or_create_index_set` | 共享模式下不创建日志索引集。          |
 
 
-### d. 应用生命周期
+### e. 应用生命周期
 
 **创建**（`apm/resources.py` — `CreateApplicationResource` / `ApplyDatasourceResource`）：
 
@@ -360,7 +416,7 @@ flowchart LR
 
 | 变更点                                | 说明                                                         |
 | ------------------------------------- | ------------------------------------------------------------ |
-| **[Field]** `shared_datasource_types` | 新增字段： `CreateApplicationResource` / `ApplyDatasourceResource`。<br />默认值：`space_type` 为 `bkapp` 时，使用 `["trace"]`。<br /><br />操作：设置到 `xx_datasource_option.is_shared`。 |
+| **[Field]** `shared_datasource_types` | 新增字段： `CreateApplicationResource` / `ApplyDatasourceResource`。<br />默认值：由 `0x02.c` 的共享判定机制解析。<br /><br />操作：设置到 `xx_datasource_option.is_shared`，更新场景需优先保留已有共享状态。 |
 
 
 
@@ -369,16 +425,17 @@ flowchart LR
 ```mermaid
 flowchart LR
     A[DeleteApplicationResource] --> B[delete_application_async]
-    B --> C[stop_trace]
-    C --> D[stop]
-    D --> E{is_shared?}
-    E -->|是| F["release(only)"]
-    E -->|否| G["stop"]
+    B --> C{trace is shared?}
+    C -->|是| D["release shared usage"]
+    C -->|否| E[stop_trace]
+    D --> F[delete application]
+    E --> F
 ```
 
-- 共享模式：调用 `release()` 并不执行 stop 原流程。
+- 共享模式：删除应用释放共享池占用，但不执行普通 `stop()` 启停逻辑。
+- 独占模式：保留现有 `stop_trace()` 关闭结果表流程。
 
-### e. 应用信息注入
+### f. 应用信息注入
 
 
 | 变更点                   | 说明                                                         |
@@ -386,7 +443,7 @@ flowchart LR
 | 清洗阶段（bk-collector） | 注入 `bk_biz_id` 、 `app_name` 到 Span（Token 反解），和 `resource` 同一级，无论共享与否均注入。 |
 | 应用创建阶段（SaaS）     | 增加 `bk_biz_id` 、 `app_name` 作为 ES mapping 字段。       |
 
-### f. 查询路径审计
+### g. 查询路径审计
 
 增加 <`bk_biz_id`、`app_name`> 过滤。
 
@@ -403,16 +460,21 @@ flowchart LR
 
 > 上线前需对代码库执行 `rg "QueryConfigBuilder.*BK_APM"` 和 `rg "es_client\.search"` 全量检索，确认所有查询路径已适配。
 
+### h. 运维操作边界
+
+`OperateApmDataIdResource` 面向独占 DataID。
+
+共享 Trace 数据源下，同一个 `bk_data_id` 被多个应用复用，单应用入口必须拒绝暂停或恢复操作。
+
+如需暂停整池写入，后续应提供共享池级操作，并在接口层明确影响范围。
+
 ## 0x03 实施进展
 
 | 时间 | 对应设计片段 | 结论调整概要 | 改动 / 验证 |
 |:--|:--|:--|:--|
-| `2026-04-16 15:32` | `0x01.d` `0x02.b` | [1] 修正 `bk_biz_id_alias` 的语义<br />[2] 明确其值不是实际业务 ID，而是字符串 `bk_biz_id`<br />[3] 明确该参数用于查询阶段按业务 ID 做隔离 | [1] 已修正命名规则与方法级参数结论中的错误表述<br />[2] 已统一改为字符串 `bk_biz_id`<br />[3] 本次仅修正文档结论，未改代码 |
-| `2026-04-16 15:25` | `0x02.a` | [1] 收敛 `SharedTraceDataSource` 的接口说明<br />[2] 将逐句解释改成接口约定式表述<br />[3] 保留字段关系与调用方向，不再逐项口水化展开 | [1] 已将 6 个说明点压缩为 2 条接口约定<br />[2] 保留 `to_shared_info()` / `to_link_info()` 的字段同构关系与消费方向<br />[3] 本次仅优化方案文案，未改代码 |
-| `2026-04-16 15:22` | `0x01.b` `0x01.d` `0x02.b` | [1] 收敛关键决策，只保留方向性结论<br />[2] 将 DataID、结果表与业务口径等细则下沉到命名规则和开发方案<br />[3] 保持方案语义不变，提升主干连贯性 | [1] 已将关键决策压缩为职责分离、创建口径分层、关联与扩展、草稿激活模型 4 项<br />[2] 细节继续由 `0x01.d` 与 `0x02.b` 承接<br />[3] 本次仅优化方案结构与表述，未改代码 |
-| `2026-04-16 14:51` | `0x01.b` `0x02.a` `0x02.b` | [1] 按“单句合并后不超 120 字必须单行”规则继续清理软换行<br />[2] 修正会在 Markdown 渲染时仍呈现为同一句的续行写法<br />[3] 保持方案语义不变，仅统一文档表达方式 | [1] 已合并关键决策、共享字段说明与补充约束中的单句续行<br />[2] 已按最新规则补齐文档治理记录<br />[3] 本次仅优化方案文案，未改代码 |
-| `2026-04-16 10:45` | `0x01.b` `0x01.d` `0x02.a` `0x02.b` | [1] 按“同一 Markdown 段落或列表项”规则重构多句列表项<br />[2] 将表格后说明、共享字段说明与迁移备注改成原子化列表/段落<br />[3] 保持方案语义不变，仅优化文档结构与可读性 | [1] 已拆分关键决策、命名规则补充说明与 `SharedTraceDataSource` 字段说明<br />[2] 已重写 `apply_datasource` 补充约束区块，避免软换行规避规则<br />[3] 本次仅优化方案文案，未改代码 |
-| `2026-04-16 10:28` | `0x01.b` `0x01.d` `0x02.b` | [1] 共享模式下的 DataID 与结果表创建口径拆分<br />[2] `create_data_id` 改为使用特权业务 ID，默认从环境变量读取，默认值 `2`<br />[3] `create_or_update_result_table` 继续使用 `GLOBAL_CONFIG_BK_BIZ_ID=0`，并显式透传 `bk_biz_id_alias=\`bk_biz_id\`` | [1] 已更新关键决策与命名规则<br />[2] 已补充 `ApmDataSourceConfigBase` 的方法级创建参数约束<br />[3] 本次仅更新方案文档，尚未改代码 |
+| `2026-04-23 17:00` | `0x01.e` `0x02.b` `0x02.c` `0x02.e` `0x02.h` | [1] PR review 收口更新路径共享判定、启停边界与 DataID 运维边界<br />[2] 将 `SharedDatasourceRuleFactory` 抽成 `is_shared` 独立决策机制，并按协议文档补充 JSON 示例与字段表<br />[3] 明确查询隔离保留为共享 Trace 正式开放前必须补齐的后续 PR | [1] 已更新方案主干约束、共享判定机制小节与协议字段说明<br />[2] 已复查 PR #10415 最新 head `80e070f`<br />[3] 待开发修复 `ApplyDatasourceResource`、共享启停、`OperateApmDataIdResource` 与 migration LF |
+| `2026-04-16 15:00` | `0x01.b` `0x01.d` `0x02.a` `0x02.b` | [1] 合并同日重复文案迭代，只保留最终有效方案结论<br />[2] 明确 `bk_biz_id_alias` 固定传字符串 `bk_biz_id`，用于查询阶段业务隔离<br />[3] 保留共享模型接口约定与 DataID / 结果表创建口径分层 | [1] 已更新关键决策、命名规则、共享模型与方法级参数约束<br />[2] 已统一 `SharedTraceDataSource` 接口说明和单句续行表达<br />[3] 本次仅更新方案文档，未改代码 |
+| `2026-04-16 10:00` | `0x01.b` `0x01.d` `0x02.a` `0x02.b` | [1] 合并同小时方案结论与文档结构迭代<br />[2] 共享模式下 DataID 与结果表创建口径拆分<br />[3] `create_data_id` 使用特权业务 ID，`create_or_update_result_table` 使用 `GLOBAL_CONFIG_BK_BIZ_ID=0` 并透传 `bk_biz_id_alias` | [1] 已更新关键决策、命名规则与方法级参数约束<br />[2] 已拆分共享模型、表格后说明与迁移备注<br />[3] 本次仅更新方案文档，未改代码 |
 
 ---
 
