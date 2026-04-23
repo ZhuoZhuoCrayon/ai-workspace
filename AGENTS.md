@@ -42,6 +42,10 @@
 - **RULE-GOVERN-003**：skill 新增或修改前，必须先读取 skill-creator 规范并严格审查。
 - **RULE-GOVERN-004**：禁止修改第三方 skills。
 - **RULE-GOVERN-005**：自研 skill 新增或修改后，必须执行 `make skills-mount`。
+- **RULE-GOVERN-006**：抽象共识沉淀禁止 case-by-case 补丁
+- 触发场景：用户要求提炼抽象共识、沉淀 skills / rules 或复盘通用方法论
+- 处理方式：先提炼可迁移方法论，再用模板或 Good case 辅助落地
+- 样例边界：当前会话关键字或单个样例只能说明规则，不能成为规则本体
 
 ## 0x02 快速入口
 
