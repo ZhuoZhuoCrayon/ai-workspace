@@ -20,7 +20,11 @@
     "should_trigger": true
   },
   {
-    "query": "帮我把这条 PR review 评论整理成高密度总结。根因保留叙述。修复点改成表格。",
+    "query": "帮我把这条 PR review 评论整理成高密度总结。根因保留叙述，修复点按需表格化。",
+    "should_trigger": true
+  },
+  {
+    "query": "这段 Markdown 列表超过 8 条了，帮我按主题分层，别直接堆成大表格。",
     "should_trigger": true
   },
   {
