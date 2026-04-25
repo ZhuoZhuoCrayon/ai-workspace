@@ -177,7 +177,92 @@ topk(5, sum_over_time( <metric>{ <边> }[1h] ))
 - `★`：`callee_container` 主导的边，剥离后 ΔC 接近 0。
 - `driver`：该边主要被哪个保留维度放大。
 
-### c. 总账
+### c. 关键边 series 跳变佐证
+
+`step=1m`，窗口 `2026-02-15 23:50 → 2026-02-16 00:09 +0800`，单位 = 该 1 min 内边上的独立 series 数。
+
+#### c.1 入口边：`msgcenter` → `activities.{10139, 10206, 10221}`
+
+```promql
+count by (callee_service) (
+  sum_over_time(sum_without_ip_rpc_client_handled_total{
+    service_name="activity-microservices.msgcenter",
+    callee_service=~"trpc.hpjy.activity-microservices.activities.10139|trpc.hpjy.activity-microservices.activities.10206|trpc.hpjy.activity-microservices.activities.10221"
+  }[1m])
+)
+```
+
+| `callee_service` | 23:50 ~ 23:59 | 00:00 | 00:01 峰值 | 00:02 ~ 00:09 稳态 | 形态 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `activities.10139` | null | 2 | 22 | 18 ~ 24 | 全新边 |
+| `activities.10206` | null | 2 | 12 | 10 ~ 15 | 全新边 |
+| `activities.10221` | 17 ~ 19 | 18 | 19 | 19 ~ 23 | 已有边轻微放大 |
+
+#### c.2 高基数边：`activities-{10221, 60017}` → AMS 域被调
+
+```promql
+count by (service_name, callee_service) (
+  sum_over_time(sum_without_ip_rpc_client_handled_total{
+    service_name=~"activity-microservices.activities-10221|activity-microservices.activities-60017",
+    callee_service=~"trpc.hpjy.activity-microservices.amshostpkg|trpc.hpjy.activity-microservices.amspkg|trpc.hpjy.activity-microservices.campamspkg"
+  }[1m])
+)
+```
+
+| `service_name` → `callee_service` | 23:50 ~ 23:59 | 00:01 峰值 | 00:02 ~ 00:09 稳态 | 形态 |
+| --- | ---: | ---: | ---: | --- |
+| `10221` → `amshostpkg` | null | 803 | 800 ~ 830 | 全新边，~800 个 `callee_container` 集中涌入 |
+| `60017` → `amspkg` | 440 ~ 540 | 2601 | 1020 ~ 1570 | 已有边被放大，叠加新 `callee_container` |
+| `60017` → `campamspkg` | null | 794 | 597 ~ 717 | 全新边，~600 个 `callee_container` 集中涌入 |
+
+将 `callee_container` 加入 `by`，可看到 ~800 个 container 值在 00:01 同时点亮：
+
+```promql
+count by (service_name, callee_service, callee_container) (
+  sum_over_time(sum_without_ip_rpc_client_handled_total{
+    service_name="activity-microservices.activities-10221",
+    callee_service="trpc.hpjy.activity-microservices.amshostpkg"
+  }[1m])
+)
+```
+
+#### c.3 多活动放大边：`activities-*` → `redis-data`
+
+```promql
+count by (service_name, callee_service) (
+  sum_over_time(sum_without_ip_rpc_client_handled_total{
+    service_name=~"activity-microservices.activities-10139|activity-microservices.activities-10206|activity-microservices.activities-10212|activity-microservices.activities-10221",
+    callee_service="trpc.hpjy.activity-microservices.redis-data"
+  }[1m])
+)
+```
+
+| `service_name` | 23:50 ~ 23:59 | 00:00 | 00:01 峰值 | 00:04 峰值 | 00:02 ~ 00:09 稳态 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `activities-10139` | 7 | 11 | 44 | 63 | 44 |
+| `activities-10206` | 9 | 9 | 40 | 64 | 40 |
+| `activities-10212` | 60 | 60 | 60 | 87 | 59 ~ 60 |
+| `activities-10221` | 108 | 111 | 124 | 135 | 108 ~ 117 |
+
+主驱动维度为 `user_ext1=act_<id>_<action>_req`，每个活动开放后会有一组新的 `<action>` 涌入，叠加在原有 redis 调用上。
+
+#### c.4 漏剥 `callee_container` 量化
+
+业务自定义 `sum_without_ip_*` 漏剥 `callee_container` 是本案主凶。
+对单一 `service_name`、单一 `callee_service` 加上 `callee_container` 维度展开，能直接量化漏剥规模：
+
+```promql
+sum by (callee_service, callee_container) (
+  sum_over_time(sum_without_ip_rpc_client_handled_total{
+    service_name="activity-microservices.activities-60017",
+    callee_service=~"trpc.hpjy.activity-microservices.amspkg|trpc.hpjy.activity-microservices.campamspkg"
+  }[1m])
+)
+```
+
+00:01 时返回 ~1400 条按 `callee_container` 切分的细分序列，且 23:59 之前为 null，与 `★` 标记一致。
+
+### d. 总账
 
 `新增 series ≈ ΔC × R`，R 取上报该指标的服务副本数：
 
@@ -193,9 +278,9 @@ topk(5, sum_over_time( <metric>{ <边> }[1h] ))
 `跨 4 类 = client._total + client._seconds_count + client._seconds_sum + client._seconds_bucket`
 （按 14 个分桶估算）= 17 倍，被调端同理已合并到此列。
 
-### d. 优化建议
+### e. 优化建议
 
-#### d.1 动作清单
+#### e.1 动作清单
 
 | service_name | 剥离维度 | 单 metric 节省 | 跨 4 类 metric 合计节省 |
 | --- | --- | ---: | ---: |
@@ -203,7 +288,7 @@ topk(5, sum_over_time( <metric>{ <边> }[1h] ))
 | `activity-microservices.activities-10221` | `callee_container` | ≈ 108 K | ≈ 1.83 M |
 | `activity-microservices.activities-*`（全部活动服务） | `user_ext1` | ≈ 17 K | ≈ 290 K |
 
-#### d.2 各动作收益来源
+#### e.2 各动作收益来源
 
 - **`activities-60017` 剥 `callee_container`**：消减 `60017` → `amspkg`（154 K）与
   `60017` → `campamspkg`（96 K）两条边里 ~800 个被调 pod 名带来的展开。
@@ -212,7 +297,7 @@ topk(5, sum_over_time( <metric>{ <边> }[1h] ))
   合并为单一空值，覆盖各活动 → `redis-data` / `msgcenter.forward` / `hpyd.php.inner.formal`
   等边内的乘法放大。
 
-#### d.3 推荐止损路径
+#### e.3 推荐止损路径
 
 单次 PR 在以下两个 `service_name` 的剥离规则中追加 `callee_container`：
 
