@@ -156,29 +156,13 @@ sum(increase(bkmonitor:vm_new_timeseries_created_total{bk_monitor_name="monitor-
 - **现象**：0 点单 metric 新增 ≈ 616 K series，跨 4 类 RPC metric ≈ 8.0 M。
 - **真正诱因**：`activities-60017` / `activities-10221` 调向 AMS 域被调的 3 条边
   - `amspkg` / `campamspkg` / `amshostpkg`，合计 ≈ 467 K（76 %）
+  - AMS 域被调指标里带 `callee_container`（被调 pod 名，≈ 800 个值），构成 800 倍扇出乘子
 - **缓解动作**：给这两个服务的业务自定义指标追加去除 `callee_container`
   - 单次 PR 即可消减 ≈ 467 K / 6.08 M
+- **用户原始线索**：`activities-10139` / `activities-10206` 链路只占 ≈ 60 K（10 %）
+  - 引入的下游边都是低基数（`redis-data` / `msgcenter` / `msgcenter.forward`），不是大头
 
-### b. 关键结论
-
-- 用户原始关注的 `activities-10139` / `activities-10206` 链路只占 ≈ 60 K（10 %）
-  - 这两条链路引入的下游边都是低基数（`redis-data` / `msgcenter` / `msgcenter.forward`）
-  - 新值仅来自常规 `user_ext1=act_<id>_*_req`，规模与活动级业务量级一致，不是大头
-- 真正的大头来自 `activities-60017` / `activities-10221` 调向 AMS 域被调的 3 条边
-  - AMS 域被调上报指标时带了 `callee_container` 维度（被调 pod 名，≈ 800 个值），构成 800 倍扇出乘子
-- series 暴涨按边分两类，归因不同但缓解动作一致：
-  - **全新边**：`10221` → `amshostpkg`、`60017` → `campamspkg`、`60017` → `hpyd.php.inner.formal`
-    - 边在 0 点前完全未上报
-    - 新值由 `callee_container`（≈ 800 pod）/ `callee_method` 等高基数维度直接展开
-  - **已有边被放大**：`60017` → `amspkg`，series 从 540 跳到 2601
-    - 30 min 窗口内 `callee_container` 值集合**几乎不变**，它只是 800 倍**扇出乘子**
-    - 真正的「新值」是活动期出现的 `code=err_101` 与 `user_ext1=act_60017_check_in_req`
-- 不论是哪一类，性价比最高的缓解动作都是给业务自定义 `sum_without_ip_*` 追加去除 `callee_container`：
-  - 全新边：直接消除 ≈ 800 个 series
-  - 已有边放大：切断扇出乘子，上层 `code` / `user_ext1` 即使继续出现新值，也只能各产生一条 series
-- 仅给 `activities-60017` 与 `activities-10221` 追加 `callee_container` 去除规则即可消减 **≈ 467 K（占总量 76 %）**，单 PR 即可让 VM 入库延迟恢复
-
-### c. 调用拓扑
+### b. 调用拓扑
 
 0 点 16 个 activities 子服务经统一入口 `msgcenter` / `msgcenter-camp` 同时开始上报，自身边的 ΔC 上升，并连带下游被调的 ΔC 一起上升。
 
@@ -247,11 +231,11 @@ sum(increase(bkmonitor:vm_new_timeseries_created_total{bk_monitor_name="monitor-
 - `msgcenter` → 12 个其他活动子服务 ΔC 合计 49：≈ 23.5 K series，都是常规活动入口流量。
 - 这两项 0 点新增合计约 51 K（< 9 %），已纳入「其他放量」总账，不单独跑 PromQL 拆解。
 
-### d. 关键边 series 跳变佐证
+### c. 关键边 series 跳变佐证
 
 `step=1m`，窗口 `2026-02-15 23:50 → 2026-02-16 00:09 +0800`，单位 = 该 1 min 内边上的独立 series 数。
 
-#### d.1 入口边：`msgcenter` → `activities.{10139, 10206, 10221}`
+#### c.1 入口边：`msgcenter` → `activities.{10139, 10206, 10221}`
 
 ```promql
 count by (callee_service) (
@@ -268,7 +252,7 @@ count by (callee_service) (
 | `activities.10206` | null | 2 | 12 | 10 ~ 15 | 全新边 |
 | `activities.10221` | 17 ~ 19 | 18 | 19 | 19 ~ 23 | 已有边轻微放大 |
 
-#### d.2 多活动放大边：`activities-*` → `redis-data`
+#### c.2 多活动放大边：`activities-*` → `redis-data`
 
 ```promql
 count by (service_name, callee_service) (
@@ -288,7 +272,7 @@ count by (service_name, callee_service) (
 
 驱动维度是 `user_ext1=act_<id>_<action>_req`，每个活动开放后会出现一组新的 `<action>`，叠加在原有 redis 调用上。
 
-#### d.3 全新边：`callee_container` 直接展开为 800 倍
+#### c.3 全新边：`callee_container` 直接展开为 800 倍
 
 `10221 → amshostpkg` 与 `60017 → campamspkg` 是当晚首次出现的边，0 点前 series 数为 0，0 点后一次性出现 ≈ 800 个 `callee_container` 值，构成新值本身。
 
@@ -308,7 +292,7 @@ count by (service_name, callee_service, callee_container) (
 
 这两条边里 `callee_container` 既是新值也是扇出来源，去除它能消减全部增量。
 
-#### d.4 已有边放大：辨析驱动维度 vs 扇出乘子（`60017 → amspkg`）
+#### c.4 已有边放大：辨析驱动维度 vs 扇出乘子（`60017 → amspkg`）
 
 这条边 23:50 已有 ≈ 440 series 稳态，0:01 跳到 2601，乍看像 `callee_container` ≈ 800 pod 主导，但拉开看 container 值集合在 0 点前后基本不变——它是乘子，不是驱动。
 
@@ -374,7 +358,7 @@ count by (code, user_ext1) (
   - 去除 `callee_container`，直接砍掉 800 倍扇出，无论上层维度新增什么都展开不出来
   - 再追加「`code != 0` 时才上报 `user_ext1`」的业务方上报规则，可压缩残余增量
 
-### e. 总账
+### d. 总账
 
 `新增 series ≈ ΔC × R`，R 取上报该指标的服务副本数：
 
@@ -382,7 +366,7 @@ count by (code, user_ext1) (
 - 被调端（发出 `rpc_server_handled_total`）：R = 被调服务副本
   - 本 APM 仅 `msgcenter` / `msgcenter-camp` 上报 `rpc_server_handled_total`，其他被调不计入
 
-#### e.1 单 metric 与跨 4 类总账
+#### d.1 单 metric 与跨 4 类总账
 
 | 范围                                                                          |         主调端 |         被调端 | 单 metric 合计 | 跨 4 类 RPC metric 合计 |
 |-----------------------------------------------------------------------------|------------:|------------:|------------:|--------------------:|
@@ -397,9 +381,9 @@ count by (code, user_ext1) (
 - 合计乘子 = 1 + 1 + 1 + 10 = **13**
 - 被调端 8.6 K 同样按该乘子展开（≈ 0.11 M），已合并到上表「跨 4 类 RPC metric 合计」列
 
-#### e.2 按主调服务逐项
+#### d.2 按主调服务逐项
 
-出边明细见 `c. 调用拓扑` 中各主调子树的 `--> callee_service=…  ΔC=…` 行。
+出边明细见 `b. 调用拓扑` 中各主调子树的 `--> callee_service=…  ΔC=…` 行。
 
 | 主调 `service_name`       |   R |    ΔC 合计 |  主调端 series |
 |-------------------------|----:|---------:|------------:|
@@ -412,9 +396,9 @@ count by (code, user_ext1) (
 | `activities-60017`      | 120 |     2343 |     281.2 K |
 | **主调端合计**               |   — | **3588** | **≈ 607 K** |
 
-### f. 缓解动作
+### e. 缓解动作
 
-#### f.1 动作清单
+#### e.1 动作清单
 
 按节省量降序，所有动作落点都在业务自定义 `sum_without_ip_*` 的去除规则中追加新维度：
 
@@ -432,7 +416,7 @@ count by (code, user_ext1) (
 
 二期 `user_ext1`（≈ 17 K / ≈ 0.22 M，< 3 %）留作业务监控诉求一并评估，单独发起意义不大。
 
-#### f.2 一期收益拆解
+#### e.2 一期收益拆解
 
 - **`activities-60017` 去除 `callee_container`**（R=120，合计 ≈ 251 K）：
   - `60017` → `campamspkg`（800 ΔC × 120 = 96 K，[NEW EDGE]）：800 个 container 是真新值，去除后整条边收敛
