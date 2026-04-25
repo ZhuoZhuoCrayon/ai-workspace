@@ -231,35 +231,7 @@ count by (callee_service) (
 | `activities.10206` | null | 2 | 12 | 10 ~ 15 | 全新边 |
 | `activities.10221` | 17 ~ 19 | 18 | 19 | 19 ~ 23 | 已有边轻微放大 |
 
-#### c.2 高基数边：`activities-{10221, 60017}` → AMS 域被调
-
-```promql
-count by (service_name, callee_service) (
-  sum_over_time(sum_without_ip_rpc_client_handled_total{
-    service_name=~"activity-microservices.activities-10221|activity-microservices.activities-60017",
-    callee_service=~"trpc.hpjy.activity-microservices.amshostpkg|trpc.hpjy.activity-microservices.amspkg|trpc.hpjy.activity-microservices.campamspkg"
-  }[1m])
-)
-```
-
-| `service_name` → `callee_service` | 23:50 ~ 23:59 | 00:01 峰值 | 00:02 ~ 00:09 稳态 | 形态 |
-| --- | ---: | ---: | ---: | --- |
-| `10221` → `amshostpkg` | null | 803 | 800 ~ 830 | 全新边，~800 个 `callee_container` 集中涌入 |
-| `60017` → `amspkg` | 440 ~ 540 | 2601 | 1020 ~ 1570 | 已有边被放大，叠加新 `callee_container` |
-| `60017` → `campamspkg` | null | 794 | 597 ~ 717 | 全新边，~600 个 `callee_container` 集中涌入 |
-
-将 `callee_container` 加入 `by`，可看到 ~800 个 container 值在 00:01 同时点亮：
-
-```promql
-count by (service_name, callee_service, callee_container) (
-  sum_over_time(sum_without_ip_rpc_client_handled_total{
-    service_name="activity-microservices.activities-10221",
-    callee_service="trpc.hpjy.activity-microservices.amshostpkg"
-  }[1m])
-)
-```
-
-#### c.3 多活动放大边：`activities-*` → `redis-data`
+#### c.2 多活动放大边：`activities-*` → `redis-data`
 
 ```promql
 count by (service_name, callee_service) (
@@ -279,7 +251,7 @@ count by (service_name, callee_service) (
 
 主驱动维度为 `user_ext1=act_<id>_<action>_req`，每个活动开放后会有一组新的 `<action>` 涌入，叠加在原有 redis 调用上。
 
-#### c.4 全新边：`callee_container` 直接撑出 800 倍 fan-out
+#### c.3 全新边：`callee_container` 直接撑出 800 倍 fan-out
 
 `10221 → amshostpkg` 与 `60017 → campamspkg` 是当晚首次出现的边，0 点前 series 数为 0，0 点后一次性涌入 ~800 个 `callee_container` 值，构成新值本身
 
@@ -299,7 +271,7 @@ count by (service_name, callee_service, callee_container) (
 
 这两条边里 `callee_container` 既是新值也是 fan-out 来源，剥它能消减全部增量。
 
-#### c.5 已有边放大：辨析驱动 vs 乘子（`60017 → amspkg`）
+#### c.4 已有边放大：辨析驱动 vs 乘子（`60017 → amspkg`）
 
 这条边 23:50 已有 ~440 series 稳态，0:01 跳到 2601，乍看像 `callee_container` ~800 pod 主导，但拉开看会发现 container 的值集合在 0 点前后基本不变——它是乘子，不是驱动
 
