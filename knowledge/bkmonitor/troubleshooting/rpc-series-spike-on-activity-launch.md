@@ -3,7 +3,7 @@ title: 0 点活动上线导致 RPC 指标 series 暴涨
 tags: [apm, rpc, cardinality, series-spike, callee-container, sum-without-ip, fan-out]
 description: 通过 ΔC 边对比 + 维度拆解 + 新值/fan-out 乘子辨析，定位活动上线引发的 series 暴涨。callee_container 是 800 倍 fan-out 乘子，code/user_ext1 新值是诱因，剥 callee_container 是性价比最高的止损动作。
 created: 2026-04-25
-updated: 2026-04-25
+updated: 2026-04-26
 ---
 
 # 0 点活动上线导致 RPC 指标 series 暴涨
@@ -107,14 +107,14 @@ count by (<新值维度 1>, <新值维度 2>) (
 
 #### 步骤 7：跨 metric 家族放大
 
-每条 `(edge × label combo)` 实际产生 17 条 series：
+每条 `(edge × label combo)` 在 4 类 RPC metric 上同时上报，实际 series 数 = 单 metric × 乘子：
 
 ```text
-1 × _total + 1 × _seconds_count + 1 × _seconds_sum + N × _seconds_bucket
-（默认 N=14：11 个分桶 + +Inf + 客户端首发 0 桶 + ...）
+乘子 = 1 × _total + 1 × _seconds_count + 1 × _seconds_sum + N × _seconds_bucket
+N = 直方图 le 标签的取值数（含 +Inf）
 ```
 
-总量估算：`单 metric 新增 × 17`。
+实际跑业务时去 callee 应用拉一条原始 histogram 的 `le` 标签集合数即可，本案例 N=10，乘子 = 13。
 
 ### c. 结果输出建议
 
@@ -130,13 +130,17 @@ count by (<新值维度 1>, <新值维度 2>) (
 > - 业务：APM 应用 `hpjy-microservices-activities-production`（biz_id `-4228598`）
 > - 时间：`2026-02-16 00:00 +0800`
 > - 分析指标：`sum_without_ip_rpc_client_handled_total`
-> - 副本数：`msgcenter` / `msgcenter-camp` = 240，`activities-*` = 120
+> - 副本数：
+>   - `msgcenter`=480，`msgcenter-camp`=40
+>   - `activities-{10139,10206,10212,10221}`=240
+>   - `activities-60017`=120，其他 `activities-*`=120
+> - histogram bucket：`le` 标签 10 个值（含 `+Inf`），跨 4 类 RPC metric 乘子 = 13
 
 ### a. 关键结论
 
-- 0 点新增 series ≈ **454 K**（单 `rpc_client_handled_total`），跨 4 类 RPC metric ≈ **7.7 M**
-- 用户原始关注的 `activities-10139` / `activities-10206` 链路只占 35 K（8 %）
-- 真正的大头来自 `activities-60017` / `activities-10221` 调向 AMS 域服务的几条边
+- 0 点新增 series ≈ **616 K**（单 `rpc_client_handled_total`），跨 4 类 RPC metric ≈ **8.0 M**
+- 用户原始关注的 `activities-10139` / `activities-10206` 链路只占 60 K（10 %）
+- 真正的大头来自 `activities-60017` / `activities-10221` 调向 AMS 域服务的几条边（`amspkg`/`campamspkg`/`amshostpkg`，合计 ≈ 467 K，76 %）
 - series 暴涨形态分两类，归因不同但止损动作一致：
   - **全新边**：`10221` → `amshostpkg`、`60017` → `campamspkg`、`60017` → `hpyd.php.inner.formal`
     - 边在 0 点前完全未点亮
@@ -147,7 +151,7 @@ count by (<新值维度 1>, <新值维度 2>) (
 - 不论形态，最高性价比的止损都是给业务自定义 `sum_without_ip_*` 追加 `callee_container` 剥离：
   - 全新边：直接消除 ~800 个 series
   - 已有边放大：切断 fan-out 乘子，让上层 `code` / `user_ext1` 怎么涌也压不出来
-- 仅给 `activities-60017` 与 `activities-10221` 加 `callee_container` 剥离即可消减 **≈ 359 K（占总量 79 %）**，单 PR 即可让 VM 入库延迟恢复
+- 仅给 `activities-60017` 与 `activities-10221` 加 `callee_container` 剥离即可消减 **≈ 467 K（占总量 76 %）**，单 PR 即可让 VM 入库延迟恢复
 
 ### b. 级联拓扑
 
@@ -161,27 +165,27 @@ count by (<新值维度 1>, <新值维度 2>) (
 - `--> callee_service=…` 是它的一条出边。
 
 ```text
-[service_name=activity-microservices.msgcenter]   (R=240)
+[service_name=activity-microservices.msgcenter]   (R=480)
 ├── --> callee_service=trpc.hpjy.activity-microservices.activities.10139         ΔC=25  [NEW SERVICE]
 │
-│   [service_name=activity-microservices.activities-10139]   (R=120)
+│   [service_name=activity-microservices.activities-10139]   (R=240)
 │   ├── --> callee_service=trpc.hpjy.activity-microservices.redis-data           ΔC=56   driver: user_ext1=act_10139_{assist|roll|send}_req
 │   ├── --> callee_service=trpc.hpjy.activity-microservices.msgcenter            ΔC=8
 │   └── --> callee_service=trpc.hpjy.activitymicroservices.msgcenter.forward     ΔC=7
 │
 ├── --> callee_service=trpc.hpjy.activity-microservices.activities.10206         ΔC=16  [NEW SERVICE]
 │
-│   [service_name=activity-microservices.activities-10206]   (R=120)
+│   [service_name=activity-microservices.activities-10206]   (R=240)
 │   ├── --> callee_service=trpc.hpjy.activity-microservices.redis-data           ΔC=54   driver: user_ext1=act_10206_{click|feed}_req
 │   ├── --> callee_service=trpc.hpjy.activity-microservices.msgcenter            ΔC=9
 │   └── --> callee_service=trpc.hpjy.activitymicroservices.msgcenter.forward     ΔC=1
 │
 ├── --> callee_service=trpc.hpjy.activity-microservices.activities.10212         ΔC=4
-│   [service_name=activity-microservices.activities-10212]   (R=120)
+│   [service_name=activity-microservices.activities-10212]   (R=240)
 │   └── --> callee_service=trpc.hpjy.activity-microservices.redis-data           ΔC=38   driver: user_ext1=act_10212_*_req
 │
 ├── --> callee_service=trpc.hpjy.activity-microservices.activities.10221         ΔC=5
-│   [service_name=activity-microservices.activities-10221]   (R=120)
+│   [service_name=activity-microservices.activities-10221]   (R=240)
 │   ├── --> callee_service=trpc.hpjy.activity-microservices.amshostpkg           ΔC=899  [NEW EDGE] driver: callee_container ~800 pods
 │   ├── --> callee_service=trpc.hpjy.activity-microservices.redis-data           ΔC=40   driver: user_ext1=act_10221_*_req
 │   ├── --> callee_service=trpc.hpjy.activitymicroservices.msgcenter.forward     ΔC=7
@@ -194,7 +198,7 @@ count by (<新值维度 1>, <新值维度 2>) (
 ├── --> callee_service=trpc.hpjy.activity-microservices.producer_wx              ΔC=8
 └── --> callee_service=trpc.cj.trpc2s.activitysvr                                ΔC=4
 
-[service_name=activity-microservices.msgcenter-camp]   (R=240?)
+[service_name=activity-microservices.msgcenter-camp]   (R=40)
 ├── --> callee_service=trpc.hpjy.activity-microservices.activities.60009         ΔC=1
 ├── --> callee_service=trpc.hpjy.activity-microservices.activities.60014         ΔC=1
 └── --> callee_service=trpc.hpjy.activity-microservices.activities.60017         ΔC=4
@@ -337,39 +341,58 @@ count by (code, user_ext1) (
 
 `新增 series ≈ ΔC × R`，R 取上报该指标的服务副本数：
 
-- 主调端（发出 `rpc_client_handled_total`）：R = 主调服务副本。
-- 被调端（发出 `rpc_server_handled_total`）：R = 被调服务副本，本 APM 仅 `msgcenter` / `msgcenter-camp` 暴露 server metric，其他被调端不计入。
+- 主调端（发出 `rpc_client_handled_total`）：R = 主调服务副本
+- 被调端（发出 `rpc_server_handled_total`）：R = 被调服务副本
+  - 本 APM 仅 `msgcenter` / `msgcenter-camp` 暴露 server metric，其他被调端不计入
+
+#### d.1 按 caller 端逐项
+
+出边明细见 `b. 级联拓扑` 中各 caller 子树的 `--> callee_service=…  ΔC=…` 行。
+
+| caller `service_name` | R | ΔC 合计 | 主调端 series |
+| --- | ---: | ---: | ---: |
+| `msgcenter` | 480 | 119 | 57.1 K |
+| `msgcenter-camp` | 40 | 6 | 0.24 K |
+| `activities-10139` | 240 | 71 | 17.0 K |
+| `activities-10206` | 240 | 64 | 15.4 K |
+| `activities-10212` | 240 | 38 | 9.1 K |
+| `activities-10221` | 240 | 947 | 227.3 K |
+| `activities-60017` | 120 | 2343 | 281.2 K |
+| **主调端合计** | — | **3588** | **≈ 607 K** |
+
+#### d.2 单 metric 与跨 4 类总账
 
 | 范围 | 主调端 | 被调端 | 单 metric 合计 | 跨 4 类 RPC metric 合计 |
 | --- | ---: | ---: | ---: | ---: |
-| `10139` / `10206` 链路 | 26 K | 9 K | ≈ 35 K | ≈ 595 K |
-| 其他活动 ramp（`10212` / `10221` / `60017` / `msgcenter` 放大） | 414 K | 5 K | ≈ 419 K | ≈ 7.12 M |
-| **合计** | **440 K** | **14 K** | **≈ 454 K** | **≈ 7.7 M** |
+| `10139` / `10206` 链路 | 52.1 K | 8.1 K | ≈ 60 K | ≈ 0.78 M |
+| 其他 ramp（`10212` / `10221` / `60017` / `msgcenter` / `msgcenter-camp` 放大） | 555.3 K | 0.5 K | ≈ 556 K | ≈ 7.23 M |
+| **合计** | **≈ 607 K** | **≈ 8.6 K** | **≈ 616 K** | **≈ 8.0 M** |
 
-「跨 4 类」展开如下：
+「跨 4 类」乘子：
 
-- 计数类：`client._total`、`client._seconds_count`、`client._seconds_sum`
-- 直方图：`client._seconds_bucket`（按 14 分桶估算）
-- 合计 17 倍，被调端同理已合并到此列
+- 计数类：`client._total` / `client._seconds_count` / `client._seconds_sum`，各贡献 1 倍
+- 直方图：`client._seconds_bucket`，每个 `le` 值一条 series，本案 `le` 共 10 个值（含 `+Inf`）
+- 合计乘子 = 1 + 1 + 1 + 10 = **13**，被调端同理已合并到此列
 
 ### e. 优化建议
 
 #### e.1 动作清单
 
-| service_name | 剥离维度 | 单 metric 节省 | 跨 4 类 metric 合计节省 |
+| service_name | 剥离维度 | 单 metric 节省 | 跨 4 类 metric 合计节省（×13） |
 | --- | --- | ---: | ---: |
-| `activity-microservices.activities-60017` | `callee_container` | ≈ 251 K | ≈ 4.27 M |
-| `activity-microservices.activities-10221` | `callee_container` | ≈ 108 K | ≈ 1.83 M |
-| `activity-microservices.activities-*`（全部活动服务） | `user_ext1` | ≈ 17 K | ≈ 290 K |
+| `activity-microservices.activities-60017` | `callee_container` | ≈ 251 K | ≈ 3.27 M |
+| `activity-microservices.activities-10221` | `callee_container` | ≈ 216 K | ≈ 2.81 M |
+| `activity-microservices.activities-*`（全部活动服务） | `user_ext1` | ≈ 17 K | ≈ 0.22 M |
 
 #### e.2 各动作收益来源
 
-- **`activities-60017` 剥 `callee_container`**：
-  - `60017` → `campamspkg`（96 K，[NEW EDGE]）：800 个 container 是真新值，剥后整条边收敛
-  - `60017` → `amspkg`（154 K，已有边放大）：
+- **`activities-60017` 剥 `callee_container`**（R=120）：
+  - `60017` → `campamspkg`（800 ΔC × 120 = 96 K，[NEW EDGE]）：800 个 container 是真新值，剥后整条边收敛
+  - `60017` → `amspkg`（1293 ΔC × 120 = 155 K，已有边放大）：
     - container 是 800 倍 fan-out 乘子
     - 剥后即使 `code=err_101` 与 `user_ext1=check_in_req` 等新值继续涌入也只能各打出一条 series，整条边压回单位数
-- **`activities-10221` 剥 `callee_container`**：消减 `10221` → `amshostpkg`（108 K，[NEW EDGE]）一条边里 ~800 个被调 pod 名展开
+- **`activities-10221` 剥 `callee_container`**（R=240）：
+  - `10221` → `amshostpkg`（899 ΔC × 240 = 216 K，[NEW EDGE]）：消减 ~800 个被调 pod 名展开
 - **`activities-*` 剥 `user_ext1`**：
   - 把所有活动服务上报的 `user_ext1=act_<id>_<action>_req` 合并为单一空值
   - 覆盖各活动 → `redis-data` / `msgcenter.forward` / `hpyd.php.inner.formal` 等边内的乘法放大
@@ -385,8 +408,8 @@ activity-microservices.activities-60017
 activity-microservices.activities-10221
 ```
 
-预计立刻消减 ≈ **359 K**（占 0 点单 metric 新增量 79 %）/ ≈ **6.1 M** 跨 4 类 metric。
+预计立刻消减 ≈ **467 K**（占 0 点单 metric 新增量 76 %）/ ≈ **6.08 M** 跨 4 类 metric。
 
 VM 入库延迟可恢复。
 
-`user_ext1` 优化（≈ 17 K / ≈ 290 K，占比 < 5 %）留作二期，可结合活动级业务监控诉求一并评估。
+`user_ext1` 优化（≈ 17 K / ≈ 0.22 M，占比 < 3 %）留作二期，可结合活动级业务监控诉求一并评估。
