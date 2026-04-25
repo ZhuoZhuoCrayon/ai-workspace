@@ -1,7 +1,7 @@
 ---
 title: 0 点活动上线导致 RPC 指标 series 暴涨
-tags: [apm, rpc, cardinality, series-spike, callee-container, sum-without-ip]
-description: 通过 ΔC 边对比 + 维度拆解 + 隐藏维度识别，定位活动上线引发的 series 暴涨主凶为业务自定义 sum_without_ip_* 漏剥 callee_container
+tags: [apm, rpc, cardinality, series-spike, callee-container, sum-without-ip, fan-out]
+description: 通过 ΔC 边对比 + 维度拆解 + 新值/fan-out 乘子辨析，定位活动上线引发的 series 暴涨。callee_container 是 800 倍 fan-out 乘子，code/user_ext1 新值是诱因，剥 callee_container 是性价比最高的止损动作。
 created: 2026-04-25
 updated: 2026-04-25
 ---
@@ -49,19 +49,14 @@ count by (service_name, callee_service) (
 
 新边可能挂在已有根（如统一入口服务）下，识别后才能正确解读"为什么这些活动同时被点亮"。
 
-#### 步骤 3：对 ΔC 最大的边做维度拆解，验证主驱动
+#### 步骤 3：先把每条新增/放大的边按形态分类
 
-```promql
-count by (callee_method, caller_method, caller_service,
-          code, code_type, user_ext1, user_ext2, user_ext3) (
-  sum_over_time( <metric>{ <边> }[1h] )
-)
-```
+| 形态 | 判定 | 含义 |
+| --- | --- | --- |
+| **全新边** | `C_before = 0, C_after > 0` | 前 30 min 完全未上报，0 点出现的 series 全是「新值」，直接看哪个维度 fan-out 最大 |
+| **已有边放大** | `C_before > 0, C_after >> C_before` | 前 30 min 已稳态运行，0 点 ΔC 突变，需要分辨「新值驱动」和「fan-out 乘子」 |
 
-每行 count 值 = 该 (group by 字段组合) 下的 series 数。
-
-- 若每行 count = 1：`group by` 字段已覆盖全部变化维度，C 等于行数。
-- 若 `sum-of-counts ≠ 行数`：**还有未列入 group by 的隐藏维度**，进入步骤 4。
+两类形态的归因路径完全不同，混在一起讲会得出错误结论。
 
 #### 步骤 4：识别隐藏维度
 
@@ -77,14 +72,40 @@ topk(5, sum_over_time( <metric>{ <边> }[1h] ))
 
 该标签仅在 callee 是 IEG-AMS 域 tRPC-Go 服务时出现，单边可贡献 800 倍展开。
 
-#### 步骤 5：把 ΔC 折算回原始指标 series
+#### 步骤 5：分辨"新值驱动"和"fan-out 乘子"
+
+仅对"已有边放大"做。对每个候选维度独立跑 `count by`，跨 0 点：
+
+```promql
+count by (<dim>) (sum_over_time( <metric>{ <边> }[1m] ))
+```
+
+| 现象 | 维度角色 | 处理 |
+| --- | --- | --- |
+| 维度值集合**扩大**（0 点后出现新值） | **新值驱动**——业务诱因 | 重点关注是哪个新值（如新 `code`、新 `user_ext1`） |
+| 维度值集合**不变**，但每个值的覆盖率/频次提升 | **fan-out 乘子**——基数放大器 | 关注剥它能消减多少 series |
+| 维度只有少数固定值且不变 | 无关 | 忽略 |
+
+确认新值之间的乘法关系：
+
+```promql
+count by (<新值维度 1>, <新值维度 2>) (
+  sum_over_time( <metric>{ <边> }[1m] )
+)
+```
+
+> **常见误区**：高基数维度（如 `callee_container` ~800 pod 名）很容易被误标为「主凶」
+>
+> 但如果 30m 窗口内值集合不变，它只是**乘子**——剥掉收益巨大，但不能解释「为什么 0 点突变」，真正的诱因永远在新值驱动里
+
+#### 步骤 6：把 ΔC 折算回原始指标 series
 
 `新增 series ≈ ΔC × R`，R 取上报该指标的服务副本数：
 
 - 主调端（发出 `rpc_client_handled_total`）：`R = 主调副本数`。
 - 被调端（发出 `rpc_server_handled_total`）：`R = 被调副本数`，仅当 callee 在本 APM 暴露 server metric 时才计入，外部 callee 不入账。
 
-#### 步骤 6：跨 metric 家族放大
+#### 步骤 7：跨 metric 家族放大
 
 每条 `(edge × label combo)` 实际产生 17 条 series：
 
@@ -97,24 +118,36 @@ topk(5, sum_over_time( <metric>{ <边> }[1h] ))
 
 ### c. 结果输出建议
 
-- 用一棵以级联根为顶点的拓扑树展示所有受影响边，标 `[NEW SERVICE]` / `★（隐藏维度主导）` / `driver: <主驱动维度>`。
+- 用一棵以级联根为顶点的拓扑树展示所有受影响边，按形态标注：
+  - `[NEW SERVICE]` / `[NEW EDGE]`：边在 0 点前完全未点亮。
+  - `★ multiplier: <维度>`：已有边被某个高基数维度 fan-out 撑大。
+  - `driver: <新值维度>`：真正出现新值的维度（业务诱因）。
 - 总账分主调端 / 被调端 / 单 metric / 跨 4 类 metric 四列。
 - 优化建议按 `service_name + 剥离维度` 描述，按节省量降序，给出单次 PR 可砍多少。
 
 ## 0x02 结论（本案）
 
-> 业务：APM 应用 `hpjy-microservices-activities-production`（biz_id `-4228598`），
-> 时间 `2026-02-16 00:00 +0800`，
-> 分析指标 `sum_without_ip_rpc_client_handled_total`，
-> 副本数 `msgcenter` / `msgcenter-camp` = 240，`activities-*` = 120。
+> - 业务：APM 应用 `hpjy-microservices-activities-production`（biz_id `-4228598`）
+> - 时间：`2026-02-16 00:00 +0800`
+> - 分析指标：`sum_without_ip_rpc_client_handled_total`
+> - 副本数：`msgcenter` / `msgcenter-camp` = 240，`activities-*` = 120
 
 ### a. 关键结论
 
-- 0 点新增 series ≈ **454 K**（单 `rpc_client_handled_total`），跨 4 类 RPC metric ≈ **7.7 M**。
-- 主凶不是用户原始关注的 `activities-10139` / `activities-10206` 链路（仅 35 K，8 %），
-  而是业务自定义的 `sum_without_ip_*` **漏剥了 `callee_container`（被调 pod 名）**。
-- 仅 `activities-60017` 与 `activities-10221` 两个 `service_name` 上报的 `callee_container` 泄漏，就贡献了 **≈ 359 K，占总量 79 %**。
-- 立即止损：单 PR 给这 2 个 `service_name` 追加 `callee_container` 剥离规则，VM 入库延迟可恢复。
+- 0 点新增 series ≈ **454 K**（单 `rpc_client_handled_total`），跨 4 类 RPC metric ≈ **7.7 M**
+- 用户原始关注的 `activities-10139` / `activities-10206` 链路只占 35 K（8 %）
+- 真正的大头来自 `activities-60017` / `activities-10221` 调向 AMS 域服务的几条边
+- series 暴涨形态分两类，归因不同但止损动作一致：
+  - **全新边**：`10221` → `amshostpkg`、`60017` → `campamspkg`、`60017` → `hpyd.php.inner.formal`
+    - 边在 0 点前完全未点亮
+    - 新值由 `callee_container`（~800 pod）/ `callee_method` 等高基数维度直接撑出
+  - **已有边被放大**：`60017` → `amspkg`，series 从 540 跳到 2601
+    - 30 min 窗口内 `callee_container` 值集合**几乎不变**，它只是 800 倍 fan-out **乘子**
+    - 真正的「新值」是活动期出现的 `code=err_101` 与 `user_ext1=act_60017_check_in_req`
+- 不论形态，最高性价比的止损都是给业务自定义 `sum_without_ip_*` 追加 `callee_container` 剥离：
+  - 全新边：直接消除 ~800 个 series
+  - 已有边放大：切断 fan-out 乘子，让上层 `code` / `user_ext1` 怎么涌也压不出来
+- 仅给 `activities-60017` 与 `activities-10221` 加 `callee_container` 剥离即可消减 **≈ 359 K（占总量 79 %）**，单 PR 即可让 VM 入库延迟恢复
 
 ### b. 级联拓扑
 
@@ -149,7 +182,7 @@ topk(5, sum_over_time( <metric>{ <边> }[1h] ))
 │
 ├── --> callee_service=trpc.hpjy.activity-microservices.activities.10221         ΔC=5
 │   [service_name=activity-microservices.activities-10221]   (R=120)
-│   ├── --> callee_service=trpc.hpjy.activity-microservices.amshostpkg           ΔC=899  ★ driver: callee_container ~800 pods
+│   ├── --> callee_service=trpc.hpjy.activity-microservices.amshostpkg           ΔC=899  [NEW EDGE] driver: callee_container ~800 pods
 │   ├── --> callee_service=trpc.hpjy.activity-microservices.redis-data           ΔC=40   driver: user_ext1=act_10221_*_req
 │   ├── --> callee_service=trpc.hpjy.activitymicroservices.msgcenter.forward     ΔC=7
 │   └── --> callee_service=trpc.hpjy.activity-microservices.msgcenter            ΔC=1
@@ -166,16 +199,16 @@ topk(5, sum_over_time( <metric>{ <边> }[1h] ))
 ├── --> callee_service=trpc.hpjy.activity-microservices.activities.60014         ΔC=1
 └── --> callee_service=trpc.hpjy.activity-microservices.activities.60017         ΔC=4
     [service_name=activity-microservices.activities-60017]   (R=120)
-    ├── --> callee_service=trpc.hpjy.activity-microservices.amspkg               ΔC=1293 ★ driver: callee_container ~800 pods
-    ├── --> callee_service=trpc.hpjy.activity-microservices.campamspkg           ΔC=800  ★ driver: callee_container ~800 pods
-    ├── --> callee_service=hpyd.php.inner.formal                                 ΔC=233   driver: callee_method × user_ext1=act_60017_*
+    ├── --> callee_service=trpc.hpjy.activity-microservices.amspkg               ΔC=1293 已有边放大 540→2601；driver: code=err_101 + user_ext1=check_in_req；multiplier: callee_container ~800 pods
+    ├── --> callee_service=trpc.hpjy.activity-microservices.campamspkg           ΔC=800  [NEW EDGE] driver: callee_container ~800 pods
+    ├── --> callee_service=hpyd.php.inner.formal                                 ΔC=233  [NEW EDGE] driver: callee_method × user_ext1=act_60017_*
     ├── --> callee_service=trpc.hpjy.activity-microservices.redis-data           ΔC=16
     └── --> callee_service=trpc.hpjy.activitymicroservices.msgcenter.forward     ΔC=1
 ```
 
-- `[NEW SERVICE]`：当晚首次上线的服务。
-- `★`：`callee_container` 主导的边，剥离后 ΔC 接近 0。
-- `driver`：该边主要被哪个保留维度放大。
+- `[NEW SERVICE]` / `[NEW EDGE]`：当晚首次上线的服务或当晚首次出现的调用边，所有 series 都是新值。
+- `driver`：该边上真正出现新值的维度，是业务诱因。
+- `multiplier`：该边上值集合不变、但提供 fan-out 倍数的高基数维度（剥离后 ΔC 大幅消减）。
 
 ### c. 关键边 series 跳变佐证
 
@@ -246,21 +279,87 @@ count by (service_name, callee_service) (
 
 主驱动维度为 `user_ext1=act_<id>_<action>_req`，每个活动开放后会有一组新的 `<action>` 涌入，叠加在原有 redis 调用上。
 
-#### c.4 漏剥 `callee_container` 量化
+#### c.4 全新边：`callee_container` 直接撑出 800 倍 fan-out
 
-业务自定义 `sum_without_ip_*` 漏剥 `callee_container` 是本案主凶。
-对单一 `service_name`、单一 `callee_service` 加上 `callee_container` 维度展开，能直接量化漏剥规模：
+`10221 → amshostpkg` 与 `60017 → campamspkg` 是当晚首次出现的边，0 点前 series 数为 0，0 点后一次性涌入 ~800 个 `callee_container` 值，构成新值本身
 
 ```promql
-sum by (callee_service, callee_container) (
+count by (service_name, callee_service, callee_container) (
   sum_over_time(sum_without_ip_rpc_client_handled_total{
-    service_name="activity-microservices.activities-60017",
-    callee_service=~"trpc.hpjy.activity-microservices.amspkg|trpc.hpjy.activity-microservices.campamspkg"
+    service_name=~"activity-microservices.activities-10221|activity-microservices.activities-60017",
+    callee_service=~"trpc.hpjy.activity-microservices.amshostpkg|trpc.hpjy.activity-microservices.campamspkg"
   }[1m])
 )
 ```
 
-00:01 时返回 ~1400 条按 `callee_container` 切分的细分序列，且 23:59 之前为 null，与 `★` 标记一致。
+| `service_name` → `callee_service` | 23:59 distinct container | 00:01 distinct container | 形态 |
+| --- | ---: | ---: | --- |
+| `10221` → `amshostpkg` | 0 | ~800 | [NEW EDGE]，container 是真驱动 |
+| `60017` → `campamspkg` | 0 | ~600 | [NEW EDGE]，container 是真驱动 |
+
+这两条边里 `callee_container` 既是新值也是 fan-out 来源，剥它能消减全部增量。
+
+#### c.5 已有边放大：辨析驱动 vs 乘子（`60017 → amspkg`）
+
+这条边 23:50 已有 ~440 series 稳态，0:01 跳到 2601，乍看像 `callee_container` ~800 pod 主导，但拉开看会发现 container 的值集合在 0 点前后基本不变——它是乘子，不是驱动
+
+##### 步骤 1：先看 `callee_container` 值集合是否扩大
+
+```promql
+count by (service_name, callee_service, callee_container) (
+  sum_over_time(sum_without_ip_rpc_client_handled_total{
+    service_name="activity-microservices.activities-60017",
+    callee_service="trpc.hpjy.activity-microservices.amspkg"
+  }[1m])
+)
+```
+
+| 指标 | 23:50 ~ 23:59 | 00:00 ~ 00:09 |
+| --- | ---: | ---: |
+| 累积去重 container 数 | 799 | 800 |
+| 两窗口交集 | — | 799 |
+
+> 30 min 窗口内 container 集合几乎不变（只多 1 个）——**容器不是新值，是乘子**
+
+##### 步骤 2：找真正出现新值的维度
+
+依次跑 `count by (<dim>)` 跨 0 点，对比每个候选维度的值集合：
+
+| 维度 | 23:59 已有值 | 00:01 新增值 | 角色 |
+| --- | --- | --- | --- |
+| `code` | `0` | `err_101`（活动期错误码） | **新值驱动** |
+| `user_ext1` | `act_60017_lottery_req` | `act_60017_check_in_req`（新增业务动作） | **新值驱动** |
+| `callee_method` | 12 个固定方法 | 0 | 无关 |
+| `caller_method` | 4 个固定方法 | 0 | 无关 |
+| `user_ext2` / `user_ext3` | 单值 | 0 | 无关 |
+
+##### 步骤 3：交叉切片量化每个新值的贡献
+
+```promql
+count by (code, user_ext1) (
+  sum_over_time(sum_without_ip_rpc_client_handled_total{
+    service_name="activity-microservices.activities-60017",
+    callee_service="trpc.hpjy.activity-microservices.amspkg"
+  }[1m])
+)
+```
+
+| (`code`, `user_ext1`) 组合 | 23:50 ~ 23:59 series | 00:01 series | Δseries | 占增量比 | 类型 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `0` × `lottery_req` | 410 | 799 | +389 | 19 % | 已有组合，container 覆盖率扩大 |
+| `0` × `check_in_req` | 30 | 757 | +727 | 35 % | **新值驱动**：`check_in_req` 业务上线 |
+| `err_101` × `lottery_req` | 0 | 719 | +719 | 35 % | **新值驱动**：`err_101` 错误码出现 |
+| `err_101` × `check_in_req` | 0 | 326 | +326 | 16 % | 两个新值叠加 |
+| **合计** | **440** | **2601** | **+2161** | 100 % | — |
+
+- 两个新值（`code=err_101` 与 `user_ext1=check_in_req`）合计贡献 86 % 的增量
+- 剩余 19 % 是已有组合 `(0, lottery_req)` 的 container 覆盖率从 410 涨到 799——同一个乘子在更多 container 上点亮
+
+##### 结论
+
+- 真正诱因：活动期上线 `check_in_req` 业务动作 + 引入 `err_101` 错误码
+- 真正放大器：800 个 `callee_container` 把每个新值扇出 800 倍
+- 止损动作：剥 `callee_container` 直接砍掉 800 倍 fan-out，无论上层维度新增什么都压不出来，再追加 `code != 0 时才上报 user_ext1` 的业务侧规约可压缩残量
 
 ### d. 总账
 
@@ -275,8 +374,11 @@ sum by (callee_service, callee_container) (
 | 其他活动 ramp（`10212` / `10221` / `60017` / `msgcenter` 放大） | 414 K | 5 K | ≈ 419 K | ≈ 7.12 M |
 | **合计** | **440 K** | **14 K** | **≈ 454 K** | **≈ 7.7 M** |
 
-`跨 4 类 = client._total + client._seconds_count + client._seconds_sum + client._seconds_bucket`
-（按 14 个分桶估算）= 17 倍，被调端同理已合并到此列。
+「跨 4 类」展开如下：
+
+- 计数类：`client._total`、`client._seconds_count`、`client._seconds_sum`
+- 直方图：`client._seconds_bucket`（按 14 分桶估算）
+- 合计 17 倍，被调端同理已合并到此列
 
 ### e. 优化建议
 
@@ -290,12 +392,17 @@ sum by (callee_service, callee_container) (
 
 #### e.2 各动作收益来源
 
-- **`activities-60017` 剥 `callee_container`**：消减 `60017` → `amspkg`（154 K）与
-  `60017` → `campamspkg`（96 K）两条边里 ~800 个被调 pod 名带来的展开。
-- **`activities-10221` 剥 `callee_container`**：消减 `10221` → `amshostpkg`（108 K）一条边里 ~800 个被调 pod 名展开。
-- **`activities-*` 剥 `user_ext1`**：把所有活动服务上报的 `user_ext1=act_<id>_<action>_req`
-  合并为单一空值，覆盖各活动 → `redis-data` / `msgcenter.forward` / `hpyd.php.inner.formal`
-  等边内的乘法放大。
+- **`activities-60017` 剥 `callee_container`**：
+  - `60017` → `campamspkg`（96 K，[NEW EDGE]）：800 个 container 是真新值，剥后整条边收敛
+  - `60017` → `amspkg`（154 K，已有边放大）：
+    - container 是 800 倍 fan-out 乘子
+    - 剥后即使 `code=err_101` 与 `user_ext1=check_in_req` 等新值继续涌入也只能各打出一条 series，整条边压回单位数
+- **`activities-10221` 剥 `callee_container`**：消减 `10221` → `amshostpkg`（108 K，[NEW EDGE]）一条边里 ~800 个被调 pod 名展开
+- **`activities-*` 剥 `user_ext1`**：
+  - 把所有活动服务上报的 `user_ext1=act_<id>_<action>_req` 合并为单一空值
+  - 覆盖各活动 → `redis-data` / `msgcenter.forward` / `hpyd.php.inner.formal` 等边内的乘法放大
+
+> 注：`callee_container` 这一动作对「已有边放大」场景的价值远高于直觉——它不靠预测业务会上什么新动作或新错误码，而是直接砍掉乘子，对未来类似活动也免疫
 
 #### e.3 推荐止损路径
 
