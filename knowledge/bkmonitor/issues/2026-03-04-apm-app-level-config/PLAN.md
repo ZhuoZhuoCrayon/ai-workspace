@@ -4,7 +4,7 @@ tags: [apm, service-config, log-relation, code-redefine, code-remark, app-level]
 issue: ./README.md
 description: 通过 ServiceBase 全局能力与 ApmMetaConfig 应用级备注配置，将日志关联、返回码重定义与返回码备注扩展到应用级别
 created: 2026-03-04
-updated: 2026-04-16
+updated: 2026-04-24
 ---
 
 # APM 支持应用级别配置 —— 实施方案
@@ -111,7 +111,8 @@ classDiagram
 
 - *[1]* `--` 代表不传 `service_name`。
 - *[2]* 返回结果附带 `is_global`，调用方据此区分来源。
-- *[3]* **向后兼容**：List API 默认不返回全局规则，旧前端不传参数时行为不变。
+- *[3]* **对外协议**：返回码重定义的 List API 默认返回全局规则，服务视角与应用视角都展示全局规则。
+- *[4]* **内部能力**：基类查询入口仍保留 `include_global` 开关，供非展示场景按需关闭。
 
 #### d-2. 返回码备注查询
 
@@ -171,14 +172,16 @@ flowchart LR
 | 服务级     | 具体服务名      | 仅匹配指定服务。                 |
 
 - *[1]* **不展开、不去重**：全局规则直接以通配符下发，由 bk-collector 运行时匹配，避免枚举所有服务。
-- *[2]* **优先级依赖 bk-collector**：服务级与全局规则同时存在时，需确保服务级优先生效（见风险 R2）。
+- *[2]* **优先级固定**：返回码重定义下发优先级统一为“服务级 > 全局”。
+- *[3]* **顺序表达优先级**：`build_code_relabel_config` 通过输出顺序表达优先级，越靠后优先级越高，因此同类规则下发时需保证“全局在前，服务在后”。
+- *[4]* **联调验证**：上线前仍需验证 bk-collector 确实按该顺序生效（见风险 R2）。
 
 ### g. 风险与约束
 
 | #  | 风险                                              | 等级       | 应对                                         |
 |:---|:------------------------------------------------|:---------|:-------------------------------------------|
 | R1 | 返回码重定义无联合唯一约束，并发写入可能重复                          | High     | 本期记为风险，后续独立 PR 修复。                         |
-| R2 | bk-collector `source="*"` 匹配优先级未确认              | Critical | [1] 上线前必须验证：下发全局 + 服务级规则，断言服务级优先生效。<br />[2] 若不支持，需调整方案。 |
+| R2 | bk-collector 是否按下发顺序生效仍需确认                   | Critical | [1] 方案侧已明确优先级为“服务级 > 全局”，并要求 `build_code_relabel_config` 输出时全局在前、服务在后。<br />[2] 上线前必须验证：下发全局 + 服务级规则，断言服务级最终覆盖全局。<br />[3] 若不支持，需调整方案。 |
 | R3 | 返回码备注若允许同一服务在相同 `(kind, code)` 下命中多条服务级记录，会导致服务视角读取歧义 | Medium | 服务视角 `set` 强制做“旧记录移除 + 新记录合并”，全局视角 `set` 校验 `service_names` 不重叠。 |
 | R4 | ORM 写入不经过 `full_clean`，`service_name` 无 `blank` | Low      | 无实际影响，记录备忘。                                |
 | R5 | `is_global` 查询可能不走索引                            | Low      | 数据量小，可接受。                                  |
@@ -237,14 +240,19 @@ flowchart LR
 - 参数：`service_name` 变为「可选」，不传服务名视为「应用级视图（全量）」。
 - 处理：调用 `get_relations` 获取配置。
 - 响应：规则增加 `is_global`、`service_names` 字段，不同服务相同规则按 `service_name` 聚合展示。
+- 返回：服务视角与应用视角都返回全局规则。
+- 全局规则聚合展示时使用 `service_names=[]`。
 
 *[2]*
 
 - 参数：规则新增 `service_names` 字段，外层 `service_name` 变为「可选」。
+- 约束：全局规则固定使用 `<is_global=true, service_names=[]>`，不使用 `[""]` 作为占位。
 - 处理：
   - 预处理：按 `service_names` 展开为逐服务的 `records`。
   - `service_name` 不传：`sync_relations(scope="all")`。
   - `service_name` 有值：`sync_relations(scope="service")`。
+- 字段语义：`callee` 场景下 `callee_server` 允许为空串，不再要求等于 `service_name`。
+- 下发时按既有通配语义处理。
 
 #### b-2. 业务约束
 
@@ -327,6 +335,7 @@ flowchart LR
 
 | 时间 | 对应设计片段 | 结论调整概要 | 改动 / 验证 |
 |:--|:--|:--|:--|
+| `2026-04-24 00:00` | `0x01.d-1` `0x01.f` `0x01.g` `0x02.b-1` | [1] 基于 PR review 收敛返回码重定义协议，明确服务视角与应用视角都返回全局规则<br />[2] 明确全局规则展示与写入统一使用 `<is_global=true, service_names=[]>`，不再使用 `[""]` 占位<br />[3] 明确 `callee` 场景下 `callee_server` 允许为空串，不再绑定 `service_name`<br />[4] 明确下发优先级为“服务级 > 全局”，并由 `build_code_relabel_config` 输出顺序表达 | [1] 已根据 PR 评论更新查询、写入与下发主干语义<br />[2] 已将 R2 从“优先级未确认”收敛为“需联调验证 collector 是否按顺序生效”<br />[3] 待实现侧按新协议收口 serializer 与 build config 逻辑 |
 | `2026-04-16 15:00` | `0x01.c` `0x01.d-2` `0x01.e-2` `0x02.c-1` `0x02.c-2` | [1] 同日持续打磨返回码备注方案，统一收敛 `0x01` 与 `0x02` 的职责边界<br />[2] `0x01` 改成面向评审的协议 / 场景描述，强调应用视角、服务视角与规则模型<br />[3] `0x02.c-1` 改成按文件归属的开发方案，`0x02.c-2` 改成按全局规则 / 服务规则展开写入处理<br />[4] 压缩 `c` 小节篇幅，把可结构化信息尽量收进表格 | [1] 已明确服务规则按 `kind + code + remark` 维护，并要求同一 `(kind, code)` 下 `service_names` 不重叠<br />[2] 已将默认备注补齐移回查询语义，把实现级步骤从 `0x01` 下沉到 `0x02`<br />[3] 已补充服务规则的数据特征、唯一键、写入约束和空规则清理<br />[4] 已通过 `check_doc_style.py` 与 `markdownlint-cli2` |
 | `2026-04-10 16:00` | `0x03.a` `0x03.b` `0x03.c` | [1] 将“日志关联、返回码重定义与返回码备注改造”拆分为两个交付阶段<br />[2] PR-3 聚焦日志关联与返回码重定义<br />[3] PR-4 单独承接返回码备注改造，以降低单 PR 变更面并拉直联调节奏 | [1] 已更新 PR 拆分数量<br />[2] 已更新子需求跟进表<br />[3] 已更新测试节奏建议 |
 | `2026-04-09 21:00` | `0x01.a` `0x01.c` `0x01.e` `0x02.c` | [1] 确认返回码备注不进入关系表，改为统一落在应用级 `ApmMetaConfig.code_remarks`<br />[2] 保留 `kind` 作为备注维度<br />[3] 服务视角 `set` 以 `kind + code + remark` 合并 `service_names`，并强制移除同 `(kind, code)` 下的旧冲突记录<br />[4] 服务视角 `get` 仅做后置补齐内置默认备注，全局视角不返回内置项 | [1] 已核对 `GetCodeRemarksResource` / `SetCodeRemarkResource`<br />[2] 已核对 `ApmMetaConfig` 与 `CodeRedefinedConfigRelation`<br />[3] 已核对现有前端调用面和 tRPC 内置错误码来源<br />[4] 已据此更新方案主干与默认备注表 |
