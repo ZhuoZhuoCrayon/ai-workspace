@@ -243,19 +243,17 @@ Good：
 Bad：
 
 ```md
-- `README.md`：读 `common-writing.md` 和 `issue-readme-writing.md`
-- `PLAN.md`：读 `common-writing.md` 和 `plan-writing.md`
-- `troubleshooting`：读 `common-writing.md` 和 `troubleshooting-writing.md`
+README、PLAN、troubleshooting、snippet 混作同一层级去找规则。
 ```
 
 Good：
 
 ```md
-| 文档类型 | 必读 reference | 说明 |
-| --- | --- | --- |
-| `README.md` | `common-writing.md`、`issue-readme-writing.md` | 先写需求主干 |
-| `PLAN.md` | `common-writing.md`、`plan-writing.md` | 先写方案主干 |
-| `troubleshooting` | `common-writing.md`、`troubleshooting-writing.md` | 固定排障结构 |
+| 交付物形态 | 识别线索 | 必读 reference | 说明 |
+| --- | --- | --- | --- |
+| issue | 目标 / 范围 / 非目标 / 验收 | `common-writing.md`、`issue-readme-writing.md` | 先写需求主干 |
+| plan | 方案 / 开发落点 / 风险 / 进展 | `common-writing.md`、`plan-writing.md` | 先写方案主干 |
+| troubleshooting | 现象 / 根因 / 排查过程 / 修复步骤 | `common-writing.md`、`troubleshooting-writing.md` | 固定排障结构 |
 ```
 
 ### d. 混合承载优于全文表格化

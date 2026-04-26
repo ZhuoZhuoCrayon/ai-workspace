@@ -20,6 +20,10 @@
     "should_trigger": true
   },
   {
+    "query": "优化这个 .mdc 规则文档，删掉重复表达，补齐结构和验收口径。",
+    "should_trigger": true
+  },
+  {
     "query": "帮我把这条 PR review 评论整理成高密度总结。根因保留叙述，修复点按需表格化。",
     "should_trigger": true
   },

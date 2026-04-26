@@ -1,17 +1,19 @@
 ---
 name: doc-style
-description: 结构化编写、重构、润色和验收 Markdown 文档。只要用户提到“帮我创建一个需求/问题排查/方案/文档”、写 `README.md` / `PLAN.md` / `troubleshooting` / `snippet`、润色或改写 Markdown 文档、整理 PR review 评论 / GitHub 评论、或把零散草稿整理成结构化文档，就应使用这个 skill。
+description: 结构化编写、重构、润色和验收 Markdown / MDC 文档。只要用户要创建、编辑、润色、改写、评审或整理任何 `.md` / `.mdc` 文件，或提到 issue / plan / troubleshooting / snippet、规则文档、PR review 评论、GitHub 评论、零散草稿结构化，就应使用这个 skill。
 ---
 
 # Doc Style
 
 ## 0x01 定位
 
-`doc-style` 负责 Markdown 文档的结构设计、表达压缩、对象适配与交付前润色。
+`doc-style` 负责 Markdown / MDC 文档的结构设计、表达压缩、对象适配与交付前润色。
 
 适用范围：
 
-- 长文档：`README.md`、`PLAN.md`、`troubleshooting`、`snippet`。
+- 文件范围：所有 `.md` / `.mdc` 文档编辑、重构、润色与验收。
+- 知识对象形态：issue、plan、troubleshooting、snippet。
+- 其他文档形态：规则文档、普通说明文档。
 - 短交付：PR review 评论、GitHub 评论、零散草稿的结构化压缩。
 
 职责边界：
@@ -19,27 +21,27 @@ description: 结构化编写、重构、润色和验收 Markdown 文档。只要
 - 只处理文档内容、结构和表达。
 - 不负责外部资产定位、元数据治理或发布流程。
 
-## 0x02 文档类型判定
+## 0x02 交付物形态判定
 
-先识别交付物类型，再读取对应 reference，不要一次性读取全部 reference。
+先识别交付物形态，再读取对应 reference，不要一次性读取全部 reference。
 
-【CRITICAL（必须执行，不可协商）】无论交付物类型是什么，都必须先读 `common-writing.md`。
+【CRITICAL（必须执行，不可协商）】无论交付物形态是什么，都必须先读 `common-writing.md`。
 
-| 文档类型 | 必读 reference | 按需补读 | 说明 |
-| --- | --- | --- | --- |
-| 通用 Markdown | `common-writing.md` | 无 | 所有 Markdown 文档的基础规则入口。 |
-| `README.md` / 需求文档 | `common-writing.md`、`issue-readme-writing.md` | 无 | 先写需求主干，再补范围、非目标和验收。 |
-| `PLAN.md` / 实施方案 | `common-writing.md`、`plan-writing.md` | `exemplars.md` | 需要校准结构密度时再读 `exemplars.md`。 |
-| `troubleshooting` | `common-writing.md`、`troubleshooting-writing.md` | 无 | 固定排障结构，优先服务复盘和复用。 |
-| `snippet` | `common-writing.md`、`snippet-writing.md` | 无 | 先明确片段用途、适用条件和复用边界。 |
-| PR review 评论 / GitHub 评论 | `common-writing.md` | 无 | 先写 review 结论，再按信息形态选择叙述、列表或表格，不把全文硬改成表格。 |
+| 交付物形态 | 识别线索 | 必读 reference | 按需补读 | 说明 |
+| --- | --- | --- | --- | --- |
+| 通用 Markdown / MDC | 任意 `.md` / `.mdc` 文件，且无法归入专项形态 | `common-writing.md` | 无 | 所有 Markdown / MDC 文档的基础规则入口。 |
+| issue | 需求定义、issue README、目标 / 范围 / 非目标 / 验收 | `common-writing.md`、`issue-readme-writing.md` | 无 | 先写需求主干，再补范围、非目标和验收。 |
+| plan | `PLAN.md`、方案、计划、调研结论、开发落点、风险与进展 | `common-writing.md`、`plan-writing.md` | `exemplars.md` | 需要校准结构密度时再读 `exemplars.md`。 |
+| troubleshooting | 问题排查、故障复盘、根因链路 | `common-writing.md`、`troubleshooting-writing.md` | 无 | 固定排障结构，优先服务复盘和复用。 |
+| snippet | 代码片段、命令片段、协议片段 | `common-writing.md`、`snippet-writing.md` | 无 | 先明确片段用途、适用条件和复用边界。 |
+| PR review 评论 / GitHub 评论 | review 结论、inline 评论、conversation 评论 | `common-writing.md` | 无 | 先写 review 结论，再按信息形态选择叙述、列表或表格，不把全文硬改成表格。 |
 
 ## 0x03 写作工作流
 
 ### a. 准备阶段
 
-1. **判定对象**：确认文档类型、目标读者和交付物职责，明确要读取的 reference。
-2. **读取规则**：读取 `common-writing.md` 与文档类型 reference，不额外读取外部资产治理文档。
+1. **判定对象**：确认交付物形态、目标读者和文档职责，明确要读取的 reference。
+2. **读取规则**：读取 `common-writing.md` 与形态 reference，不额外读取外部资产治理文档。
 
 ### b. 重写阶段
 
@@ -107,7 +109,7 @@ Polish gate 通过后，必须输出 `5` 张主观审稿命中清单。
 
 交付时给出简短说明：
 
-- 文档类型与本次读取的 reference。
+- 交付物形态与本次读取的 reference。
 - 是否执行了 polish gate 与审稿自检。
 - `pre-commit` 是否通过。
 - 若未跑通，明确说明阻塞原因。
