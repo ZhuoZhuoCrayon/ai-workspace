@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-04-25
+> 最后更新：2026-04-26
 
 ## 0x01 项目知识
 
@@ -16,6 +16,10 @@
 
 ## 0x02 最近更新
 
+- 2026-04-26：更新
+  [mypy strict 模式合规改造](./throttled-py/issues/2026-04-06-mypy-strict-compliance/README.md)
+  至 throttled-py
+  （按 PR #159 合入结果收口 PLAN，移除过时方案结论）
 - 2026-04-25：新增
   [0 点活动上线导致 RPC 指标 series 暴涨](./bkmonitor/troubleshooting/rpc-series-spike-on-activity-launch.md)
   至 bkmonitor
@@ -28,6 +32,3 @@
 - 2026-04-21：新增
   [优化 APM 接口统计偶现查询报错](./bkmonitor/issues/2026-04-21-apm-endpoint-stat-hot-window-divide-by-zero/README.md)
   至 bkmonitor
-- 2026-04-16：更新 [APM 支持应用级别配置](./bkmonitor/issues/2026-03-04-apm-app-level-config/README.md)
-  至 bkmonitor
-  （将返回码备注写入的实现细节从“实现方案”下沉到“开发方案”）
