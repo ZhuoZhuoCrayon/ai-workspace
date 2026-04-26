@@ -27,14 +27,14 @@ description: 结构化编写、重构、润色和验收 Markdown / MDC 文档。
 
 【CRITICAL（必须执行，不可协商）】无论交付物形态是什么，都必须先读 `common-writing.md`。
 
-| 交付物形态 | 识别线索 | 必读 reference | 按需补读 | 说明 |
-| --- | --- | --- | --- | --- |
-| 通用 Markdown / MDC | 任意 `.md` / `.mdc` 文件，且无法归入专项形态 | `common-writing.md` | 无 | 所有 Markdown / MDC 文档的基础规则入口。 |
-| issue | 需求定义、issue README、目标 / 范围 / 非目标 / 验收 | `common-writing.md`、`issue-readme-writing.md` | 无 | 先写需求主干，再补范围、非目标和验收。 |
-| plan | `PLAN.md`、方案、计划、调研结论、开发落点、风险与进展 | `common-writing.md`、`plan-writing.md` | `exemplars.md` | 需要校准结构密度时再读 `exemplars.md`。 |
-| troubleshooting | 问题排查、故障复盘、根因链路 | `common-writing.md`、`troubleshooting-writing.md` | 无 | 固定排障结构，优先服务复盘和复用。 |
-| snippet | 代码片段、命令片段、协议片段 | `common-writing.md`、`snippet-writing.md` | 无 | 先明确片段用途、适用条件和复用边界。 |
-| PR review 评论 / GitHub 评论 | review 结论、inline 评论、conversation 评论 | `common-writing.md` | 无 | 先写 review 结论，再按信息形态选择叙述、列表或表格，不把全文硬改成表格。 |
+| 交付物形态 | 识别线索 | 必读 reference |
+| --- | --- | --- |
+| 通用 Markdown / MDC | 任意 `.md` / `.mdc` 文件，且无法归入专项形态 | `common-writing.md` |
+| issue | 需求定义、issue README、目标 / 范围 / 非目标 / 验收 | `common-writing.md`、`issue-readme-writing.md` |
+| plan | `PLAN.md`、方案、计划、调研结论、开发落点、风险与进展 | `common-writing.md`、`plan-writing.md` |
+| troubleshooting | 问题排查、故障复盘、根因链路 | `common-writing.md`、`troubleshooting-writing.md` |
+| snippet | 代码片段、命令片段、协议片段 | `common-writing.md`、`snippet-writing.md` |
+| PR review 评论 / GitHub 评论 | review 结论、inline 评论、conversation 评论 | `common-writing.md` |
 
 ## 0x03 写作工作流
 
