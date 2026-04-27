@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-04-26
+> 最后更新：2026-04-27
 
 ## 0x01 项目知识
 
@@ -16,6 +16,10 @@
 
 ## 0x02 最近更新
 
+- 2026-04-27：更新
+  [APM 支持跨应用共享数据源](./bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md)
+  至 bkmonitor
+  （收口 PR review 中的共享池计数、删除释放与启停边界）
 - 2026-04-26：更新
   [mypy strict 模式合规改造](./throttled-py/issues/2026-04-06-mypy-strict-compliance/README.md)
   至 throttled-py
@@ -29,6 +33,3 @@
 - 2026-04-23：更新 [APM 支持跨应用共享数据源](./bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md)
   至 bkmonitor
   （收口 PR review 中的共享判定、启停边界与运维操作约束）
-- 2026-04-21：新增
-  [优化 APM 接口统计偶现查询报错](./bkmonitor/issues/2026-04-21-apm-endpoint-stat-hot-window-divide-by-zero/README.md)
-  至 bkmonitor

@@ -4,7 +4,7 @@ tags: [apm, datasource, es, shared-storage, architecture]
 issue: knowledge/bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md
 description: APM 跨应用共享数据源的实现方案与开发方案
 created: 2026-03-03
-updated: 2026-04-23
+updated: 2026-04-27
 ---
 
 # APM 跨应用共享数据源 —— 实施方案
@@ -33,7 +33,7 @@ classDiagram
         quota（容量）
         usage_count（用量）
         [元数据信息]
-        allocate() · reserve() · activate() · release()
+        allocate() · reserve() · activate() · acquire() · release()
     }
     class SharedTraceDataSource {
     		[额外元数据信息]
@@ -154,7 +154,9 @@ classDiagram
         allocate(data_type) dict | None
         reserve(data_type) Self
         activate(link_info)
+        acquire()
         release()
+        _change_usage_count(delta)
         to_shared_info() dict*
         data_name* property
     }
@@ -235,9 +237,17 @@ flowchart LR
 * 设置链路信息：从 `link_info` dict 填充 `bk_data_id`、`result_table_id` 及子类扩展字段。
 * 启用：`usage_count=1, is_enabled=True`。
 
-**release**：释放占用，usage_count 减 1。
+**usage count 变更**：共享池占用计数只在资源分配、删除或显式迁移生命周期内变更，不绑定应用级启停。
 
-💡 Tips：`Greatest(F('usage_count') - 1, 0)` 防止 usage_count 变为负数。
+- `acquire()`：占用槽位，`usage_count` 加 1。
+- `release()`：释放槽位，`usage_count` 减 1。
+- `acquire()` / `release()` 复用同一个底层 `_change_usage_count(delta)`，仅 `delta` 不同，查询条件与原子更新逻辑保持一致。
+
+💡 Tips：
+
+* `release()` 使用 `Greatest(F('usage_count') - 1, 0)` 防止 `usage_count` 变为负数。
+* `allocate()` 仍负责选择可用共享池，命中后调用 `acquire()`。
+* 删除或显式迁出时调用 `release()`。
 
 
 #### SharedTraceDataSource
@@ -273,13 +283,14 @@ SHARED_DS_REGISTRY = {
 | 变更点                                       | 目标                                                         |
 | -------------------------------------------- | ------------------------------------------------------------ |
 | **[Field]** `shared_datasource_id`           | 新增字段。                                                   |
-| **[Method]** `apply_datasource`              | 增加共享数据源处理逻辑（见下方流程）。                       |
+| **[Method]** `apply_datasource`              | 增加共享数据源处理逻辑，并在进入共享 / 独占分支前收口迁入、迁出判断。 |
 | **[Method]** `create_data_id`                | 增加 `global_mode` 、`data_name[可选]` 参数。                |
 | **[Method]** `create_or_update_result_table` | 增加 `global_mode` `result_table_id[可选]` 参数。            |
 | **[Method]** `to_link_info`                  | 导出链路元数据字典（bk_data_id、result_table_id 等），子类覆写追加特有字段。 |
 | **[Method]**  `set_from_shared`              | 由子类覆写，从共享链路信息字典提取各自字段并赋值。           |
+| **[Method]** `reset_link_info`               | 重置当前数据源链路信息为未创建状态，用于迁入 / 迁出后复用原有创建流程。 |
 | **[Method]** `is_shared`                     | 是否共享，通过 `shared_datasource_id` 判断。                 |
-| **[Method]** `start / stop`                  | 共享模式下不执行结果表启停，也不修改共享池 `usage_count`。     |
+| **[Method]** `start / stop`                  | 共享模式下不执行结果表启停。<br />`stop()` 可在删除或显式迁移场景释放共享池占用。<br />独占模式保持原有启停行为。 |
 
 **共享模式下创建参数结论**：
 
@@ -292,49 +303,81 @@ SHARED_DS_REGISTRY = {
   - `bk_biz_id_alias` 传入字符串 `bk_biz_id`。
   - 目的：保持结果表注册在全局业务下，并声明查询按业务 ID 做隔离。
 
-**apply_datasource 共享数据源处理流程**（详见 [0x01/c 共享机制](#c-共享机制) 流程图）：
+**apply_datasource 共享数据源处理流程**（创建与更新最终汇总到 `application.apply_datasource`）：
+
+两个入口都会生成 `shared_datasource_types`，并写入 `options.application.shared_datasource_types`。
+
+| 入口 | 入参状态 | 取值来源 | 语义 |
+| --- | --- | --- | --- |
+| `CreateApplicationResource` | 不传 `shared_datasource_types` | `SharedDatasourceRuleFactory.list_shared_datasource_types(...)` | [1] 计算本次创建需要共享的数据源类型。<br />[2] 创建阶段仅生成初始目标状态，不产生迁移语义。 |
+| `ApplyDatasourceResource` | 不传 `shared_datasource_types` | 查询各数据源配置的 `is_shared` 状态后构造 | [1] 以数据库当前状态作为本次 apply 的目标状态。<br />[2] 当前状态与目标状态一致，不触发迁入 / 迁出。 |
+| `ApplyDatasourceResource` | 传入 `shared_datasource_types` | 请求体 `shared_datasource_types` | [1] 请求值作为本次 apply 的目标状态。<br />[2] `["trace"] -> []` 表示 Trace 从共享迁出。<br />[3] `[] -> ["trace"]` 表示 Trace 从独占迁入共享。<br />[4] `[] -> []` 或 `["trace"] -> ["trace"]` 表示状态未变化，不触发迁移。 |
 
 ```mermaid
 flowchart TD
-    A([apply_datasource]) --> M{迁出？}
+    C0["CreateApplicationResource"] --> C1["SharedDatasourceRuleFactory"]
 
-    M -->|是| N[<释放> 共享源]
-    N --> O[<重置> 数据源信息]
-    O --> K[<独占> create_data_id]
+    A0["ApplyDatasourceResource"] --> A1["当前状态或请求目标状态"]
 
-    M -->|否| B{共享?}
+    C1 --> E["application.apply_datasource(options.application.shared_datasource_types)"]
+    A1 --> E
 
-    B -->|是| C[<分配> allocate]
-    C -->|有可用| D[set_from_shared]
-    C -->|无可用| E[<草稿> reserve]
-    E --> F[<全局> create_data_id]
-    F --> G[<全局> create_or_update_result_table]
-    G --> H[<激活> reserved.activate]
-    H --> I[<激活> shared_datasource_id ← pk]
-    I --> D
+    E --> F["ApmDataSourceConfigBase.apply_datasource"]
+    F --> M{"模式变化？"}
+    M -->|是| N["按旧模式 stop"]
+    N --> O["reset_link_info"]
+    M -->|否| B2{"options.is_shared？"}
+    O --> B2
 
-    B -->|否| K
-    K --> Q[<独占> create_or_update_result_table]
+    B2 -->|是| S1["<共享> allocate"]
+    S1 -->|有可用| S2["set_from_shared"]
+    S1 -->|无可用| S3["<草稿> reserve"]
+    S3 --> S4["<全局> create_data_id"]
+    S4 --> S5["<全局> create_or_update_result_table"]
+    S5 --> S6["reserved.activate"]
+    S6 --> S7["shared_datasource_id ← pk"]
+    S7 --> S2
 
-    D --> J([save])
-    Q --> J
+    B2 -->|否| D1["<独占> create_data_id"]
+    D1 --> D2["<独占> create_or_update_result_table"]
+
+    S2 --> J(["save"])
+    D2 --> J
 
     classDef migrate fill:#5d4037,stroke:#ffab91,color:#ffccbc
     classDef shared fill:#1b5e20,stroke:#81c784,color:#c8e6c9
     classDef dedicated fill:#0d47a1,stroke:#64b5f6,color:#bbdefb
 
     class N,O migrate
-    class C,D,E,F,G,H,I shared
-    class K,Q dedicated
+    class S1,S2,S3,S4,S5,S6,S7 shared
+    class D1,D2 dedicated
 ```
+
+图中「模式变化」等价于 `ds.is_shared != options.is_shared`。
+
+- `ds.is_shared`：数据库中当前数据源状态。
+- `options.is_shared`：本次 apply 的目标状态。
+
+迁移状态判断只需放在 `apply_datasource` 获取 / 创建 `obj` 后、进入现有共享 / 独占分支前：
+
+```python
+if obj.is_shared != options.get("is_shared", False):
+    obj.stop(bk_biz_id, app_name)
+    obj.reset_link_info()
+```
+
+随后沿用既有分支，不需要为迁入 / 迁出拆出第二套创建流程：
+
+| 状态变化 | 语义 | 前置动作 | 后续动作 |
+| --- | --- | --- | --- |
+| `True → False` | 迁出：共享改独占 | 走 `stop()` 释放共享源占用，再 `reset_link_info()` | `is_shared=False`，进入 `_apply_exclusive_datasource`。 |
+| `False → True` | 迁入：独占改共享 | 走 `stop()` 停用独占资源，再 `reset_link_info()` | `is_shared=True`，进入 `_apply_shared_datasource`。 |
+| 未变化 | 保持现状 | 不执行迁移清理 | 按目标状态进入原有共享或独占分支。 |
 
 **补充约束**：
 
 - `API 失败回滚`：`create_data_id` 或 `create_or_update_result_table` 抛异常时，删除草稿（`reserved.delete()`）并向上传播。
-- `迁出清理`：`release()` 释放共享源占用后，清空 `shared_datasource_id` 及共享链路字段。
-- `迁出后续`：随后进入独占创建流程。
-- `存量迁移边界`：存量独占应用不自动迁入共享池，如需支持则必须补齐独占资源释放、共享资源分配与回滚流程。
-- `启停边界`：`start()` / `stop()` 只处理独占结果表启停，共享池占用只允许在分配、删除或显式迁出生命周期内变化。
+- `Trace 索引集边界`：共享 Trace 的 `stop()` 不删除日志索引集，独占 Trace 保留现有删除逻辑。
 
 
 
@@ -388,8 +431,9 @@ flowchart TD
 调用边界：
 
 - `CreateApplicationResource` 未显式传 `shared_datasource_types` 时，通过工厂解析默认共享类型。
-- `ApplyDatasourceResource` 更新存储配置时也必须走同一入口，并优先保留已有共享状态。
-- 规则命中不自动迁移存量独占应用，存量迁入共享池必须走显式迁移流程。
+- `ApplyDatasourceResource` 未显式传 `shared_datasource_types` 时，从数据库当前 `is_shared` 反推共享类型，表示本次更新不触发迁入 / 迁出。
+- `ApplyDatasourceResource` 显式传入 `shared_datasource_types` 时，以请求列表作为目标状态，空列表也是有效输入。
+- 规则命中不自动迁移存量独占应用，存量迁入共享池必须通过 `ApplyDatasourceResource` 显式传参触发。
 
 ### d. TraceDataSource 查询适配
 
@@ -416,7 +460,7 @@ flowchart LR
 
 | 变更点                                | 说明                                                         |
 | ------------------------------------- | ------------------------------------------------------------ |
-| **[Field]** `shared_datasource_types` | 新增字段： `CreateApplicationResource` / `ApplyDatasourceResource`。<br />默认值：由 `0x02.c` 的共享判定机制解析。<br /><br />操作：设置到 `xx_datasource_option.is_shared`，更新场景需优先保留已有共享状态。 |
+| **[Field]** `shared_datasource_types` | 新增字段： `CreateApplicationResource` / `ApplyDatasourceResource`。<br />创建默认值：由 `0x02.c` 的共享判定机制解析。<br />更新默认值：从数据库当前 `is_shared` 反推，表示保持现状。<br /><br />操作：设置到 `xx_datasource_option.is_shared`，显式传参时作为目标共享状态。 |
 
 
 
@@ -432,7 +476,7 @@ flowchart LR
     E --> F
 ```
 
-- 共享模式：删除应用释放共享池占用，但不执行普通 `stop()` 启停逻辑。
+- 共享模式：删除应用释放共享池占用，但不执行普通 `stop()` 启停逻辑，也不删除共享日志索引集。
 - 独占模式：保留现有 `stop_trace()` 关闭结果表流程。
 
 ### f. 应用信息注入
@@ -472,6 +516,7 @@ flowchart LR
 
 | 时间 | 对应设计片段 | 结论调整概要 | 改动 / 验证 |
 |:--|:--|:--|:--|
+| `2026-04-27 20:00` | `0x02.a` `0x02.b` `0x02.e` | [1] PR review 收口共享池计数边界：补充 `acquire()` 与 `release()` 成对语义，并要求二者复用 `_change_usage_count(delta)`<br />[2] 明确共享 Trace 启停不操作 `switch_result_table()`，删除释放共享池占用但不删除共享日志索引集<br />[3] 补充以 `ApplyDatasourceResource.shared_datasource_types` 为入口的显式迁入 / 迁出方案：不传表示保持数据库现状，传入列表表示目标共享状态<br />[4] 撤回查询隔离默认开启阻塞意见，查询隔离作为后续 PR 的已知拆分事项继续保留在方案约束中 | [1] 已复查 PR #10415 最新 head `a104714`<br />[2] 仍需开发修复删除共享应用未释放 `usage_count`、`release()` 负数保护，以及 apply 更新路径迁入 / 迁出状态判断<br />[3] 本次仅更新方案文档与 review 结论，不修改 PR 代码 |
 | `2026-04-23 17:00` | `0x01.e` `0x02.b` `0x02.c` `0x02.e` `0x02.h` | [1] PR review 收口更新路径共享判定、启停边界与 DataID 运维边界<br />[2] 将 `SharedDatasourceRuleFactory` 抽成 `is_shared` 独立决策机制，并按协议文档补充 JSON 示例与字段表<br />[3] 明确查询隔离保留为共享 Trace 正式开放前必须补齐的后续 PR | [1] 已更新方案主干约束、共享判定机制小节与协议字段说明<br />[2] 已复查 PR #10415 最新 head `80e070f`<br />[3] 待开发修复 `ApplyDatasourceResource`、共享启停、`OperateApmDataIdResource` 与 migration LF |
 | `2026-04-16 15:00` | `0x01.b` `0x01.d` `0x02.a` `0x02.b` | [1] 合并同日重复文案迭代，只保留最终有效方案结论<br />[2] 明确 `bk_biz_id_alias` 固定传字符串 `bk_biz_id`，用于查询阶段业务隔离<br />[3] 保留共享模型接口约定与 DataID / 结果表创建口径分层 | [1] 已更新关键决策、命名规则、共享模型与方法级参数约束<br />[2] 已统一 `SharedTraceDataSource` 接口说明和单句续行表达<br />[3] 本次仅更新方案文档，未改代码 |
 | `2026-04-16 10:00` | `0x01.b` `0x01.d` `0x02.a` `0x02.b` | [1] 合并同小时方案结论与文档结构迭代<br />[2] 共享模式下 DataID 与结果表创建口径拆分<br />[3] `create_data_id` 使用特权业务 ID，`create_or_update_result_table` 使用 `GLOBAL_CONFIG_BK_BIZ_ID=0` 并透传 `bk_biz_id_alias` | [1] 已更新关键决策、命名规则与方法级参数约束<br />[2] 已拆分共享模型、表格后说明与迁移备注<br />[3] 本次仅更新方案文档，未改代码 |
