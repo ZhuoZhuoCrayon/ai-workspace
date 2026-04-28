@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-04-27
+> 最后更新：2026-04-28
 
 ## 0x01 项目知识
 
@@ -16,6 +16,10 @@
 
 ## 0x02 最近更新
 
+- 2026-04-28：更新
+  [APM 支持应用级别配置](./bkmonitor/issues/2026-03-04-apm-app-level-config/README.md)
+  至 bkmonitor
+  （记录 PR #10275 review 结论与待修复风险）
 - 2026-04-27：更新
   [APM 支持跨应用共享数据源](./bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md)
   至 bkmonitor
@@ -27,9 +31,6 @@
 - 2026-04-25：新增
   [0 点活动上线导致 RPC 指标 series 暴涨](./bkmonitor/troubleshooting/rpc-series-spike-on-activity-launch.md)
   至 bkmonitor
-- 2026-04-24：更新 [APM 支持应用级别配置](./bkmonitor/issues/2026-03-04-apm-app-level-config/README.md)
-  至 bkmonitor
-  （收口 PR review 后的返回码重定义查询、写入与下发优先级协议）
 - 2026-04-23：更新 [APM 支持跨应用共享数据源](./bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md)
   至 bkmonitor
   （收口 PR review 中的共享判定、启停边界与运维操作约束）
