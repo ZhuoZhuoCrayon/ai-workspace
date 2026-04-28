@@ -17,6 +17,10 @@
 ## 0x02 最近更新
 
 - 2026-04-28：更新
+  [0 点活动上线导致 RPC 指标 series 暴涨](./bkmonitor/troubleshooting/rpc-series-spike-on-activity-launch.md)
+  至 bkmonitor
+  （追加元旦活动 series 突增案例与 VM 实测校验）
+- 2026-04-28：更新
   [APM 支持应用级别配置](./bkmonitor/issues/2026-03-04-apm-app-level-config/README.md)
   至 bkmonitor
   （记录 PR #10275 review 结论与待修复风险）
@@ -31,6 +35,3 @@
 - 2026-04-25：新增
   [0 点活动上线导致 RPC 指标 series 暴涨](./bkmonitor/troubleshooting/rpc-series-spike-on-activity-launch.md)
   至 bkmonitor
-- 2026-04-23：更新 [APM 支持跨应用共享数据源](./bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md)
-  至 bkmonitor
-  （收口 PR review 中的共享判定、启停边界与运维操作约束）

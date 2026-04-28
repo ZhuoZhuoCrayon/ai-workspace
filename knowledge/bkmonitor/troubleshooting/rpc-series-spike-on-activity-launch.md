@@ -1,9 +1,9 @@
 ---
 title: 0 点活动上线导致 RPC 指标 series 暴涨
 tags: [apm, rpc, cardinality, series-spike, callee-container, sum-without-ip, fan-out]
-description: 通过 ΔC 边对比 + 维度拆解 + 新值驱动 vs 扇出乘子辨析，定位活动上线引发的 series 暴涨。callee_container 是 800 倍扇出乘子，code/user_ext1 新值是真正诱因，去除 callee_container 是性价比最高的缓解动作。
+description: 通过 ΔC 边对比、维度拆解与 VM 新增 series 验证，定位活动上线引发的 RPC 指标 series 暴涨；callee_container 是高基数扇出乘子，去除它是优先缓解动作。
 created: 2026-04-25
-updated: 2026-04-26
+updated: 2026-04-28
 ---
 
 # 0 点活动上线导致 RPC 指标 series 暴涨
@@ -427,3 +427,126 @@ count by (code, user_ext1) (
   - `10221` → `amshostpkg`（899 ΔC × 240 = 216 K，[NEW EDGE]）：消减 ≈ 800 个被调 pod 名展开
 
 > 去除 `callee_container` 这一动作对「已有边放大」场景的价值远高于直觉——它不依赖预测业务会上什么新动作或新错误码，而是直接砍掉乘子，对未来类似活动也免疫
+
+## 0x03 结论（元旦本案）
+
+> - 业务：APM 应用 `hpjy-microservices-activities-production`（biz_id `-4228598`）
+> - 时间：`2026-01-01 00:00 +0800`
+> - 对比窗口：`2025-12-31 23:30 ~ 2026-01-01 00:00` vs `2026-01-01 00:00 ~ 00:30`
+> - 分析指标：`sum_without_ip_rpc_client_handled_total`
+> - 验证指标：`bkmonitor:vm_new_timeseries_created_total`
+> - 指标 RT：
+>
+> ```text
+> custom:space_4228598_bkapm_metric_hpjy__bk_45__microservices__bk_45__activities__bk_45__production:__default__
+> ```
+>
+> - 说明：`ΔC` 表示去 IP 后的组合数增量，`R` 表示 0 点窗口内上报实例数
+
+### a. TL;DR
+
+- **实际现象**：VM 侧 `00:00 ~ 00:30` 新增 `3.68 M` series，较前 30 min 基线额外增加 `≈ 2.39 M`。
+- **峰值时刻**：`00:00` 单分钟新增 `724.5 K`，与元旦活动上线时间对齐。
+- **主因**：`activities-60013` 红包链路新增 `60013 -> campamspkg` 调用边。
+- **放大器**：`callee_container` 从 `0` 展开到 `400`，是本次最大高基数维度。
+- **次级来源**：`60013` / `60009` 调向 `hpyd.php.inner.formal` 扩量，以及多活动服务调向 `redis-data` 时出现 `err_101`。
+
+### b. 调用拓扑
+
+```text
+[service_name=activity-microservices.activities-60013] (R=240)
+├── --> callee_service=trpc.hpjy.activity-microservices.campamspkg
+│   ├── ΔC=400  [NEW EDGE]
+│   ├── driver: user_ext1=act_60013_redpacket_req, code=0, callee_method=/main
+│   └── multiplier: callee_container 0 -> 400
+│
+├── --> callee_service=hpyd.php.inner.formal
+│   ├── ΔC=247
+│   ├── driver: act_60013_redpacket_req / act_60013_roll_dice_req / ret_0 扩量
+│   └── multiplier: callee_container 50 -> 63，非主因
+│
+└── --> callee_service=trpc.hpjy.activity-microservices.redis-data
+    ├── ΔC=38
+    └── driver: code=err_101
+
+[service_name=activity-microservices.activities-60009] (R=240)
+├── --> callee_service=hpyd.php.inner.formal
+│   ├── ΔC=174
+│   ├── driver: ret_0 扩量 + err_102 / err_161 新增
+│   └── multiplier: callee_container 50 -> 63，非主因
+│
+└── --> callee_service=trpc.hpjy.activity-microservices.redis-data
+    └── ΔC=18
+
+[多活动服务]
+└── --> callee_service=trpc.hpjy.activity-microservices.redis-data
+    └── driver: code=err_101
+```
+
+图例：
+
+- `[NEW EDGE]`：0 点前完全未上报，0 点后出现的新调用边。
+- `driver`：该边上 0 点后出现或明显放大的业务维度。
+- `multiplier`：把业务维度继续展开的高基数维度。
+
+### c. 关键边 series 跳变佐证
+
+| 边 | 去 IP ΔC | R | `ΔC × R` 上限 | 原始 `_total` 实际新增 |
+| --- | ---: | ---: | ---: | ---: |
+| `60013 -> campamspkg` | `400` | `240` | `96.0 K` | `39.0 K` |
+| `60013 -> hpyd.php.inner.formal` | `247` | `240` | `59.3 K` | `8.4 K` |
+| `60009 -> hpyd.php.inner.formal` | `174` | `240` | `41.8 K` | `14.1 K` |
+| `10119 -> redis-data` | `59` | `480` | `28.3 K` | `3.3 K` |
+
+`ΔC × R` 只表示风险上限。
+
+实际入库量以 VM 曲线为准，因为去 IP 后的组合不会在每个实例上完整展开。
+
+### d. 总账
+
+这部分只回答一个问题：监控系统实际多收了多少 series。
+
+前面的边级拆解用于解释来源。
+
+最终对外量级以 VM 实测为准。
+
+| 窗口 | VM 新增 series | 分钟均值 | 峰值 |
+| --- | ---: | ---: | ---: |
+| `23:30 ~ 00:00` | `1.29 M` | `43.0 K/min` | `52.8 K` |
+| `00:00 ~ 00:30` | `3.68 M` | `122.7 K/min` | `724.5 K` |
+| `00:30 ~ 01:00` | `1.57 M` | `52.4 K/min` | `68.8 K` |
+
+最终对外口径使用 VM 实测值：
+
+```text
+额外新增 series ≈ 3.68 M - 1.29 M = 2.39 M
+```
+
+### e. 缓解动作
+
+按 `0x02 e. 缓解动作` 的模板计算：单 metric 节省 = `ΔC × R`，跨 4 类 RPC metric 节省 = 单 metric 节省 × `13`。
+
+#### e.1 动作清单
+
+| 主调 `service_name` | 去除维度 | 单 metric 节省 | 跨 4 类 metric 节省（×13） | 期次 |
+| --- | --- | ---: | ---: | --- |
+| `activity-microservices.activities-60013` | `callee_container` | ≈ 155 K | ≈ 2.02 M | 一期 |
+| `activity-microservices.activities-60009` | `callee_container` | ≈ 42 K | ≈ 0.54 M | 二期 |
+
+一期 `activities-60013` 合计：**≈ 155 K / ≈ 2.02 M，占 VM 额外新增 ≈ 84%**。
+
+如果 `activities-60009` 同步处理，合计：**≈ 197 K / ≈ 2.56 M，理论上可覆盖本次 VM 额外新增**。
+
+#### e.2 收益拆解
+
+- **`activities-60013` 去除 `callee_container`**：
+  - `60013 -> campamspkg`：`400 × 240 = 96.0 K`，跨 4 类约 `1.25 M`。
+  - `60013 -> hpyd.php.inner.formal`：`247 × 240 = 59.3 K`，跨 4 类约 `0.77 M`。
+- **`activities-60009` 去除 `callee_container`**：
+  - `60009 -> hpyd.php.inner.formal`：`174 × 240 = 41.8 K`，跨 4 类约 `0.54 M`。
+
+说明：
+
+- 上述收益是与 `0x02` 保持一致的上限口径。
+- `2.56 M` 高于 VM 实测额外新增 `2.39 M` 时，不写成超过 `100%`。
+- 这只表示理论上覆盖本次全部增量，最终压缩效果以 `bkmonitor:vm_new_timeseries_created_total` 回归为准。
