@@ -19,7 +19,7 @@
 - 2026-04-29：更新
   [0 点活动上线导致 RPC 指标 series 暴涨](./bkmonitor/troubleshooting/rpc-series-spike-on-activity-launch.md)
   至 bkmonitor
-  （追加 10234 活动 10:24 series 峰值归因与 MCP 环境约束）
+  （追加 4 月 29 日 0 点 series 峰值归因，修正 `callee_container` 治理收益口径）
 - 2026-04-28：更新
   [APM 支持应用级别配置](./bkmonitor/issues/2026-03-04-apm-app-level-config/README.md)
   至 bkmonitor

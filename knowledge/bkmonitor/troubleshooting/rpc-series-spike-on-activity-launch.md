@@ -679,3 +679,85 @@ count by (code, user_ext1) (
 - 去除 `user_ext1` 可消减约 `32 × 120 ≈ 3.8 K` 单 metric series，跨 RPC metric 家族约 `50 K`。
 - 若 Redis 调用不需要按业务入口方法排障，继续评估 `caller_method` 是否可在业务自定义指标中降维。
 - 本案不建议套用 AMS 案例的 `callee_container` 修复动作，当前证据指向活动新业务维度。
+
+## 0x05 结论（4 月 29 日 0 点本案）
+
+> - 业务：APM 应用 `hpjy-microservices-activities-production`（biz_id `-4228598`）
+> - 时间：`2026-04-29 00:00 +0800`
+> - 对比窗口：`2026-04-28 23:30 ~ 2026-04-29 00:00` vs `2026-04-29 00:00 ~ 00:30`
+> - VM 新增 series 查询：使用 bkop MCP，业务 ID `10`
+> - 其他 RPC 指标查询：使用 bkte MCP，业务 ID `-4228598`
+> - 基数证据指标：`sum_without_ip_rpc_client_handled_total`
+> - 原始 `rpc_client_handled_total` 只用于查询副本数 `R`
+
+### a. TL;DR
+
+- **实际现象**：`00:00` 单分钟新增 `194.5 K` series，`00:01` 仍有 `29.1 K`。
+- **额外增量**：`00:00 ~ 00:30` 比前 30 分钟多 `≈ 257.5 K` series。
+- **主因**：`activities-60024 / 60015 / 60022` 调向 `hpyd.php.inner.formal`、`amspkg` 后展开。
+- **放大器**：主贡献边保留 `callee_container`，包括 `yoyo-inner-*` 与 `ieg-ams-aci-release-*`。
+- **注意**：表中 `ΔC` 已包含 `callee_container`，不能直接当作去除该维度的治理收益。
+
+### b. 调用拓扑
+
+```text
+[service_name=activity-microservices.activities-60024] (R=60)
+├── --> callee_service=hpyd.php.inner.formal
+│   ├── ΔC=95
+│   ├── driver: user_ext1=act_60024_friend_rank_req
+│   └── multiplier: callee_container=yoyo-inner-*
+│
+└── --> callee_service=trpc.hpjy.activity-microservices.amspkg
+    ├── ΔC=59
+    ├── driver: user_ext1=act_60024_lottery_req
+    └── multiplier: callee_container=ieg-ams-aci-release-*
+
+[service_name=activity-microservices.activities-60015] (R=60)
+└── --> callee_service=hpyd.php.inner.formal
+    ├── ΔC=86
+    ├── driver: caller_method=GetCampActivityOne
+    └── multiplier: callee_container=yoyo-inner-*
+
+[service_name=activity-microservices.activities-60022] (R=60)
+└── --> callee_service=trpc.hpjy.activity-microservices.amspkg
+    ├── ΔC=30
+    └── multiplier: callee_container=ieg-ams-aci-release-*
+
+[service_name=activity-microservices.activities-10240] (R=120)
+└── --> callee_service=trpc.hpjy.activity-microservices.redis-data
+    └── ΔC=37
+
+[service_name=activity-microservices.msgcenter] (R=240)
+└── --> callee_service=trpc.hpjy.activity-microservices.activities.10240
+    └── ΔC=12  [NEW EDGE]
+```
+
+### c. 关键边 series 跳变佐证
+
+| 边 | ΔC | R | `ΔC × R` 上限 | 跨 RPC 家族（×13） | 角色 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `60024 -> hpyd.php.inner.formal` | `95` | `60` | `5.7 K` | `74.1 K` | 主贡献边 |
+| `60015 -> hpyd.php.inner.formal` | `86` | `60` | `5.2 K` | `67.1 K` | 主贡献边 |
+| `10240 -> redis-data` | `37` | `120` | `4.4 K` | `57.7 K` | 次级来源 |
+| `60024 -> amspkg` | `59` | `60` | `3.5 K` | `46.0 K` | 主贡献边 |
+| `msgcenter -> 10240` | `12` | `240` | `2.9 K` | `37.4 K` | 新入口边 |
+| `60022 -> amspkg` | `30` | `60` | `1.8 K` | `23.4 K` | 次级来源 |
+| `60009 -> hpyd.php.inner.formal` | `28` | `60` | `1.7 K` | `21.8 K` | 次级来源 |
+| `60023 -> amspkg` | `19` | `60` | `1.1 K` | `14.8 K` | 次级来源 |
+
+`ΔC × R × 13` 只表示新增上限。
+
+去除 `callee_container` 的收益需用 `C_with - C_without(callee_container)` 另算。
+
+### d. 总账
+
+| 窗口 | VM 新增 series | 分钟均值 | 峰值 |
+| --- | ---: | ---: | ---: |
+| `23:30 ~ 00:00` | `32.4 K` | `1.1 K/min` | `1.5 K` |
+| `00:00 ~ 00:30` | `289.9 K` | `9.7 K/min` | `194.5 K` |
+
+### e. 缓解动作
+
+- 一期优先评估 `activities-60024` 和 `activities-60015` 的 `callee_container` 去除。
+- `activities-60022 / 60009 / 60023` 可作为二期候选。
+- `10240 -> redis-data` 需先拆 `user_ext1 / caller_method / callee_method`，不要套用 `callee_container` 修复。
