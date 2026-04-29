@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-04-28
+> 最后更新：2026-04-29
 
 ## 0x01 项目知识
 
@@ -16,15 +16,15 @@
 
 ## 0x02 最近更新
 
-- 2026-04-28：更新
+- 2026-04-29：更新
   [0 点活动上线导致 RPC 指标 series 暴涨](./bkmonitor/troubleshooting/rpc-series-spike-on-activity-launch.md)
   至 bkmonitor
-  （追加元旦活动 series 突增案例与 VM 实测校验）
+  （追加 10234 活动 10:24 series 峰值归因与 MCP 环境约束）
 - 2026-04-28：更新
   [APM 支持应用级别配置](./bkmonitor/issues/2026-03-04-apm-app-level-config/README.md)
   至 bkmonitor
   （记录 PR #10275 review 结论与待修复风险）
-- 2026-04-27：更新
+- 2026-04-28：更新
   [APM 支持跨应用共享数据源](./bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md)
   至 bkmonitor
   （收口 PR review 中的共享池计数、删除释放与启停边界）
@@ -32,6 +32,3 @@
   [mypy strict 模式合规改造](./throttled-py/issues/2026-04-06-mypy-strict-compliance/README.md)
   至 throttled-py
   （按 PR #159 合入结果收口 PLAN，移除过时方案结论）
-- 2026-04-25：新增
-  [0 点活动上线导致 RPC 指标 series 暴涨](./bkmonitor/troubleshooting/rpc-series-spike-on-activity-launch.md)
-  至 bkmonitor
