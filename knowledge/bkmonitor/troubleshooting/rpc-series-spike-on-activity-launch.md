@@ -69,7 +69,7 @@ count by (service_name, callee_service) (
 
 #### 步骤 4：识别隐藏维度
 
-业务自定义指标通常只去掉 IP 相关 label，但其他高基数 label（如被调 pod 名）可能被遗漏。用 `topk` 拉若干条原始 series，对比它们的全部维度键值：
+业务自定义指标通常只去掉 IP 相关 label，但其他高基数 label（如被调 pod 名）可能被遗漏。用 `topk` 拉若干条业务自定义指标 series，对比它们的全部维度键值：
 
 ```promql
 topk(5, sum_over_time( <metric>{ <边> }[1h] ))
@@ -101,9 +101,9 @@ count by (<新值维度 1>, <新值维度 2>) (
 
 > **常见误区**：高基数维度（如 ≈ 800 个 pod 名）很容易被误标为「真正诱因」，但若窗口内值集合不变它只是乘子——去掉收益巨大却无法解释 0 点为何突变，真正诱因永远在新值驱动里
 
-#### 步骤 6：把 ΔC 换算成原始指标 series
+#### 步骤 6：把 ΔC 换算成上报 series 上限
 
-`新增 series ≈ ΔC × R`，R 取上报该指标的服务副本数：
+`新增 series 上限 ≈ ΔC × R`，R 取上报该指标的服务副本数：
 
 - 主调端（发出 `rpc_client_handled_total`）：`R = 主调副本数`。
 - 被调端（发出 `rpc_server_handled_total`）：`R = 被调副本数`，仅当被调在本 APM 内上报 `rpc_server_handled_total` 时才计入，外部被调不入账。
@@ -128,6 +128,12 @@ count(
 )
 ```
 
+约束：
+
+- 原始 `rpc_*_handled_*` 只允许用于查询 `R`。
+- 禁止用原始指标的 `count(...)`、差值或分组结果计算基数增量。
+- `ΔC`、维度基数和边贡献一律来自业务自定义指标。
+
 #### 步骤 7：跨 metric 家族放大
 
 每条 `(edge × label combo)` 在 4 类 RPC metric 上同时上报，实际 series 数 = 单 metric × 乘子：
@@ -137,7 +143,9 @@ count(
 N = 直方图 le 标签的取值数（含 +Inf）
 ```
 
-实际跑业务时去 callee 应用拉一条原始 histogram 的 `le` 标签集合数即可，本案例 N=10，乘子 = 13。
+N 由指标 schema 或 callee 应用的 histogram 配置确认。
+
+本案例 N=10，乘子 = 13。
 
 #### 步骤 8：用 series 新增数量指标做回归验证
 
@@ -151,7 +159,7 @@ sum(increase(bkmonitor:vm_new_timeseries_created_total{bk_monitor_name="monitor-
 - 使用 bkop MCP，查询业务 ID 填 `10`。
 - MCP 环境约束：
   - 只有 VM 新增 series 这一条 PromQL 使用 bkop MCP。
-  - 其他边级、维度级和原始 RPC 指标查询统一使用 bkte MCP。
+- 其他边级、维度级和副本数查询统一使用 bkte MCP。
 - 缓解动作发布后，再次拉这条曲线，下次活动 0 点应回到非活动日水位即视为生效。
 
 ### d. 结果输出建议
@@ -464,7 +472,7 @@ count by (code, user_ext1) (
 > custom:space_4228598_bkapm_metric_hpjy__bk_45__microservices__bk_45__activities__bk_45__production:__default__
 > ```
 >
-> - 说明：`ΔC` 表示去 IP 后的组合数增量，`R` 表示 0 点窗口内上报实例数
+> - 说明：`ΔC` 表示业务自定义指标组合数增量，`R` 表示 0 点窗口内上报实例数
 
 ### a. TL;DR
 
@@ -514,16 +522,16 @@ count by (code, user_ext1) (
 
 ### c. 关键边 series 跳变佐证
 
-| 边 | 去 IP ΔC | R | `ΔC × R` 上限 | 原始 `_total` 实际新增 |
-| --- | ---: | ---: | ---: | ---: |
-| `60013 -> campamspkg` | `400` | `240` | `96.0 K` | `39.0 K` |
-| `60013 -> hpyd.php.inner.formal` | `247` | `240` | `59.3 K` | `8.4 K` |
-| `60009 -> hpyd.php.inner.formal` | `174` | `240` | `41.8 K` | `14.1 K` |
-| `10119 -> redis-data` | `59` | `480` | `28.3 K` | `3.3 K` |
+| 边 | ΔC | R | `ΔC × R` 上限 | 角色 |
+| --- | ---: | ---: | ---: | --- |
+| `60013 -> campamspkg` | `400` | `240` | `96.0 K` | 主贡献边 |
+| `60013 -> hpyd.php.inner.formal` | `247` | `240` | `59.3 K` | 主贡献边 |
+| `60009 -> hpyd.php.inner.formal` | `174` | `240` | `41.8 K` | 二期治理边 |
+| `10119 -> redis-data` | `59` | `480` | `28.3 K` | 业务错误码新值 |
 
 `ΔC × R` 只表示风险上限。
 
-实际入库量以 VM 曲线为准，因为去 IP 后的组合不会在每个实例上完整展开。
+实际入库量以 VM 曲线为准，因为同一组合不会在每个实例上完整展开。
 
 ### d. 总账
 
@@ -581,113 +589,93 @@ count by (code, user_ext1) (
 > - 分析窗口：`2026-04-29 10:10 ~ 10:40 +0800`
 > - VM 新增 series 查询：使用 bkop MCP，业务 ID `10`
 > - 其他 RPC 指标查询：使用 bkte MCP，业务 ID `-4228598`
-> - 分析指标：`sum_without_ip_rpc_client_handled_total`
-> - 原始指标 RT：
->
-> ```text
-> custom:space_4228598_bkapm_metric_hpjy__bk_45__microservices__bk_45__activities__bk_45__production:__default__
-> ```
+> - 基数证据指标：`sum_without_ip_rpc_client_handled_total`
+> - 原始 `rpc_client_handled_total` 只用于查询副本数 `R`
 
 ### a. TL;DR
 
-- **实际现象**：VM 侧 `10:24` 单分钟新增 `181.2 K` series，前后常态多在 `8 K ~ 21 K/min`。
-- **主因**：`activities-10234` 活动在 `10:24 ~ 10:25` 被拉起，带来一组新增出边和 Redis 维度组合。
-- **最大贡献边**：`activities-10234 -> redis-data`
-  - 去 IP 组合数从 `20` 跳到 `24`，随后在 `10:25` 到 `88`。
-  - 原始 `rpc_client_handled_total` 从 `2.4 K` 跳到 `8.2 K`，随后到 `9.9 K`。
-- **驱动维度**：新增 `caller_method`、`user_ext1=act_10234_*_req` 和 `callee_method=SETEX`。
-- **放大量级**：`activities-10234` 有 `120` 个上报实例，RPC client/server 的 `_total/_count/_sum/_bucket` 族按约 `13` 倍展开。
-- **与历史 AMS 案例差异**：本案未看到 `callee_container` 这种 400/800 级乘子。
-  - 它是活动新值在多实例和多 metric 家族上的同步展开。
+- **实际现象**：VM 侧 `10:24` 单分钟新增 `181.2 K` series，`10:25` 仍有 `99.4 K`。
+- **主因**：`activity-microservices.activities-10234` 活动拉起后，新增出边和 Redis 业务维度组合同时出现。
+- **最大贡献边**：`10234 -> redis-data` 从 `20` 增至 `88`，`ΔC=68`。
+- **放大链路**：`ΔC × R × RPC metric 家族乘子`，其中 `R=120`，乘子按 `0x02` 口径取 `13`。
+- **总账结果**：按 `ΔC × R × 13` 得到约 `179.4 K`，贴近 bkop 侧 `181.2 K/min` 峰值。
+- **差异点**：本案不是 `callee_container` 的 400/800 级高基数扇出，而是中等基数新值被实例数和 RPC metric 家族同步放大。
 
 ### b. 调用拓扑
 
 ```text
-[service_name=activity-microservices.msgcenter]
+[service_name=activity-microservices.msgcenter] (R=240)
 └── --> callee_service=trpc.hpjy.activity-microservices.activities.10234
-    ├── 10:24 开始出现入口调用
-    └── 原始 _total：10:23=510，10:24=2203，10:25=1819
+    ├── ΔC=14  [NEW EDGE]
+    └── driver: 10234 活动入口调用新增
 
 [service_name=activity-microservices.activities-10234] (R=120)
 ├── --> callee_service=trpc.hpjy.activity-microservices.redis-data
-│   ├── 去 IP 组合数：10:23=20，10:24=24，10:25=88
-│   ├── 原始 _total：10:23=2880，10:24=8228，10:25=9948
+│   ├── ΔC=68
+│   ├── driver: user_ext1=act_10234_*_req 新增
 │   ├── driver: caller_method 新增/扩量
-│   ├── driver: user_ext1=act_10234_*_req
 │   └── driver: callee_method=SETEX 新增
 │
 ├── --> callee_service=trpc.hpjy.activity-microservices.msgcenter
-│   └── 去 IP 组合数：10:25=12；原始 _total：10:24=1274
+│   ├── ΔC=12  [NEW EDGE]
+│   └── driver: 活动内部消息调用新增
 │
 ├── --> callee_service=trpc.hpjy.activitymicroservices.msgcenter.forward
-│   └── 去 IP 组合数：10:25=2，10:26=3；原始 _total：10:24=127
+│   ├── ΔC=3  [NEW EDGE]
+│   └── driver: 活动内部消息转发新增
 │
-└── --> callee_service=trpc.hpjy.10234.{getrecommfriend,getrndrecommfriend,sevenyear}
-    └── 每条边去 IP 组合数约 1，属于活动内部新边
+├── --> callee_service=trpc.hpjy.10234.{getrecommfriend,getrndrecommfriend,sevenyear}
+│   ├── ΔC=3  [NEW EDGE]
+│   └── driver: 10234 活动内部服务调用新增
+│
+└── --> callee_service=trpc.hpjy.activity-microservices.activities.10234
+    ├── ΔC=1  [NEW EDGE]
+    └── driver: 10234 自调用新增
 ```
 
-### c. 关键证据
+图例：
 
-| 指标 / 边 | 10:23 | 10:24 | 10:25 | 判断 |
-| --- | ---: | ---: | ---: | --- |
-| VM 新增 series（bkop） | `20.8 K` | `181.2 K` | `99.4 K` | 峰值落在 `10:24` |
-| client `_total` 原始 series 总数（bkte） | `160.7 K` | `170.0 K` | `173.0 K` | client 侧明显抬升 |
-| server `_total` 原始 series 总数（bkte） | `61.0 K` | `64.9 K` | `66.4 K` | server 侧同步抬升 |
-| `10234 -> redis-data` 去 IP 组合数 | `20` | `24` | `88` | 主贡献边 |
-| `10234 -> redis-data` 原始 `_total` | `2.88 K` | `8.23 K` | `9.95 K` | 多实例展开后成为主峰 |
-| `msgcenter -> 10234` 原始 `_total` | `0.51 K` | `2.20 K` | `1.82 K` | 活动入口边同步出现 |
+- `[NEW EDGE]`：`10:23` 未上报，`10:24 ~ 10:26` 出现的新调用边。
+- `ΔC`：业务自定义指标在边上的组合数增量，禁止用原始 RPC 指标计算。
+- `driver`：该边上新增或明显放大的业务维度。
+- `R`：上报该指标的服务副本数。
 
-`10:24` 时 client `_total` 相对 `10:20` 增加约 `10.6 K`，server `_total` 增加约 `4.2 K`。
+### c. 维度拆解
 
-```text
-(10.6 K + 4.2 K) × 13 ≈ 192 K
-```
+最大边 `10234 -> redis-data` 按 `callee_method` 拆解如下：
 
-该量级与 bkop 侧 `181.2 K/min` 峰值一致。
+| `callee_method` | 10:23 | 10:25 | 新增 |
+| --- | ---: | ---: | ---: |
+| `DEL` | `8` | `22` | `14` |
+| `EVAL` | `8` | `22` | `14` |
+| `GET` | `4` | `22` | `18` |
+| `SETEX` | `0` | `22` | `22` |
+| 合计 | `20` | `88` | `68` |
 
-差值来自采集落点、bucket 实际展开和分钟对齐差异。
+业务驱动来自 `user_ext1=act_10234_*_req` 和 `caller_method` 扩展。
 
-### d. 维度拆解
+它们是同一批 `68` 个增量的不同切片，不能相加。
 
-`10234 -> redis-data` 的 `code` 全部是 `0`，不是错误码放大。
+`code` 全部是 `0`，不是错误码放大。
 
-真正新增的是业务动作和方法维度：
+### d. 总账
 
-| 维度 | 10:24 前 | 10:25 后 | 角色 |
-| --- | ---: | ---: | --- |
-| `user_ext1` | 无 | 8 个 `act_10234_*_req` | 新值驱动 |
-| `caller_method=DoActivityPriv` | 无 | 32 个组合 | 新值驱动 |
-| `callee_method=SETEX` | 无 | 22 个组合 | 新值驱动 |
-| `callee_method=DEL/EVAL` | 各 8 | 各 22 | 已有 Redis 方法扩量 |
-| `callee_method=GET` | 4 | 22 | 已有 Redis 方法扩量 |
+按 `0x02` 口径计算：单 metric 上限 = `ΔC × R`，跨 RPC metric 家族新增 = 单 metric 上限 × `13`。
 
-`user_ext1` 新增值包括：
+| 来源 | ΔC | R | 单 metric 上限 | 跨 RPC metric 家族（×13） |
+| --- | ---: | ---: | ---: | ---: |
+| `10234 -> redis-data` | `68` | `120` | `≈ 8.2 K` | `≈ 106 K` |
+| `10234 -> msgcenter` | `12` | `120` | `≈ 1.4 K` | `≈ 18.7 K` |
+| `10234 -> msgcenter.forward` | `3` | `120` | `≈ 0.36 K` | `≈ 4.7 K` |
+| `10234 -> 内部 10234 服务` | `4` | `120` | `≈ 0.48 K` | `≈ 6.2 K` |
+| `msgcenter -> 10234` | `14` | `240` | `≈ 3.4 K` | `≈ 43.7 K` |
+| 合计 | — | — | `≈ 13.8 K` | `≈ 179.4 K` |
 
-- `act_10234_ai_gen_img_req`
-- `act_10234_choose_award_req`
-- `act_10234_invite_friend_req`
-- `act_10234_query_recomm_friend_req`
-- `act_10234_report_settle_req`
-- `act_10234_save_deco_req`
-- `act_10234_subscribe_ai_notify_req`
-- `act_10234_unlock_special_req`
+与 bkop 侧 `10:24` 的 `181.2 K/min` 差异来自分钟对齐、采集落点和不同 RPC metric 的实际展开。
 
-### e. 总账
-
-| 来源 | 单 metric 新增 `_total` 量级 | 跨 RPC metric 家族（×13） | 说明 |
-| --- | ---: | ---: | --- |
-| `10234 -> redis-data` | `≈ 5.8 K ~ 7.5 K` | `≈ 76 K ~ 98 K` | 最大单边贡献 |
-| `msgcenter -> 10234` | `≈ 1.7 K ~ 2.2 K` | `≈ 22 K ~ 29 K` | 活动入口边 |
-| `10234 -> msgcenter / forward / 内部 10234 服务` | `≈ 1.5 K ~ 2.0 K` | `≈ 20 K ~ 26 K` | 活动内部联动 |
-| `msgcenter -> producer_sq / producer_wx` | `≈ 0.9 K ~ 2.2 K` | `≈ 12 K ~ 29 K` | 消息投递扩量 |
-| server 侧 `msgcenter` / `activities-10234` | `≈ 4 K ~ 6 K` | `≈ 52 K ~ 78 K` | 被调侧同步上报 |
-
-本次峰值不是单条 800 倍高基数边造成，而是 `activities-10234` 活动启动后，多条中低基数边在 `120` 个实例和 RPC metric 家族上同时展开。
-
-### f. 缓解动作
+### e. 缓解动作
 
 - 短期仅看降 series：优先评估 `activities-10234 -> redis-data` 是否需要保留 `user_ext1`。
-  - 去除 `user_ext1` 可消减 `32 × 120 ≈ 3.8 K` 单 metric series，跨 RPC metric 家族约 `50 K`。
+- 去除 `user_ext1` 可消减约 `32 × 120 ≈ 3.8 K` 单 metric series，跨 RPC metric 家族约 `50 K`。
 - 若 Redis 调用不需要按业务入口方法排障，继续评估 `caller_method` 是否可在业务自定义指标中降维。
-- 本案不建议套用 AMS 案例的 `callee_container` 修复动作。
-- 当前证据显示主因是活动新业务维度，而不是被调容器名高基数扇出。
+- 本案不建议套用 AMS 案例的 `callee_container` 修复动作，当前证据指向活动新业务维度。
