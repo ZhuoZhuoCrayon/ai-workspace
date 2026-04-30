@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-04-29
+> 最后更新：2026-04-30
 
 ## 0x01 项目知识
 
@@ -16,6 +16,10 @@
 
 ## 0x02 最近更新
 
+- 2026-04-30：更新
+  [APM 支持跨应用共享数据源](./bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md)
+  至 bkmonitor
+  （补充 shared Trace 查询改造方案，收口 `TraceQueryGuard` 与多 table 解包边界）
 - 2026-04-29：更新
   [0 点活动上线导致 RPC 指标 series 暴涨](./bkmonitor/troubleshooting/rpc-series-spike-on-activity-launch.md)
   至 bkmonitor

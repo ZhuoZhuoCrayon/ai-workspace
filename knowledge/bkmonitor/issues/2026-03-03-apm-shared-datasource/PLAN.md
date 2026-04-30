@@ -4,7 +4,7 @@ tags: [apm, datasource, es, shared-storage, architecture]
 issue: knowledge/bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md
 description: APM 跨应用共享数据源的实现方案与开发方案
 created: 2026-03-03
-updated: 2026-04-27
+updated: 2026-04-30
 ---
 
 # APM 跨应用共享数据源 —— 实施方案
@@ -487,22 +487,115 @@ flowchart LR
 | 清洗阶段（bk-collector） | 注入 `bk_biz_id` 、 `app_name` 到 Span（Token 反解），和 `resource` 同一级，无论共享与否均注入。 |
 | 应用创建阶段（SaaS）     | 增加 `bk_biz_id` 、 `app_name` 作为 ES mapping 字段。       |
 
-### g. 查询路径审计
+### g. 查询改造
 
-增加 <`bk_biz_id`、`app_name`> 过滤。
+Trace 原始表查询隔离只对 `apm_global.shared` 前缀结果表生效。
+
+独占表、预计算表和历史表不追加 `bk_biz_id` / `app_name` 过滤，避免现网未补字段的数据查询报错。
+
+改造原则：
+
+- 查询消费方只声明查询目标，不判断 shared 前缀。
+- shared 表缺少应用上下文时拒绝查询。
+- `QueryConfigBuilder.table(t1, t2, ...)` 支持多结果表，上层不循环 `add_query()`。
+- `UnifyQueryCompiler.as_sql` 只做 table 解包，不包含 APM 隔离判断。
+
+#### 查询目标
+
+新增 `bkmonitor/utils/data_query/apm.py`：
+
+```python
+@dataclass(frozen=True)
+class APMAppTarget:
+    bk_biz_id: int
+    app_name: str
 
 
-| 路径                             | 方式               |
-| -------------------------------- | ------------------ |
-| `TraceDataSource.get_q`          | QueryConfigBuilder |
-| `BaseQuery._get_q` → SpanQuery   | QueryConfigBuilder |
-| `TopoHandler.list_trace_ids`     | 直接 ES DSL        |
-| `apm_web/meta/resources.py`      | QueryConfigBuilder |
-| `monitor_web/overview/search.py` | QueryConfigBuilder |
-| `apm_web/handlers/db_handler.py` | QueryConfigBuilder |
+@dataclass(frozen=True)
+class TraceDatasourceTarget:
+    table_id: str
+    app: APMAppTarget
 
+    @classmethod
+    def from_(cls, bk_biz_id: int, app_name: str, table_id: str) -> "TraceDatasourceTarget":
+        return cls(table_id=table_id, app=APMAppTarget(bk_biz_id=bk_biz_id, app_name=app_name))
+```
 
-> 上线前需对代码库执行 `rg "QueryConfigBuilder.*BK_APM"` 和 `rg "es_client\.search"` 全量检索，确认所有查询路径已适配。
+`TraceDatasourceTarget` 表示一条 `table_id -> APM 应用` 绑定关系。
+
+多 table 查询通过多个 target 表达，禁止把 `bk_biz_id` 与 `app_name` 拆成两个独立列表。
+
+这样可以避免跨业务或跨应用误匹配。
+
+#### 隔离入口
+
+```python
+class TraceQueryGuard:
+    SHARED_TRACE_TABLE_PREFIXES = ("apm_global.shared",)
+
+    @classmethod
+    def get_q(cls, targets: Sequence[TraceDatasourceTarget]) -> QueryConfigBuilder:
+        q = QueryConfigBuilder((DataTypeLabel.LOG, DataSourceLabel.BK_APM)).table(
+            [target.table_id for target in targets]
+        )
+        return cls.apply_q(q, targets)
+
+    @classmethod
+    def apply_q(cls, q: QueryConfigBuilder, targets: Sequence[TraceDatasourceTarget]) -> QueryConfigBuilder:
+        ...
+
+    @classmethod
+    def build_dsl(cls, body: dict, target: TraceDatasourceTarget) -> dict:
+        ...
+```
+
+- `get_q()` 封装标准 APM Trace 查询构造，内部复用 `apply_q()`。
+- `apply_q()` 负责判断 shared 表、校验 target，并把逐 table 隔离条件绑定到 query 对象。
+- `build_dsl()` 面向直接 ES DSL 查询路径，负责在 shared 表查询体上追加应用隔离条件。
+- 现阶段 targets 只有一个元素，所以 `.table()` 仍然传单个 table_id，此处为后续多应用多表查询预留接口。
+
+消费方式：
+
+```python
+targets = [
+    TraceDatasourceTarget.from_(2, "app_a", t1),
+    TraceDatasourceTarget.from_(2, "app_b", t2),
+]
+
+q = TraceQueryGuard.get_q(targets).time_field(OtlpKey.END_TIME).filter(trace_id__eq=trace_id)
+```
+
+需要复用已有 `QueryConfigBuilder` 时：
+
+```python
+q = QueryConfigBuilder((DataTypeLabel.LOG, DataSourceLabel.BK_APM)).table(t1, t2)
+q = TraceQueryGuard.apply_q(q, targets)
+```
+
+#### 改造边界
+
+| 路径                                                       | 处理方式                                                            |
+|----------------------------------------------------------|-----------------------------------------------------------------|
+| `bkmonitor/utils/data_query/apm.py`                      | 新增 `APMAppTarget`、`TraceDatasourceTarget`、`TraceQueryGuard`。    |
+| `bkmonitor/data_source/unify_query/builder.py`           | `QueryConfigBuilder.table(...)` 支持多 table，并保存逐 table 绑定状态。      |
+| `UnifyQueryCompiler.as_sql`                              | 只解包多 table 并输出多个 query_config，不判断 shared 前缀。                    |
+| `apm/models/datasource.py::TraceDataSource.get_q`        | 改用 `TraceQueryGuard.get_q(...)`。                                |
+| `apm/core/handlers/query/base.py::BaseQuery._get_q`      | Trace 数据源使用真实 `result_table_id` 生成 target。                      |
+| `apm/core/handlers/query/proxy.py`                       | 关联应用 Span 查询使用 `relation_app.trace_datasource.result_table_id`。 |
+| `packages/apm_web/handlers/db_handler.py::DbQuery.get_q` | 增加 target 绑定，DB 场景走 `TraceQueryGuard`。                          |
+| `packages/apm_web/meta/resources.py`                     | 直接构造 Trace 查询处改用 `TraceQueryGuard.get_q(...)`。                  |
+| `apm/core/discover/base.py`                              | 直接 ES DSL 路径调用 `TraceQueryGuard.build_dsl()`。                   |
+| `apm/resources.py::QueryEsResource`                      | 查询 shared 表时必须传 `bk_biz_id` / `app_name`，缺失则拒绝。                 |
+
+上线前保留审计命令：
+
+```bash
+rg "QueryConfigBuilder.*BK_APM"
+rg "es_client\.search"
+rg "DataSourceLabel\.BK_APM"
+```
+
+审计结论需确认所有原始 Trace 查询入口已接入 `TraceQueryGuard`。
 
 ### h. 运维操作边界
 
@@ -516,6 +609,7 @@ flowchart LR
 
 | 时间 | 对应设计片段 | 结论调整概要 | 改动 / 验证 |
 |:--|:--|:--|:--|
+| `2026-04-30 00:00` | `0x02.g` | [1] 将「查询路径审计」调整为「查询改造」，明确 shared Trace 查询隔离只在 `TraceQueryGuard` 收口<br />[2] 补充 `APMAppTarget` / `TraceDatasourceTarget` 目标模型，保留 `table_id -> APM 应用` 一一绑定<br />[3] 明确 `UnifyQueryCompiler.as_sql` 仅负责多 table 解包，不承载 APM shared 前缀判断 | [1] 已更新查询改造方案主干与审计命令<br />[2] 本次仅更新方案文档，未改代码 |
 | `2026-04-27 20:00` | `0x02.a` `0x02.b` `0x02.e` | [1] PR review 收口共享池计数边界：补充 `acquire()` 与 `release()` 成对语义，并要求二者复用 `_change_usage_count(delta)`<br />[2] 明确共享 Trace 启停不操作 `switch_result_table()`，删除释放共享池占用但不删除共享日志索引集<br />[3] 补充以 `ApplyDatasourceResource.shared_datasource_types` 为入口的显式迁入 / 迁出方案：不传表示保持数据库现状，传入列表表示目标共享状态<br />[4] 撤回查询隔离默认开启阻塞意见，查询隔离作为后续 PR 的已知拆分事项继续保留在方案约束中 | [1] 已复查 PR #10415 最新 head `a104714`<br />[2] 仍需开发修复删除共享应用未释放 `usage_count`、`release()` 负数保护，以及 apply 更新路径迁入 / 迁出状态判断<br />[3] 本次仅更新方案文档与 review 结论，不修改 PR 代码 |
 | `2026-04-23 17:00` | `0x01.e` `0x02.b` `0x02.c` `0x02.e` `0x02.h` | [1] PR review 收口更新路径共享判定、启停边界与 DataID 运维边界<br />[2] 将 `SharedDatasourceRuleFactory` 抽成 `is_shared` 独立决策机制，并按协议文档补充 JSON 示例与字段表<br />[3] 明确查询隔离保留为共享 Trace 正式开放前必须补齐的后续 PR | [1] 已更新方案主干约束、共享判定机制小节与协议字段说明<br />[2] 已复查 PR #10415 最新 head `80e070f`<br />[3] 待开发修复 `ApplyDatasourceResource`、共享启停、`OperateApmDataIdResource` 与 migration LF |
 | `2026-04-16 15:00` | `0x01.b` `0x01.d` `0x02.a` `0x02.b` | [1] 合并同日重复文案迭代，只保留最终有效方案结论<br />[2] 明确 `bk_biz_id_alias` 固定传字符串 `bk_biz_id`，用于查询阶段业务隔离<br />[3] 保留共享模型接口约定与 DataID / 结果表创建口径分层 | [1] 已更新关键决策、命名规则、共享模型与方法级参数约束<br />[2] 已统一 `SharedTraceDataSource` 接口说明和单句续行表达<br />[3] 本次仅更新方案文档，未改代码 |
