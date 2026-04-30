@@ -3,7 +3,7 @@ title: 0 点活动上线导致 RPC 指标 series 暴涨
 tags: [apm, rpc, cardinality, series-spike, callee-container, sum-without-ip, fan-out]
 description: 通过 ΔC 边对比、维度拆解与 VM 新增 series 验证，定位活动上线引发的 RPC 指标 series 暴涨；区分业务新值驱动与高基数扇出乘子。
 created: 2026-04-25
-updated: 2026-04-29
+updated: 2026-04-30
 ---
 
 # 0 点活动上线导致 RPC 指标 series 暴涨
@@ -885,3 +885,173 @@ count by (code, user_ext1) (
 - 单分钟峰值：春节 `1422 K`，元旦 `724 K`，中性预估 `≈ 350 K`，`5 min` 内回落到 `≤ 50 K`
 - 元旦 `00:04` 次峰 `315 K` 来自 `60013 → hpyd` 二次扇出，五一无对应触发点，不复现
 - `23:40 ~ 00:30` 总量：春节 / 元旦 `≈ 4.6 M`，五一中性预估 `≈ 1.3 M`，约为前者 `1/4`
+
+## 0x07 结论（4 月 30 日 0 点本案）
+
+> - 业务：APM 应用 `hpjy-microservices-activities-production`（biz_id `-4228598`）
+> - 时间：`2026-04-30 00:00 +0800`
+> - 对比窗口：`2026-04-29 23:30 ~ 2026-04-30 00:00` vs `2026-04-30 00:00 ~ 00:30`
+> - VM 新增 series 查询：使用 bkop MCP，业务 ID `10`
+> - 其他 RPC 指标查询：使用 bkte MCP，业务 ID `-4228598`
+> - 基数证据指标：`sum_without_ip_rpc_client_handled_total`
+> - 原始 `rpc_client_handled_total` 只用于查询副本数 `R`
+
+### a. TL;DR
+
+- **实际现象**：`00:00` 单分钟新增 `226.4 K` series，`00:01` 即回落至 `4.6 K`，`5 min` 内基本归位。
+- **基线水位**：`23:00 ~ 23:59` 平均 `1.0 K/min`，`00:00 ~ 00:09` 累计 `242 K`。
+- **形态特征**：分散型尖峰，无 NEW SERVICE / NEW EDGE 大爆发，`(service_name, callee_service)` 边总数稳定在 `180 ~ 194` 之间。
+- **主因**：`[B]` 类稳态扇出边的 `callee_container` 偶发再现，叠加少量业务维度新值与若干瞬时 `callee_method` 扇出。
+- **主贡献边**：`10135 → ams`、`10143 → RecommendLeveledModesForActivity`、`10129 → ams`。
+- **量级定位**：本次 `226.4 K` 与 `0x05` 的 `4-29` 案 `194.5 K` 同量级，远低于元旦 `724 K` 与五一中性预估 `350 K`。
+- **场景定性**：属于「无活动放量日」基线尖峰，非异常事件。
+
+### b. 调用拓扑
+
+按驱动机制分三类。
+
+`[A]` 业务维度新值上线（持久新增）：
+
+```text
+├── activities-60022 (R=60)  → redis-data    ΔC=+19  driver: user_ext1=act_60022_query_winner_req（新业务动作）
+├── activities-10243 (R=120) → redis-data    ΔC=+17  driver: user_ext1（具体新值未单独拆解）
+└── activities-10240 (R=120) → msgcenter     ΔC=+14  driver: callee_method=UpdateRedpointReissue（新方法上线，0 点前未上报）
+```
+
+`[B]` 高基数 `callee_container` 盲区命中（持久新增 ≈ 5m ΔC，cc 命中后仍持续上报）：
+
+```text
+├── activities-10135 (R=120) → ams                                       ΔC=+32  driver: callee_container 流量增大命中更多 pod
+├── activities-10143 (R=120) → 10143.RecommendLeveledModesForActivity    ΔC=+30  driver: callee_container 同上
+└── activities-10129 (R=120) → ams                                       ΔC=+6 ~ +30 波动  driver: callee_container 同上
+```
+
+`[C]` 现有 `callee_method` 子组合瞬时扇出（5m ΔC 包含 `00:01` 单分钟峰值，持久 ΔC 显著小于此值）：
+
+```text
+├── activities-10127 (R=120) → msgcenter.forward     5m ΔC=+13
+├── activities-10127 (R=120) → msgcenter             5m ΔC=+12
+├── activities-10249 (R=120) → msgcenter             5m ΔC=+11
+├── activities-10238 (R=120) → msgcenter             5m ΔC=+8
+├── activities-10146 (R=120) → msgcenter             5m ΔC=+7   持久 ΔC=+3   driver: callee_method=UpdateRedpointReissue (4→6) + NotifyActivity (4→5)
+├── activities-10050 (R=120) → msgcenter             5m ΔC=+7
+└── activities-10101 (R=120) → msgcenter             5m ΔC=+2
+```
+
+```text
+[D] 其余小幅扩展（5m ΔC ≤ 6）
+├── activities-10101 (R=120) → redis-data    ΔC=+6
+├── activities-10240 (R=120) → redis-data    ΔC=+6
+├── activities-10237 (R=120) → redis-data    ΔC=+4
+├── activities-{60024,60016} (R=60) → redis-data  ΔC=+3
+└── 其他 ≈ 12 条 ΔC ≤ 3 的边
+```
+
+图例：
+
+- `ΔC` 计算口径：用 `count by(service_name, callee_service)(sum_over_time([5m]))` 在 `00:05` 与 `23:55` 两个端点对比。
+- 5m 窗口包含 `00:01` 单分钟瞬时偶发，等同于 VM 「累计新增」视角，c.3 节给出 `[C]` 类的持久 ΔC 校准方法。
+- `[B]` 类沿用 `0x06 b` 节定义：业务维度恒值且 `30` 天无活动期扩容证据的高基数 `callee_container` 边。
+- `60022 / 60024 / 60023` 调向 `amspkg / hpyd / campamspkg` 等 `0x05 b` 主贡献边今晚处于 series 衰减状态，未贡献新增。
+
+### c. 关键边 series 跳变佐证
+
+#### c.1 边总数随时间稳定，无 NEW EDGE 爆发
+
+```promql
+count(count by (service_name, callee_service) (
+  sum_over_time(sum_without_ip_rpc_client_handled_total[1m])
+))
+```
+
+| 时刻 | 23:56 | 23:57 | 23:58 | 23:59 | 00:00 | 00:01 | 00:02 | 00:03 | 00:04 | 00:05 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 边总数 | 193 | 192 | 194 | 190 | 192 | 193 | 181 | 186 | 183 | 184 |
+
+> 0 点前后边集合几乎不变，226.4 K 新增不来自新边。
+
+#### c.2 `[B]` 类稳态边 `callee_container` 偶发再现
+
+以 `10135 → ams` 为样本：
+
+```promql
+count by (callee_container) (
+  sum_over_time(sum_without_ip_rpc_client_handled_total{
+    service_name="activity-microservices.activities-10135",
+    callee_service="trpc.hpjy.activity-microservices.ams"
+  }[1m])
+)
+```
+
+| 时刻 | 23:56 | 23:57 | 23:58 | 23:59 | 00:00 | 00:01 | 00:02 | 00:03 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 min 内 distinct container | 96 | 115 | 83 | 46 | 81 | 127 | 117 | 109 |
+
+读法：
+
+- 30 min 累积 `360` 个 container（接近全集 `≈ 400`），单 1 min 仅 `46 ~ 127`。
+- `23:59` 谷底 `46` → `00:01` 峰值 `127`，差值 `+81` 即 0 点流量增大后被命中的 container。
+- 这些 container 在 VM 视角属于「过期再创建」，每次都计入 `vm_new_timeseries_created_total`。
+
+#### c.3 `[C]` 类反向边持久 vs 瞬时校准
+
+以 `10146 → msgcenter` 为样本（用户重点质疑边）。
+
+边总 series 1 min 时序：
+
+| 时刻 | 23:50 | 23:55 | 23:59 | `00:00` | `00:01` | `00:02` | `00:03` | `00:04` | `00:05` | `00:09` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 min series | `9` | `9` | `9` | `9` | `16` | `13` | `13` | `12` | `12` | `12` |
+
+按 `callee_method` 拆解（5 min 窗口）：
+
+| `callee_method` | `23:50 ~ 23:55` | `23:55 ~ 00:00` | `00:00 ~ 00:05` |
+| --- | ---: | ---: | ---: |
+| `UpdateRedpointReissue` | `4` | `10` | `6` |
+| `NotifyActivity` | `4` | `5` | `5` |
+| `CallOther` | `1` | `1` | `1` |
+| 合计 | `9` | `16` | `12` |
+
+读法：
+
+- 5m 累计 ΔC = `12 − 9 = +3`，跟 1 min 稳态对比一致，是真实持久增量。
+- `00:01` 单分钟峰值 `16` 来自瞬时新增 `user_ext1 = act_10146_lottery_req` / `act_10146_get_code_cfg_req`，下一分钟即消失。
+- 之前用 `count[1m] − count[1m] offset 5m` 得到的 `+7` 把瞬时峰值算入 ΔC，会高估 `[C]` 类反向边的持久增量。
+- VM 视角的 `vm_new_timeseries_created_total` 会同时累计瞬时与持久部分，因此 `00:01` 单分钟的 `226 K` 既包含 `[A] / [B]` 的持久新值，也包含 `[C]` 的瞬时偶发。
+
+### d. 总账
+
+VM 实测：
+
+```promql
+sum(increase(bkmonitor:vm_new_timeseries_created_total{
+  bk_monitor_name="monitor-hpjyapm-servicemonitor"
+}[1m]))
+```
+
+| 窗口 | 总量 | 分钟均值 | 单分钟峰值 |
+| --- | ---: | ---: | ---: |
+| `23:00 ~ 23:59` | `60.8 K` | `1.0 K/min` | `1.5 K` |
+| `00:00 ~ 00:09` | `242.2 K` | `26.9 K/min` | `226.4 K` |
+| `00:00 ~ 00:17` | `252.3 K` | — | — |
+
+按类别聚合 ΔC × R 估算：
+
+- 单 metric 上限 = `Σ_{服务∈类别}(Σ(出边 5m ΔC) × R)`
+- 跨 4 类 RPC metric 家族 = 单 metric 上限 × `13`
+- 类别沿用 b 节定义
+
+| 类别 | driver | 服务数 | 单 metric | 跨 4 类（×13） | 主要服务 |
+| --- | --- | ---: | ---: | ---: | --- |
+| `[A]` 业务新值 | `user_ext1` / `callee_method` 上线 | `3` | `≈ 5.6 K` | `≈ 72 K` | `activities-{10240,10243,60022}` |
+| `[B]` cc 盲区 | `callee_container` 流量增大命中更多 pod | `2` | `≈ 8.3 K` | `≈ 108 K` | `activities-{10143,10135}` |
+| `[C]` method 瞬时扇出 | `callee_method=UpdateRedpointReissue` 在 `00:01` 短暂展开 | `6` | `≈ 9.1 K` | `≈ 119 K` | `activities-{10127,10249,10101,10238,10146,10050}` |
+| `[D]` 其余 | 综合，单服务 ΔC ≤ `5` | `≈ 13` | `≈ 3.7 K` | `≈ 48 K` | `msgcenter` 出边 + 多个小活动服务 |
+| **合计** | — | `≈ 24` | **`≈ 27 K`** | **`≈ 347 K`** | — |
+
+口径一致性：
+
+- 跨 4 类上限 `347 K` 高于 VM 实测 `226.4 K`，差额来自 ΔC × R 默认假设 series 在每个副本上都展开，实际只覆盖部分。
+- `[C]` 类按 5m ΔC 计入合计，其中含 `00:01` 单分钟瞬时偶发。
+- 若全部按持久 ΔC 校准（如 `10146` 由 `+9` 降为 `+3`），`[C]` 类跨 4 类可压缩至 `≈ 40 ~ 50 K`，总账下调约 `70 ~ 80 K`，更贴近 VM 实测。
+- 不写成「治理收益 100 %」，仅作为风险上限参考。
