@@ -3,7 +3,7 @@ title: 0 点活动上线导致 RPC 指标 series 暴涨
 tags: [apm, rpc, cardinality, series-spike, callee-container, sum-without-ip, fan-out]
 description: 通过 ΔC 边对比、维度拆解与 VM 新增 series 验证，定位活动上线引发的 RPC 指标 series 暴涨；区分业务新值驱动与高基数扇出乘子。
 created: 2026-04-25
-updated: 2026-04-30
+updated: 2026-05-01
 ---
 
 # 0 点活动上线导致 RPC 指标 series 暴涨
@@ -1055,3 +1055,165 @@ sum(increase(bkmonitor:vm_new_timeseries_created_total{
 - `[C]` 类按 5m ΔC 计入合计，其中含 `00:01` 单分钟瞬时偶发。
 - 若全部按持久 ΔC 校准（如 `10146` 由 `+9` 降为 `+3`），`[C]` 类跨 4 类可压缩至 `≈ 40 ~ 50 K`，总账下调约 `70 ~ 80 K`，更贴近 VM 实测。
 - 不写成「治理收益 100 %」，仅作为风险上限参考。
+
+## 0x08 结论（五一 0 点本案）
+
+> - 业务：APM 应用 `hpjy-microservices-activities-production`（biz_id `-4228598`）
+> - 时间：`2026-05-01 00:00 +0800`
+> - 对比窗口：`23:30 ~ 00:00`（before）vs `00:00 ~ 00:30`（after）
+> - 边级窗口：`23:50 ~ 00:00` vs `00:00 ~ 00:10`，各 `[10m]`
+> - VM 新增 series 用 bkop MCP，业务 ID `10`
+> - 其他 RPC 指标用 bkte MCP，业务 ID `-4228598`
+> - 基数证据指标：`sum_without_ip_rpc_client_handled_total`
+
+### a. TL;DR
+
+- **峰值**：`00:00` 单分钟新增 `408.5 K`，`5 min` 内回落到 `≤ 2 K/min`。
+- **总量**：`23:30 ~ 00:00` 基线 `12.6 K`，`00:00 ~ 00:30` 累计 `≈ 473 K`，**额外新增 `≈ 460 K`**。
+- **vs 预估**：仅为 `0x06` 中性档 `1.26 M` 的 `37%`，乐观档 `0.75 M` 的 `61%`。
+- **形态**：`[NEW EDGE]` 仅 `6` 条，无大规模全新边爆发，总边数 `185 ~ 198` 区间，`00:01` 短暂达峰 `198`。
+- **预估命中**：`10119` 命中 `[NEW EDGE]` 预测，`[B]` 类无 cc 跳变（`ΔC=+25` 仅来自常规波动），`[名单外隐患]` `60022 / 60024` 未拉起。
+- **A 类规避**：8 服务单指标合计 `≈ 4.5 K`，5/1 高 cc 新边只有 `60015 → hpyd ΔC=+1`，显式规避 `≈ 2.3 K` 多指标（详见 `d`）。
+
+### b. 调用拓扑
+
+按 `0x06 b` 服务名单（caller 视角）分类。
+
+- 重点边（`ΔC ≥ 3` 或 `[NEW EDGE]` 或调向高 cc callee）逐条列出，其余按 callee 合并为尾部一行。
+- 高 cc callee 集：`ams` / `amspkg` / `amshostpkg` / `campamspkg` / `hpyd.php.inner.formal` / `10143.RecommendLevel...`。
+- `callee_service` 省略 `trpc.hpjy.activity-microservices.` 前缀。
+
+`[A]` 已 ignore（`0x06` 名单 8 个，本次 7 个触发，`60009` 静默）：
+
+```text
+├── activities-10243 (R=120)                     → redis-data             ΔC=+14  driver: user_ext1=act_10243_*
+├── activities-10240 (R=120)                     → msgcenter              ΔC=+9
+├── activities-10240 (R=120)                     → redis-data             ΔC=+3
+├── activities-10243 (R=120)                     → msgcenter.forward      ΔC=+2  [NEW EDGE]
+├── activities-60015 (R=60)                      → hpyd.php.inner.formal  ΔC=+1  高 cc callee
+├── 10234 / 10253 (R=120) + 60016 / 60025 (R=60) → redis-data             ΔC=+7
+└── 10234 / 10253 / 10243 (R=120)                → msgcenter              ΔC=+4
+```
+
+`[B]` 未屏蔽 + 稳态扇出 ~400 cc（`0x06` 名单 3 个，`10129 / 10135 / 10143`）：
+
+```text
+├── activities-10129 (R=120) → ams                ΔC=+9  高 cc callee
+├── activities-10129 (R=120) → trpc.http.pandora  ΔC=+4
+├── activities-10143 (R=120) → redis-data         ΔC=+3
+├── activities-10135 (R=120) → ams                ΔC=+2  高 cc callee
+├── 10129 / 10135 (R=120)    → redis-data         ΔC=+4
+└── 10129 / 10143 (R=120)    → msgcenter          ΔC=+3
+```
+
+`[B]` 业务维度恒值，cc 集合接近全集，无 `ΔC=+30` 量级跳变。
+
+`[C]` 未屏蔽 + 低基数（`0x06` 名单 10 个，本次 9 个触发，`80006` 静默）：
+
+```text
+├── activities-10119 (R=120)                              → redis-data              ΔC=+31  driver: user_ext1=act_10119_*
+├── activities-10127 (R=120)                              → msgcenter               ΔC=+14
+├── activities-10127 (R=120)                              → msgcenter.forward       ΔC=+14
+├── activities-10249 (R=120)                              → msgcenter               ΔC=+11
+├── activities-{10146,10211,10238} (R=120)                → msgcenter               ΔC=+8
+├── activities-10252 (R=120)                              → redis-data              ΔC=+8
+├── activities-10119 (R=120)                              → msgcenter.forward       ΔC=+6  [NEW EDGE]
+├── activities-10119 (R=120)                              → msgcenter               ΔC=+4  [NEW EDGE]
+├── activities-80002 (R=60)                               → redis-data              ΔC=+4
+├── 10101 / 10127 / 10146 / 10211 / 10238 / 10249 (R=120) → redis-data              ΔC=+11
+├── 10101 (R=120) + 80002 (R=60)                          → msgcenter               ΔC=+2
+└── 80002 (R=60)                                          → trpc.hpjytv.coin.inner  ΔC=+1
+```
+
+`[C]` 无高 cc callee，`10119` 命中 `0x06` 预估的 `[NEW EDGE]`，`10101` 未触达 `cc=400`。
+
+入口（`0x06` 名单 2 个，全部触发）：
+
+```text
+├── msgcenter (R=240)     → producer_wx                           ΔC=+12
+├── msgcenter (R=240)     → activities.10119                      ΔC=+11  [NEW EDGE]  10119 入口首次调用
+├── msgcenter (R=240)     → producer_sq                           ΔC=+9
+├── msgcenter (R=240)     → activities.10239                      ΔC=+6
+├── msgcenter (R=240)     → activities.{10050,10230}              ΔC=+5
+├── msgcenter (R=240)     → activities.{10156,10243,10252}        ΔC=+4
+├── msgcenter (R=240)     → trpc.cj.trpc2s.activitysvr            ΔC=+2
+├── msgcenter-camp (R=40) → activities.60016                      ΔC=+2
+├── msgcenter (R=240)     → activities.{10101,10231,10240,10253}  ΔC=+1
+└── msgcenter-camp (R=40) → activities.{60009,60024}              ΔC=+1
+```
+
+入口无高 cc callee，新边 `msgcenter → activities.10119` 与 `0x06` 预估一致。
+
+`[名单外隐患]`（`0x06` 名单 2 个，`60022 / 60024`）：
+
+```text
+├── activities-60024 (R=60) → redis-data             ΔC=+8
+├── activities-60022 (R=60) → redis-data             ΔC=+5
+└── activities-60024 (R=60) → hpyd.php.inner.formal  ΔC=+3  [NEW EDGE]  高 cc callee，yoyo-inner-* 仅命中 3 个 pod
+```
+
+`60024 → hpyd` 仅命中 `3` 个 pod，远低于全集 `≈ 60`，未触发悲观档预估。
+
+`[名单外新增]`（`0x06` 未列入但 5/1 实际有增长，`6` 个 caller）：
+
+```text
+├── activities-10239 (R=120)              → redis-data             ΔC=+16  driver: user_ext1=act_10239_*
+├── activities-60023 (R=60)               → hpyd.php.inner.formal  ΔC=+6  高 cc callee
+├── activities-10050 (R=120)              → msgcenter              ΔC=+3
+├── activities-10239 (R=120)              → msgcenter.forward      ΔC=+1  [NEW EDGE]
+├── 10050 / 10156 / 10230 / 10231 (R=120) → redis-data             ΔC=+8
+├── 10156 / 10230 / 10239 (R=120)         → msgcenter              ΔC=+3
+└── 10050 / 10156 / 10231 (R=120)         → msgcenter.forward      ΔC=+3
+```
+
+`10239` 量级与 `0x06 [C]` 类持平，候选下一轮纳入风险名单。
+
+### c. 总账
+
+#### c.1 vs `0x06` 三档预估
+
+| 情景 | `0x06` VM 预期 | 5/1 实测 | 实测 / 预期 |
+| --- | ---: | ---: | ---: |
+| 乐观（1 个 C 类触发） | `0.75 M` | `≈ 0.46 M` | **`61%`** |
+| 中性（2 个 C 类触发） | `1.26 M` | `≈ 0.46 M` | `37%` |
+| 悲观（3 个 C 类 + 名单外拉起） | `2.13 M` | `≈ 0.46 M` | `22%` |
+
+实测落在乐观档之下，主要由 3 个偏离项叠加：
+
+- `[名单外隐患]` `60022 / 60024` 未拉起活动放量，`60024 → hpyd` 仅命中 `3` 个 pod。
+- `[B]` 类 `10135 / 10129 / 10143` 业务维度恒值，cc 集合无阶跃扩张。
+- `[C]` 类仅 `10119` 触发全新边，未扇出到 `cc=400` 量级。
+
+#### c.2 类别汇总
+
+| 类别 | 服务数 | ΔC | 单指标 | 多指标合计 |
+| --- | ---: | ---: | ---: | ---: |
+| `[A]` | 7 | +40 | `≈ 4.5 K` | `≈ 58.5 K` |
+| `[B]` | 3 | +25 | `≈ 3.0 K` | `≈ 39.0 K` |
+| `[C]` | 9 | +130 | `≈ 15.2 K` | `≈ 198.1 K` |
+| 入口 | 2 | +70 | `≈ 16.0 K` | `≈ 208.0 K` |
+| `[名单外隐患]` | 2 | +16 | `≈ 1.0 K` | `≈ 12.5 K` |
+| `[名单外新增]` | 6 | +40 | `≈ 4.4 K` | `≈ 57.7 K` |
+| **合计** | **29** | **+321** | **`≈ 44.1 K`** | **`≈ 573.8 K`** |
+
+多指标合计 = 单指标 × `13`，覆盖 `total` / `count` / `sum` 与 `histogram` 的 `10` 个 bucket。
+
+`573.8 K` 是 `ΔC × R` 的上限，假设 series 在每个 caller 副本完整展开，VM 实测额外 `460 K`，差额来自部分副本未触达。
+
+### d. A 类规避收益
+
+A 类 8 服务的 `callee_container` 已 ignore 为单值，5/1 0 点显式可计算的规避只有一条高 cc 新边。
+
+| 高 cc 边 | R | ΔC | CC | 单指标 | 多指标合计（×13） |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `60015 → hpyd.php.inner.formal` | `60` | `+1` | `3` | `0.18 K` | `2.34 K` |
+
+公式 `avoidance = ΔC × R × CC`，`CC` 取 5/1 当晚同窗口实际枚举值，与 `60024 → hpyd ΔC=+3 [NEW EDGE]` 的 `yoyo-inner-* 命中 3 个 pod` 同尺度。
+
+显式部分约占 5/1 实测额外 `460 K` 的 `0.5%`，其余 7 服务出边全部落在 `redis-data` / `msgcenter` / `msgcenter.forward`，不计入。
+
+隐性部分指已有高 cc 边的 `callee_container` 集合扩张，ignore 生效后无法直接量化。
+
+按 `0x07 c.2` `10135 → ams` `1 min` cc 集 `46 → 127` 同等扩张投影，多指标合计上限 `30 ~ 90 K`，约占 `7 ~ 20%`。
+
+旧版 `4-29 cc 未生效 32.3 K` 推算的 `0.42 M` 不再使用：该基线把稳态 cc 集合算成 0 点新增，与 5/1 单点峰值不同义。
