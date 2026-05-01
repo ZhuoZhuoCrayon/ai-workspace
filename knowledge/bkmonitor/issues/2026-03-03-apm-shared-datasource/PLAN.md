@@ -237,17 +237,20 @@ flowchart LR
 * 设置链路信息：从 `link_info` dict 填充 `bk_data_id`、`result_table_id` 及子类扩展字段。
 * 启用：`usage_count=1, is_enabled=True`。
 
-**usage count 变更**：共享池占用计数只在资源分配、删除或显式迁移生命周期内变更，不绑定应用级启停。
+**usage count 变更**：共享池占用计数表达当前启用中的共享应用占用数，随共享应用启停成对变更。
 
-- `acquire()`：占用槽位，`usage_count` 加 1。
-- `release()`：释放槽位，`usage_count` 减 1。
+- `allocate()`：选取可用共享池并完成首次占用，命中后返回共享链路信息。
+- `activate()`：新建共享池激活时设置 `usage_count=1`，表示首个应用已占用。
+- `acquire()`：共享应用启动时占用槽位，`usage_count` 加 1。
+- `release()`：共享应用停止、删除或显式迁出时释放槽位，`usage_count` 减 1。
 - `acquire()` / `release()` 复用同一个底层 `_change_usage_count(delta)`，仅 `delta` 不同，查询条件与原子更新逻辑保持一致。
+- 应用启停入口必须保持幂等：已启用的 `start_trace()` 不重复 `acquire()`，已停用的 `stop_trace()` 不重复 `release()`。
 
 💡 Tips：
 
 * `release()` 使用 `Greatest(F('usage_count') - 1, 0)` 防止 `usage_count` 变为负数。
 * `allocate()` 仍负责选择可用共享池，命中后调用 `acquire()`。
-* 删除或显式迁出时调用 `release()`。
+* 删除或显式迁出时按当前启停状态调用 `release()`，避免重复释放。
 
 
 #### SharedTraceDataSource
@@ -290,7 +293,7 @@ SHARED_DS_REGISTRY = {
 | **[Method]**  `set_from_shared`              | 由子类覆写，从共享链路信息字典提取各自字段并赋值。           |
 | **[Method]** `reset_link_info`               | 重置当前数据源链路信息为未创建状态，用于迁入 / 迁出后复用原有创建流程。 |
 | **[Method]** `is_shared`                     | 是否共享，通过 `shared_datasource_id` 判断。                 |
-| **[Method]** `start / stop`                  | 共享模式下不执行结果表启停。<br />`stop()` 可在删除或显式迁移场景释放共享池占用。<br />独占模式保持原有启停行为。 |
+| **[Method]** `start / stop`                  | 共享模式下不执行结果表启停，但每次应用启停需调整共享池占用计数。<br />应用层需保证 `start_trace()` / `stop_trace()` 幂等，避免重复占用或重复释放。<br />独占模式保持原有启停行为。 |
 
 **共享模式下创建参数结论**：
 
@@ -476,7 +479,7 @@ flowchart LR
     E --> F
 ```
 
-- 共享模式：删除应用释放共享池占用，但不执行普通 `stop()` 启停逻辑，也不删除共享日志索引集。
+- 共享模式：删除应用按当前启停状态释放共享池占用，但不执行结果表启停，也不删除共享日志索引集。
 - 独占模式：保留现有 `stop_trace()` 关闭结果表流程。
 
 ### f. 应用信息注入
@@ -609,6 +612,7 @@ rg "DataSourceLabel\.BK_APM"
 
 | 时间 | 对应设计片段 | 结论调整概要 | 改动 / 验证 |
 |:--|:--|:--|:--|
+| `2026-04-30 20:00` | `0x02.a` `0x02.b` `0x02.e` | [1] 收口 PR #10415 最终 review 结论：共享 Trace 的 `start` / `stop` 每次启停调整共享池计数，`start_trace` 需补充与 `stop_trace` 对称的幂等保护<br />[2] `apply_datasource` 按可重入口径处理，不再作为阻塞问题<br />[3] `shared_datasource_types` 接受非 Trace 类型视为扩展预留，不要求本 PR 调整 | [1] 已更新 `usage_count` 主干语义与应用生命周期边界<br />[2] 已将 review 结论收敛为 1 个 P1：`start_trace` 幂等保护<br />[3] 已 Approve PR #10415 |
 | `2026-04-30 00:00` | `0x02.g` | [1] 将「查询路径审计」调整为「查询改造」，明确 shared Trace 查询隔离只在 `TraceQueryGuard` 收口<br />[2] 补充 `APMAppTarget` / `TraceDatasourceTarget` 目标模型，保留 `table_id -> APM 应用` 一一绑定<br />[3] 明确 `UnifyQueryCompiler.as_sql` 仅负责多 table 解包，不承载 APM shared 前缀判断 | [1] 已更新查询改造方案主干与审计命令<br />[2] 本次仅更新方案文档，未改代码 |
 | `2026-04-27 20:00` | `0x02.a` `0x02.b` `0x02.e` | [1] PR review 收口共享池计数边界：补充 `acquire()` 与 `release()` 成对语义，并要求二者复用 `_change_usage_count(delta)`<br />[2] 明确共享 Trace 启停不操作 `switch_result_table()`，删除释放共享池占用但不删除共享日志索引集<br />[3] 补充以 `ApplyDatasourceResource.shared_datasource_types` 为入口的显式迁入 / 迁出方案：不传表示保持数据库现状，传入列表表示目标共享状态<br />[4] 撤回查询隔离默认开启阻塞意见，查询隔离作为后续 PR 的已知拆分事项继续保留在方案约束中 | [1] 已复查 PR #10415 最新 head `a104714`<br />[2] 仍需开发修复删除共享应用未释放 `usage_count`、`release()` 负数保护，以及 apply 更新路径迁入 / 迁出状态判断<br />[3] 本次仅更新方案文档与 review 结论，不修改 PR 代码 |
 | `2026-04-23 17:00` | `0x01.e` `0x02.b` `0x02.c` `0x02.e` `0x02.h` | [1] PR review 收口更新路径共享判定、启停边界与 DataID 运维边界<br />[2] 将 `SharedDatasourceRuleFactory` 抽成 `is_shared` 独立决策机制，并按协议文档补充 JSON 示例与字段表<br />[3] 明确查询隔离保留为共享 Trace 正式开放前必须补齐的后续 PR | [1] 已更新方案主干约束、共享判定机制小节与协议字段说明<br />[2] 已复查 PR #10415 最新 head `80e070f`<br />[3] 待开发修复 `ApplyDatasourceResource`、共享启停、`OperateApmDataIdResource` 与 migration LF |
