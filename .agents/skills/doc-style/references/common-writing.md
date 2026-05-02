@@ -39,6 +39,9 @@
 - 只保留有效信息，避免“进一步优化”“增强体验”这类方向词。
 - 同一 Markdown 段落或列表项内不要堆叠多个长句。
 - 单句合并后不超过 `120` 个字符时，写成一行。
+- 源码换行不等于渲染结构，需要结构时使用空行、列表、表格或标题。
+- 不为满足源码行宽强制拆句，先判断渲染文本是否过长、信息是否过密。
+- 超链接的 URL 和 Markdown 标记不计入渲染行宽，不因链接源码变长拆散自然句。
 - 避免“简单来说”“这里先说明一下”这类口语化和自述式表达。
 
 ## 0x04 载体选择
@@ -321,4 +324,40 @@ Good：
 | --- | --- |
 | 项目四 | 说明四 |
 | 项目五 | 说明五 |
+```
+
+### f. 源码换行不能替代结构
+
+Bad：
+
+```md
+先读取配置文件。
+再执行文档检查。
+最后同步 skill。
+```
+
+Good：
+
+```md
+执行顺序：
+
+1. 读取配置文件。
+2. 执行文档检查。
+3. 同步 skill。
+```
+
+### g. 不因链接源码长度拆散自然句
+
+Bad：
+
+```md
+Use **reStructuredText (rst)** docstrings because Sphinx `autodoc` parses rst fields.
+
+Reference: [reStructuredText (rst)](https://www.sphinx-doc.org/en/master/usage/restructuredtext/index.html).
+```
+
+Good：
+
+```md
+Use [**reStructuredText (rst)** style](https://www.sphinx-doc.org/en/master/usage/restructuredtext/index.html) because Sphinx `autodoc` parses rst fields.
 ```

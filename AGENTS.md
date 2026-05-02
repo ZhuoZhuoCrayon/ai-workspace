@@ -41,7 +41,8 @@
 - 演进路线见 `knowledge/ai-workspace/issues/2026-04-06-skills-first-architecture/PLAN.md`
 - **RULE-GOVERN-003**：skill 新增或修改前，必须先读取 skill-creator 规范并严格审查。
 - **RULE-GOVERN-004**：禁止修改第三方 skills。
-- **RULE-GOVERN-005**：自研 skill 新增或修改后，必须执行 `make skills-mount`。
+- **RULE-GOVERN-005**：新增自研 skill 后，必须执行 `make skills-mount`。
+- 修改已有 skill 不需要重新挂载，除非用户明确要求。
 - **RULE-GOVERN-006**：抽象共识沉淀禁止 case-by-case 补丁
 - 触发场景：用户要求提炼抽象共识、沉淀 skills / rules 或复盘通用方法论
 - 处理方式：先提炼可迁移方法论，再用模板或 Good case 辅助落地
