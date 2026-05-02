@@ -3,6 +3,7 @@
 
 | 文件                                                                                                     | 标签                                                        | 摘要                                                      | 更新日期       |
 |------|------|------|---------|
+| [优化首页 TraceID 全局搜索的预计算延迟](./2026-05-02-overview-trace-id-low-latency-search/README.md) | `overview` `search` `apm` `trace` `pre-calculate` `low-latency` | 在预计算路径之外补一条直查 APM 应用原始 Trace 的快速通道，解决新 Trace 在预计算未落盘时搜不到的问题 | 2026-05-02 |
 | [优化 APM 接口统计偶现查询报错](./2026-04-21-apm-endpoint-stat-hot-window-divide-by-zero/README.md) | `apm` `endpoint-stat` `hot-window` `aggregation` `bucket-inconsistency` | 修复 APM endpoint 统计在热时间窗口内因聚合分桶不一致导致的接口报错 | 2026-04-21 |
 | [新版告警详情支持查看主机关联采集项日志](./2026-04-15-alert-detail-host-collector-log-relation/README.md) | `alert` `log` `host-target` `collector` `log-relation` | 在新版告警详情后端聚合主机关联采集项日志索引，复用旧版 listIndexByHost 逻辑并扩展 HostTarget 与 BaseK8STarget | 2026-04-15 |
 | [APM 返回码重定义规则清空不生效](./2026-04-10-apm-code-redefine-clear-not-effective/README.md) | `apm` `code-redefine` `code-relabel` `config-refresh` | 修复 APM 返回码重定义在清空保存后未同步删除下游配置的问题 | 2026-04-10 |
