@@ -4,7 +4,7 @@ tags: [apm, service-config, log-relation, code-redefine, code-remark, app-level]
 issue: ./README.md
 description: 通过 ServiceBase 全局能力与 ApmMetaConfig 应用级备注配置，将日志关联、返回码重定义与返回码备注扩展到应用级别
 created: 2026-03-04
-updated: 2026-04-28
+updated: 2026-05-01
 ---
 
 # APM 支持应用级别配置 —— 实施方案
@@ -23,7 +23,7 @@ updated: 2026-04-28
 关键结论：
 
 - **`kind` 保留**：返回码重定义与返回码备注都保留 `kind` 作为调用视角维度。
-- **展示优先级固定**：服务视角备注读取按 `内置默认 < 服务规则 < 全局规则` 合并，因此最终表现为“全局覆盖服务级”。
+- **展示优先级固定**：服务视角备注读取按 `内置默认 < 全局规则 < 服务规则` 合并，因此最终表现为“服务级覆盖全局”。
 - **旧备注不做程序迁移**：现网少量旧配置由人工迁移，本期只定义新存储结构与读写协议。
 
 ### b. 关系表模型设计
@@ -123,7 +123,7 @@ classDiagram
 | 视角 | 典型场景 | 请求特征 | 返回语义 |
 |:--|:--|:--|:--|
 | 应用视角 | 配置页、运营侧做统一备注管理 | 不传 `service_name` | 直接返回应用级 `code_remarks` 中的 `remarks[]`，只展示用户显式配置的备注。 |
-| 服务视角 | 服务侧按旧协议读取备注 | 传 `service_name + kind` | 先读取应用级 `code_remarks`，再按 `内置默认 < 服务规则 < 全局规则` 合并，最后仍输出旧版 `{code: remark}` 结构。 |
+| 服务视角 | 服务侧按旧协议读取备注 | 传 `service_name + kind` | 先读取应用级 `code_remarks`，再按 `内置默认 < 全局规则 < 服务规则` 合并，最后仍输出旧版 `{code: remark}` 结构。 |
 
 - 应用视角关注的是“配置本身”，因此返回的是备注列表，不补默认值，也不展开成 `{code: remark}`。
 - 服务视角关注的是“最终生效结果”，因此保持旧结构兼容。
@@ -267,7 +267,7 @@ flowchart LR
 | `apm_web/models/application.py` | 存储 | `ApmMetaConfig` | [1] 统一承载应用级 `code_remarks`。<br />[2] 固定使用 `config_key="code_remarks"` 与 `{"remarks": [...]}` 存储结构。<br />[3] 以 `application_id` 维护配置，读取为空时返回 `{"remarks": []}`。 |
 | `apm_web/service/resources.py` | 查询 | `GetCodeRemarksResource` | [1] 应用视角：`service_name` 不传，返回 `remarks` 数组。<br />[2] 服务视角：兼容原参数及 `{code: remark}` 返回结构。 |
 | `apm_web/service/resources.py` | 写入 | `SetCodeRemarkResource` | [1] 应用视角：新增 `remarks` 参数，流程以 `remarks` 作为写入对象。<br />[2] 服务视角：兼容原参数，新增 `is_global`。 |
-| `apm_web/service/serializers.py` | 协议 | serializer | [1] 应用视角 `Get/Set` 单独定义 serializer。<br />[2] 服务视角保留 `service_name + kind + code + remark` 兼容输入。<br />[3] 在序列化层显式校验 `is_global`。 |
+| `apm_web/service/serializers.py` | 协议 | serializer | [1] `BaseCodeRedefinedRequestSerializer` 统一声明可选 `service_name`、`kind`，并校验 `service_name` 存在时 `kind` 必填。<br />[2] 应用视角写入要求显式传入 `remarks`，避免空请求误清空配置。<br />[3] 服务视角保留 `service_name + kind + code + remark` 兼容输入。<br />[4] `CodeRemarkItemSerializer` 显式校验作用域不变量：全局规则 `service_names=[]`，服务规则 `service_names` 非空。 |
 | `apm_web/service/resources.py` | 下线 | 旧路径下线 | [1] 移除 `code_remarks_caller` / `code_remarks_callee` 读写逻辑。<br />[2] 不保留双写。 |
 
 #### c-2. 写入规则固化
@@ -335,6 +335,7 @@ flowchart LR
 
 | 时间 | 对应设计片段 | 结论调整概要 | 改动 / 验证 |
 |:--|:--|:--|:--|
+| `2026-05-01 11:00` | `0x01.a` `0x01.d-2` `0x02.c-1` | [1] 根据 PR #10418 review 结论调整返回码备注服务视角优先级为 `内置默认 < 全局规则 < 服务规则`，服务级备注最终覆盖全局备注<br />[2] 确认 `BaseCodeRedefinedRequestSerializer` 可统一承载可选 `service_name`、`kind`，并收敛“传 `service_name` 时 `kind` 必填”的公共校验<br />[3] 明确应用视角写入必须显式传入 `remarks`，`CodeRemarkItemSerializer` 需校验全局 / 服务作用域不变量 | [1] 已梳理 `ListCodeRedefinedRuleRequestSerializer`、`SetCodeRedefinedRuleRequestSerializer`、`SetCodeRemarkRequestSerializer` 与 `GetCodeRemarksResource.RequestSerializer`<br />[2] 已核对当前服务视角前端调用均传入 `kind`，应用视角调用不传 `service_name`<br />[3] 已更新方案主干与开发落点，代码实现待 PR 修复 |
 | `2026-04-28 16:22` | `0x02.b-1` `0x03.b` | [1] PR #10275 已按展开后的 `service_name + kind + callee_*` 维度修复返回码重定义唯一性校验<br />[2] 本轮按评审口径忽略展示聚合 `enabled` 与应用级日志关联缺省清空两个问题 | [1] 已复查增量提交 `25cb24130a`、`cc35f3405d`<br />[2] 未发现新的阻塞问题<br />[3] GitHub 检查仍在排队，后续需等待 CI / 联调验证 |
 | `2026-04-28 11:43` | `0x02.b-1` `0x02.d-2` `0x03.b` | [1] PR #10275 仍聚焦 PR-3 范围，返回码备注继续留给 PR-4<br />[2] Review 发现返回码重定义唯一性校验与展示聚合仍需修复<br />[3] Review 发现应用级日志关联写入需区分“字段缺省”和“显式清空” | [1] 已完成 PR #10275 diff 与历史 review thread 核对<br />[2] 新增 P1 评论草稿 3 条，建议修复后再合入<br />[3] CI 当前仅有标签检查通过，未见后端单测信号 |
 | `2026-04-24 00:00` | `0x01.d-1` `0x01.f` `0x01.g` `0x02.b-1` | [1] 基于 PR review 收敛返回码重定义协议，明确服务视角与应用视角都返回全局规则<br />[2] 明确全局规则展示与写入统一使用 `<is_global=true, service_names=[]>`，不再使用 `[""]` 占位<br />[3] 明确 `callee` 场景下 `callee_server` 允许为空串，不再绑定 `service_name`<br />[4] 明确下发优先级为“服务级 > 全局”，并由 `build_code_relabel_config` 输出顺序表达 | [1] 已根据 PR 评论更新查询、写入与下发主干语义<br />[2] 已将 R2 从“优先级未确认”收敛为“需联调验证 collector 是否按顺序生效”<br />[3] 待实现侧按新协议收口 serializer 与 build config 逻辑 |
@@ -412,4 +413,4 @@ flowchart LR
 
 ---
 
-*制定日期：2026-03-04 ｜ 更新日期：2026-04-28*
+*制定日期：2026-03-04 ｜ 更新日期：2026-05-01*

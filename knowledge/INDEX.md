@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-04-30
+> 最后更新：2026-05-01
 
 ## 0x01 项目知识
 
@@ -16,6 +16,10 @@
 
 ## 0x02 最近更新
 
+- 2026-05-01：更新
+  [APM 支持应用级别配置](./bkmonitor/issues/2026-03-04-apm-app-level-config/README.md)
+  至 bkmonitor
+  （收口返回码备注服务视角优先级与 serializer 校验边界）
 - 2026-04-30：更新
   [APM 支持跨应用共享数据源](./bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md)
   至 bkmonitor
@@ -32,7 +36,3 @@
   [APM 支持跨应用共享数据源](./bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md)
   至 bkmonitor
   （收口 PR review 中的共享池计数、删除释放与启停边界）
-- 2026-04-26：更新
-  [mypy strict 模式合规改造](./throttled-py/issues/2026-04-06-mypy-strict-compliance/README.md)
-  至 throttled-py
-  （按 PR #159 合入结果收口 PLAN，移除过时方案结论）
