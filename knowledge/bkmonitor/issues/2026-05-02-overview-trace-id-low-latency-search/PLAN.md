@@ -1,10 +1,10 @@
 ---
 title: 优化首页 TraceID 全局搜索的预计算延迟 —— 实施方案
-tags: [overview, search, apm, trace, pre-calculate, low-latency]
+tags: [overview, search, apm, trace, pre-calculate, low-latency, user-visit-record]
 issue: knowledge/bkmonitor/issues/2026-05-02-overview-trace-id-low-latency-search/README.md
-description: 在预计算路径之外补一条 TopN 应用原始 Trace 直查通道，与预计算并行竞速
+description: 在预计算路径之外补一条 TopN 应用原始 Trace 直查通道，与预计算并行竞速；候选应用按 UserVisitRecord 访问频次加权
 created: 2026-05-02
-updated: 2026-05-02
+updated: 2026-05-03
 ---
 
 # 优化首页 TraceID 全局搜索的预计算延迟 —— 实施方案
@@ -17,26 +17,28 @@ updated: 2026-05-02
 
 - 预计算结果表为租户级共享，单次查询天然覆盖全租户，但写入有分钟级延迟。
 - 原始 Trace 数据按应用粒度落表（`Application.trace_result_table_id`），数据落库即可查，但单表只覆盖一个应用。
-- `UserConfig.FUNCTION_ACCESS_RECORD` 中 `apm_service` 段已记录用户最近访问的 `application_id`、`service_name` 与频次，可直接用作"最近访问"信号。
-- `Application.service_count` 由定时任务刷新，可作为"应用规模"的稳定信号。
+- `apm_web.models.UserVisitRecord` 由 `user_visit_record` 装饰器写入，覆盖 service_list / service_detail / trace_list 等 view。
+- 按 `(bk_biz_id, app_name)` 聚合可得到用户的"应用访问次数"，`created_by` 与 `created_at` 均有索引。
+- `Application` 模型按 `(bk_tenant_id, bk_biz_id)` 过滤即可拉到候选，配合 `exclude(trace_result_table_id="")` 排除空表。
 
 ### b. 关键决策
 
 | 决策点 | 结论 | 理由 |
 | --- | --- | --- |
 | 预计算与直查关系 | 并行竞速，先非空者赢 | 预计算覆盖老数据广度，直查覆盖延迟期，互补不替代 |
-| 候选业务范围 | 当前业务、默认业务、最近访问业务三类去重并集 | 兼顾用户主场景，避免拉全量业务造成雪崩 |
+| 候选业务范围 | 当前业务、默认业务、`UserVisitRecord` 出现的业务三类去重并集 | 兼顾用户主场景，避免拉全量业务造成雪崩 |
+| 访问数据源 | `UserVisitRecord`，废弃 `FUNCTION_ACCESS_RECORD.apm_service` | 后者是服务访问记录而非应用访问，与 Trace 检索语义不匹配 |
 | 应用权限过滤 | 不前置过滤，命中后由前端跳转时处理 | 与现状一致，简化实现，避免无 IAM 的高频损耗 |
 | 候选应用规模 | TopN 默认 `15`，并发查询 | 与现有预计算多 cluster 并发量级一致 |
 | 直查时间窗口 | 近 `7d` | 与预计算路径对齐，便于结果合并语义统一 |
 
 ### c. 边界与风险
 
-- `bk_biz_id` 入参缺省时跳过"当前业务"来源，仅用默认与最近访问。
-- 三类业务去重时同一业务多次出现要累加权重，不重复占 TopN 槽位。
+- `bk_biz_id` 入参缺省时跳过"当前业务"来源，仅用默认业务与访问过的业务。
+- 候选业务去重并集后才作为 ORM `bk_biz_id__in` 输入，避免重复扫描。
 - `Application` 查询必须带 `bk_tenant_id`。
 - 直查的 `trace_id__eq` 必须配合 `time_field=OtlpKey.END_TIME`，否则会与预计算字段语义混淆。
-- `service_count` 与访问次数量纲差异大，必须先 `log1p` 归一再加权。
+- `UserVisitRecord` 访问次数可达数百次，必须 `log1p` 归一压扁高频段，避免极端用户的常用应用碾压业务意图。
 
 ## 0x02 方案主干
 
@@ -56,34 +58,31 @@ flowchart TD
 
 ### b. 候选应用打分
 
-单租户应用规模可达数千，全量并发直查不可取。加权用于把命中概率最高的应用排进 TopN：
-
-- **业务来源**：用户当前 / 默认 / 最近访问的业务，对应用户主场景。
-- **服务规模**：`service_count > 0` 表示应用实际接入数据，避免空壳应用占槽。
-- **访问频次**：高频访问的应用更可能是用户当前关注的链路。
-
-候选业务按来源赋权重，当前业务 `w_biz=3`、默认业务 `w_biz=2`、最近访问业务 `w_biz=1`，同一业务在多来源命中时权重累加。
-
-应用最终打分：
+按"访问过 / 未访问"分层赋分，访问过的层在排序上恒定优于未访问层：
 
 ```text
-score = w_biz + α * log1p(service_count) + β * log1p(recent_access_count)
+score = APP_WEIGHT_CURRENT + log1p(visit)                            if visit > 0
+      = BIZ_WEIGHT_CURRENT * is_current + BIZ_WEIGHT_DEFAULT * is_default  otherwise
 ```
 
-| 项 | 取值 / 来源 |
-| --- | --- |
-| `recent_access_count` | `FUNCTION_ACCESS_RECORD.apm_service` 中按 `application_id` 聚合的访问条数 |
-| `α` | `1.0` |
-| `β` | `1.5` |
-| 稳定排序 | 同分按 `Application.application_id` 升序 |
+| 常量 | 值 | 作用 |
+| --- | --- | --- |
+| `BIZ_WEIGHT_CURRENT` | `1` | 未访问层：当前业务加分 |
+| `BIZ_WEIGHT_DEFAULT` | `1` | 未访问层：默认业务加分 |
+| `APP_WEIGHT_CURRENT` | `BIZ_WEIGHT_CURRENT + BIZ_WEIGHT_DEFAULT = 2` | 访问过层基础分，确保 ≥ 未访问层最大值（`1 + 1` 同时命中也只能 1）|
 
-系数选取依据：
+**关键不变量**：访问过的最低分 `2 + log1p(1) ≈ 2.69` > 未访问的最高分 `1`，分层严格保序。
 
-- **`log1p` 归一**：`service_count`（约 10¹~10²）与访问次数（约 10⁰~10²）量纲差异大，`log1p` 压至 0~10 区间，避免单一信号绝对主导，又规避 `log(0)` 的边界。
-- **`w_biz` 等差 3/2/1**：保留 当前 > 默认 > 最近 的优先级，同应用多来源累加（最大 `6`）仍不压制 `α·log1p + β·log1p` 的最大值（约 `12`）。
-- **`β > α`**：访问频次是连续信号、区分度高，`service_count` 偏二值化（`0 vs >0` 差异显著、`10 vs 100` 差异饱和），让"最近在看的链路"压过"大应用"。
+**排序规则**：访问过按 `log1p(visit)` 排序，未访问按业务来源排序，同分按 `application_id` 升序。
 
-α、β 与 `w_biz` 首版固化为类常量，按线上 TopN 命中率反推调参。
+对照（典型场景）：
+
+| 应用 | visit | 业务 | score |
+| --- | --- | --- | --- |
+| 任意应用 | 100 | 任意 | `2 + 4.62 ≈ 6.62` |
+| 任意应用 | 1 | 任意 | `2 + 0.69 ≈ 2.69` |
+| 未访问 | 0 | 当前 / 默认 | `1` |
+| 未访问 | 0 | 其他 | `0` |
 
 ### c. 直查协议契约
 
@@ -112,7 +111,7 @@ score = w_biz + α * log1p(service_count) + β * log1p(recent_access_count)
 - 预计算路径行为与现状完全一致，可独立回退。
 - 直查 miss 不影响预计算返回。
 - 输出 item 的字段集合与现有 `TraceSearchItem.search` 完全相同。
-- 候选业务集合在 `bk_biz_id` 缺省、`DEFAULT_BIZ_ID` 缺省、无最近访问记录时退化为空集，此时 Path B 直接返回空，不抛错。
+- 候选业务集合在 `bk_biz_id` 缺省、`DEFAULT_BIZ_ID` 缺省、`UserVisitRecord` 无记录时退化为空集，此时 Path B 直接返回空，不抛错。
 
 ## 0x03 开发方案
 
@@ -137,18 +136,17 @@ score = w_biz + α * log1p(service_count) + β * log1p(recent_access_count)
 | 入口 | 职责 |
 | --- | --- |
 | `search` | 启动双路、选首个非空、装配输出 |
-| `_collect_candidate_apps` | 收集候选业务（入参 + 默认 + 最近访问）、应用加权打分、截取 TopN |
+| `_aggregate_user_visits` | 单次 GROUP BY 查询 `UserVisitRecord`，输出 `(bk_biz_id, app_name) → count` |
+| `_collect_candidate_apps` | 候选业务并集（当前 ∪ 默认 ∪ 访问过） → 全量应用 → 统一打分截 TopN |
 | `_query_raw_apps_by_trace_id` | 直查单应用 `trace_result_table_id`，`limit=1` 仅判存在 |
 | `_query_precalc_apps_by_trace_id` | 多 cluster 并发查询预计算表，由 `_query_apps_by_trace_id` 重命名，逻辑不变 |
 
 ### b. 候选应用收集步骤
 
-1. 拼接候选业务集合 `biz_weight: dict[int, int]`，按上文权重累加。
-2. 取最近访问记录：`UserConfig(username, FUNCTION_ACCESS_RECORD).value["apm_service"]`，聚合得到 `application_id -> count`。
-3. 单次 `Application.objects.filter(bk_tenant_id=..., bk_biz_id__in=biz_weight.keys())` 拉取候选应用。
-4. 对每个应用：
-   - 取所属业务最高 `w_biz`。
-   - 计算 `score = w_biz + α * log1p(service_count) + β * log1p(access_count.get(app.application_id, 0))`。
+1. 聚合最近 30 天访问次数：`_aggregate_user_visits(username) → dict[(bk_biz_id, app_name), int]`。
+2. 候选业务并集：`biz_ids = {visit.keys 的业务} ∪ {current?} ∪ {default?}`。
+3. 单次 `Application.objects.filter(bk_tenant_id=..., bk_biz_id__in=biz_ids).exclude(trace_result_table_id="")` 拉取候选应用。
+4. 对每个应用计算 `score = access_score(visit) + biz_boost(app)`（公式见 `0x02.b`）。
 5. 按 `score` 降序、`application_id` 升序，截取前 TopN。
 
 ### c. 类常量
@@ -156,18 +154,16 @@ score = w_biz + α * log1p(service_count) + β * log1p(recent_access_count)
 | 常量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `RAW_QUERY_TOP_N` | `15` | 直查应用上限 |
-| `RAW_QUERY_LOOKBACK_DAYS` | `7` | 直查回溯窗口 |
-| `BIZ_WEIGHT_CURRENT` | `3` | 当前业务权重 |
-| `BIZ_WEIGHT_DEFAULT` | `2` | 默认业务权重 |
-| `BIZ_WEIGHT_RECENT` | `1` | 最近访问业务权重 |
-| `SERVICE_COUNT_FACTOR` | `1.0` | `α` |
-| `ACCESS_COUNT_FACTOR` | `1.5` | `β` |
+| `BIZ_WEIGHT_CURRENT` | `1` | 未访问层：当前业务加分 |
+| `BIZ_WEIGHT_DEFAULT` | `1` | 未访问层：默认业务加分 |
+| `APP_WEIGHT_CURRENT` | `2.0` | 访问过层基础分（`= BIZ_WEIGHT_CURRENT + BIZ_WEIGHT_DEFAULT`，派生不可独立调） |
 
 ## 0x04 实施进展
 
-| 时间 | 对应设计片段 | 结论调整概要 | 改动 / 验证 |
+| 日期 | 对应设计片段 | 结论概要 | 改动 / 验证 |
 | --- | --- | --- | --- |
-| `2026-05-02 21:00` | `0x02.a` `0x02.b` | [1] 确认双轨并行竞速结构<br />[2] 候选应用不前置权限过滤<br />[3] 加权采用 `log1p` 归一 | [1] PLAN 主干落地<br />[2] 待开发与回归 |
+| `2026-05-02` | `0x02.a` `0x02.b` | PLAN 主干定稿：双轨并行竞速、候选应用不前置权限过滤、`log1p` 归一加权 | 待开发 |
+| `2026-05-03` | `0x01` `0x02` `0x03` | 落地与迭代<br />[1] 首版双轨竞速 + 直查通道 + `views.py` 透传 `bk_biz_id`<br />[2] 抽 `_first_truthy_concurrent` / `_safe_call` 实现路径级隔离与并发收敛<br />[3] 访问数据源切换到 `UserVisitRecord`，废弃 `FUNCTION_ACCESS_RECORD.apm_service`，删"权限保底"维度<br />[4] 打分公式定型为"分层"——访问过看 `log1p(visit)`，未访问看业务来源（commit `4c0614d5`） | [1] `ruff` / `basedpyright` 通过<br />[2] `bk_biz_id = 2` 调试残留待清理<br />[3] 待补单测与端到端回归 |
 
 ## 0x05 参考
 
