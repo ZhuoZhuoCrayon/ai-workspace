@@ -48,12 +48,12 @@
     {
       "id": 5,
       "prompt": "这个 issue 今天收口，帮我把结论并入 PLAN 主干，并按固定句式确认是否写回。",
-      "expected_output": "应触发 knowledge_mgr，更新 PLAN 主干与进展表，并主动确认是否需要将本轮结论写回当前 PLAN 结构。",
+      "expected_output": "应触发 knowledge_mgr，更新 PLAN 架构设计与进展表，并主动确认是否需要将本轮结论写回当前 PLAN 结构。",
       "files": [],
       "expectations": [
         "输出中提到会读取 issue 与 PLAN 相关规则",
         "输出中明确主动确认是否需要写回 PLAN",
-        "输出中明确先更新受影响的方案主干片段，再记录实施进展",
+        "输出中明确先更新受影响的架构设计片段，再记录实施进展",
         "输出中明确 PLAN 不是流水账"
       ]
     },
