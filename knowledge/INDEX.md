@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-05-03
+> 最后更新：2026-05-05
 
 ## 0x01 项目知识
 
@@ -16,6 +16,10 @@
 
 ## 0x02 最近更新
 
+- 2026-05-05：更新
+  [优化存储不可用时的异常处理](./throttled-py/issues/2026-05-03-store-unavailable-error-handling/README.md)
+  至 throttled-py
+  （落地 `StoreUnavailableError` 统一包装，抽出内部 wrapper 模块并通过全量测试）
 - 2026-05-03：新增
   [优化存储不可用时的异常处理](./throttled-py/issues/2026-05-03-store-unavailable-error-handling/README.md)
   至 throttled-py
@@ -32,7 +36,3 @@
   [APM 支持跨应用共享数据源](./bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md)
   至 bkmonitor
   （补充 shared Trace 查询改造方案，收口 `TraceQueryGuard` 与多 table 解包边界）
-- 2026-04-29：更新
-  [0 点活动上线导致 RPC 指标 series 暴涨](./bkmonitor/troubleshooting/rpc-series-spike-on-activity-launch.md)
-  至 bkmonitor
-  （追加 4 月 29 日 0 点 series 峰值归因，修正 `callee_container` 治理收益口径）
