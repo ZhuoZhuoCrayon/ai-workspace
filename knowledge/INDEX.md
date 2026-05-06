@@ -11,11 +11,15 @@
 | bkm-skills | [bkm-skills/](./bkm-skills/INDEX.md) | 6 篇 | BlueKing Monitor Skills |
 | bkmonitor_mcp | [bkmonitor_mcp/](./bkmonitor_mcp/INDEX.md) | 1 篇 | 蓝鲸监控 MCP Server |
 | bkmonitor-datalink | [bkmonitor-datalink/](./bkmonitor-datalink/INDEX.md) | 1 篇 | 蓝鲸监控数据链路 |
-| throttled-py | [throttled-py/](./throttled-py/INDEX.md) | 6 篇 | High-performance Python rate limiting library |
+| throttled-py | [throttled-py/](./throttled-py/INDEX.md) | 7 篇 | High-performance Python rate limiting library |
 | 通用知识 | [_shared/](./_shared/INDEX.md) | 1 篇 | 跨项目通用知识 |
 
 ## 0x02 最近更新
 
+- 2026-05-06：新增
+  [Store 类型抽象边界优化](./throttled-py/issues/2026-05-06-store-typing-abstraction-refactor/README.md)
+  至 throttled-py
+  （基于 HTTPX transport 设计调研，记录 BaseStore 公共边界与 backend 配对边界的拆分方案）
 - 2026-05-06：更新
   [优化首页 TraceID 全局搜索的预计算延迟](./bkmonitor/issues/2026-05-02-overview-trace-id-low-latency-search/README.md)
   至 bkmonitor
@@ -32,7 +36,3 @@
   [优化存储不可用时的异常处理](./throttled-py/issues/2026-05-03-store-unavailable-error-handling/README.md)
   至 throttled-py
   （统一存储异常包装语义，并补齐 Store / AtomicAction / Throttled 的源码级调研基线）
-- 2026-05-02：新增
-  [优化首页 TraceID 全局搜索的预计算延迟](./bkmonitor/issues/2026-05-02-overview-trace-id-low-latency-search/README.md)
-  至 bkmonitor
-  （在预计算路径外补一条直查 APM 应用原始 Trace 的快速通道，双轨竞速）

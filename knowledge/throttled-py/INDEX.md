@@ -6,5 +6,5 @@
 
 | 分类 | 路径 | 数量 | 说明 |
 |------|------|------|------|
-| Issues | [issues/](./issues/INDEX.md) | 5 篇 | 需求与任务 |
+| Issues | [issues/](./issues/INDEX.md) | 6 篇 | 需求与任务 |
 | 排障经验 | [troubleshooting/](./troubleshooting/INDEX.md) | 1 篇 | 问题排查与解决方案 |
