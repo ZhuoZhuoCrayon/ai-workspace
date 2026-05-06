@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-05-05
+> 最后更新：2026-05-06
 
 ## 0x01 项目知识
 
@@ -16,10 +16,10 @@
 
 ## 0x02 最近更新
 
-- 2026-05-05：更新
+- 2026-05-06：更新
   [优化存储不可用时的异常处理](./throttled-py/issues/2026-05-03-store-unavailable-error-handling/README.md)
   至 throttled-py
-  （落地 `StoreUnavailableError` 统一包装，抽出内部 wrapper 模块并通过全量测试）
+  （将 PR #163 的共享注入机制、声明式变化轴与测试分层约束回写到 PLAN）
 - 2026-05-03：新增
   [优化存储不可用时的异常处理](./throttled-py/issues/2026-05-03-store-unavailable-error-handling/README.md)
   至 throttled-py

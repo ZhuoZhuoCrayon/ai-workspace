@@ -3,7 +3,7 @@ title: 优化存储不可用时的异常处理
 tags: [throttled-py, store, redis, exception, reliability]
 description: 为存储后端异常提供统一的 StoreUnavailableError 包装，并以最小测试覆盖 sync / async 主路径
 created: 2026-05-03
-updated: 2026-05-05
+updated: 2026-05-06
 ---
 
 # 优化存储不可用时的异常处理
