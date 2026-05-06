@@ -3,6 +3,7 @@
 
 | 文件                                                                                                     | 标签                                                        | 摘要                                                      | 更新日期       |
 |------|------|------|---------|
+| [优化 APM 日志关联列表关系查询长耗时](./2026-05-06-apm-log-relation-list-uq-latency/README.md) | `apm` `log-relation` `relation-query` `unify-query` `latency` | 记录 APM 日志关联列表接口在关系查询阶段出现 35s 级长耗时的优化需求与调研边界 | 2026-05-06 |
 | [优化首页 TraceID 全局搜索的预计算延迟](./2026-05-02-overview-trace-id-low-latency-search/README.md) | `overview` `search` `apm` `trace` `pre-calculate` `low-latency` | 在预计算路径之外补一条直查 APM 应用原始 Trace 的快速通道，解决新 Trace 在预计算未落盘时搜不到的问题 | 2026-05-02 |
 | [优化 APM 接口统计偶现查询报错](./2026-04-21-apm-endpoint-stat-hot-window-divide-by-zero/README.md) | `apm` `endpoint-stat` `hot-window` `aggregation` `bucket-inconsistency` | 修复 APM endpoint 统计在热时间窗口内因聚合分桶不一致导致的接口报错 | 2026-04-21 |
 | [新版告警详情支持查看主机关联采集项日志](./2026-04-15-alert-detail-host-collector-log-relation/README.md) | `alert` `log` `host-target` `collector` `log-relation` | 在新版告警详情后端聚合主机关联采集项日志索引，复用旧版 listIndexByHost 逻辑并扩展 HostTarget 与 BaseK8STarget | 2026-04-15 |

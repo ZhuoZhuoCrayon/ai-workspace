@@ -7,7 +7,7 @@
 | 项目 | 路径 | 数量 | 说明 |
 |------|------|------|------|
 | ai-workspace | [ai-workspace/](./ai-workspace/INDEX.md) | 4 篇 | AI 工作区 — 知识管理与多项目协作中枢 |
-| bkmonitor | [bkmonitor/](./bkmonitor/INDEX.md) | 33 篇 | 蓝鲸监控平台 (bk-monitor/bkmonitor) |
+| bkmonitor | [bkmonitor/](./bkmonitor/INDEX.md) | 34 篇 | 蓝鲸监控平台 (bk-monitor/bkmonitor) |
 | bkm-skills | [bkm-skills/](./bkm-skills/INDEX.md) | 6 篇 | BlueKing Monitor Skills |
 | bkmonitor_mcp | [bkmonitor_mcp/](./bkmonitor_mcp/INDEX.md) | 1 篇 | 蓝鲸监控 MCP Server |
 | bkmonitor-datalink | [bkmonitor-datalink/](./bkmonitor-datalink/INDEX.md) | 1 篇 | 蓝鲸监控数据链路 |
@@ -16,6 +16,10 @@
 
 ## 0x02 最近更新
 
+- 2026-05-06：新增
+  [优化 APM 日志关联列表关系查询长耗时](./bkmonitor/issues/2026-05-06-apm-log-relation-list-uq-latency/README.md)
+  至 bkmonitor
+  （记录 `log_relation_list` 样本 Trace 中 `query_multi_resource_range` 35s 级主瓶颈）
 - 2026-05-06：更新
   [优化存储不可用时的异常处理](./throttled-py/issues/2026-05-03-store-unavailable-error-handling/README.md)
   至 throttled-py
