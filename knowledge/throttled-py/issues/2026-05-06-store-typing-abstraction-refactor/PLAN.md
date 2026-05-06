@@ -17,7 +17,7 @@ updated: 2026-05-06
 
 PR #159 把运行时配对关系放进泛型继承链后，`BaseStore` 成为 `BaseStore[_BackendT]`。
 
-这让普通用户想表达“返回一个同步 store”时必须同时回答“这个 store 绑定哪个 backend”。
+这让普通用户想表达"返回一个同步 store"时必须同时回答"这个 store 绑定哪个 backend"。
 
 当前 `mypy --strict` 复现结果：
 
@@ -112,7 +112,7 @@ flowchart TD
 
 当前设计把三个层级压在 `BaseStore[_BackendT]` 上：
 
-- **公共能力边界**：用户期待 `BaseStore` 表达“同步 store”。
+- **公共能力边界**：用户期待 `BaseStore` 表达"同步 store"。
 - **实现继承基类**：`MemoryStore` / `RedisStore` 复用抽象方法、校验和包装机制。
 - **backend 配对载体**：`make_atomic()` 用 `_backend: _BackendT` 构造匹配的 AtomicAction。
 
@@ -147,6 +147,31 @@ flowchart TD
 真正要修的是入口语义：`Throttled(store=_get_store())` 应直接接收 `BaseStore`。
 
 `SyncStoreP`、`BaseStore[Any]` 和 `cast()` 都不应该成为用户示例或测试 fixture 的常规写法。
+
+### e. 顶级 Python 库补充对照
+
+只对照 HTTPX 还不够。
+
+顶级 Python 库在 sync / async 抽象上还有更稳定的共识。
+
+| 样本 | 公共类型面 | sync / async 关系 | 内部实现边界 | 对 throttled-py 的启发 |
+|------|------------|-------------------|--------------|------------------------|
+| `redis-py` | `Redis` / `redis.asyncio.Redis` 是用户直接标注和传递的公共类。 | 两套并列公共类，接口命名尽量对齐。 | `connection_pool`、retry、parser、lock 等都藏在实例内部。 | store 公共基类应是名义类型，不应把 backend client 泛型抬到用户侧。 |
+| `SQLAlchemy` | `Engine`、`Connection`、`AsyncEngine`、`AsyncConnection` 是稳定公共类型。 | async 侧不是 `Engine[AsyncDriver]`，而是单独公共类代理 sync engine / connection。 | 驱动、dialect、pool 与 greenlet bridge 都留在内部层。 | sync / async 应在公共类型名义层分叉，不通过一个混合泛型入口覆盖两端。 |
+| `elasticsearch-py` | `Elasticsearch` / `AsyncElasticsearch` 是公共 client。 | 两套并列公共类，共享 base client 和 transport 配置模型。 | `Transport` / `AsyncTransport`、node pool、serializer 都是内部组合细节。 | 共享配置层可以复用，但组合层和运行时 transport 选择应在 sync / async 具体类落定。 |
+| `openai-python` | `OpenAI` / `AsyncOpenAI` 是公共 client。 | 两套并列公共类，共享 `BaseClient`，资源层也分为 `SyncAPIResource` / `AsyncAPIResource`。 | 真正的 `httpx.Client` / `httpx.AsyncClient` 注入与响应流类型都藏在底层 client。 | 第三方依赖 client 可以存在于内部泛型或组合层，但不应污染公共扩展基类的类型签名。 |
+
+这些样本说明：
+
+- **公共入口优先名义类型**：顶级库让用户记住类名，而不是协议组合或 backend 泛型实参。
+- **sync / async 是一等分叉**：两端可以共享底层实现，但不会把用户入口压成一个混合泛型抽象。
+- **内部 helper 默认不承诺公开**：代理类、backend 绑定类、transport 选择器通常是内部层，不轻易冻结成公共 API。
+- **构造器签名优先稳定**：公开构造尽量直观，避免把仅服务内部配对关系的类型问题转嫁给用户。
+
+这意味着当前方案方向是对的，但还需要再补两条顶级库级别的约束：
+
+- `BackendBoundStore` / `BackendBoundAtomicAction` 默认应视为内部 helper，不进入推荐公共 API。
+- `BaseAtomicAction` 的对外扩展口径必须和实际构造模型一致，不能说"只继承 `BaseAtomicAction` 就够了"，如果 action 需要 backend，文档就必须明确其构造约束。
 
 ## 0x02 架构设计
 
@@ -194,7 +219,7 @@ flowchart TD
 
 ### b. 用户侧类型语义
 
-用户侧 store 工厂只需要表达“返回同步 store”。
+用户侧 store 工厂只需要表达"返回同步 store"。
 
 它不应该暴露 Redis、Memory 或 backend 类型参数。
 
@@ -242,7 +267,10 @@ AtomicAction 的关键边界：
 - async 侧 `BaseAtomicAction` 声明 async `do()`，同样由 async backend 绑定辅助层持有 `_backend`。
 - `SyncAtomicActionP` / `AsyncAtomicActionP` 保留，用于 limiter 内部字典和额外 action 扩展。
 
-这样 custom action 的文档可以说“继承 `BaseAtomicAction` 并实现 `do()`”，而不是要求用户理解 `_BackendT`。
+因此文档口径应拆成两层：
+
+- 纯能力说明可以引用 `BaseAtomicAction`。
+- 需要 backend 的 action 扩展必须继承 `BackendBoundAtomicAction` 或满足等价 `__init__(backend)` 契约。
 
 ### d. Throttled 共享边界
 
@@ -286,11 +314,21 @@ classDiagram
 
 判定点：`_make_limiter()` 和 `limiter` 属于组合边界，不属于共享配置层。
 
+### e. 顶级库级别的公开面约束
+
+为了符合顶级 Python 库的公共 API 设计，这次改造还需要满足以下不变量：
+
+- `BaseStore` / async `BaseStore` 才是文档、示例、类型注解和构造参数里的主语。
+- backend 绑定 helper 默认使用内部定位，不承诺在顶层导出，也不作为推荐扩展入口写进 quickstart。
+- sync / async 的共享只发生在私有 helper、纯算法函数或共享配置层，不发生在用户侧主类型名上。
+- 公共 API 不要求用户理解 `StoreBackendP`、`_BackendT`、registry 返回类型或 `cast` 补丁。
+- 如果某个扩展点需要 backend 构造参数，文档必须明确它是"backend-aware 扩展点"，不能包装成纯能力基类。
+
 ## 0x03 开发方案
 
 ### a. Store 公共边界
 
-Store 公共边界负责“用户和 limiter 能调用什么”。
+Store 公共边界负责"用户和 limiter 能调用什么"。
 
 它只声明命令、`TYPE` 和 `make_atomic()`，不持有 `_backend`。
 
@@ -324,19 +362,24 @@ async 侧保持同构，但命令方法使用 `async def`。
 - 不通过 `cast("BaseStore", ...)` 修复示例。
 - 不把同步和异步 store 合并成同一个 `BaseStore`。
 - 不再新增 `SyncStoreP` 或 `AsyncStoreP` 引用。
+- 不把 backend helper 作为新的顶层公开心智模型写进 quickstart 或主 API 文档。
 
 ### b. Backend 绑定实现层
 
-Backend 绑定实现层负责“内建 store 如何构造匹配 action”。
+Backend 绑定实现层负责"内建 store 如何构造匹配 action"。
 
 这层可以是公共 helper，也可以用下划线前缀表达内部用途。
+
+按顶级库口径，这层默认应视为内部 helper。
+
+除非后续确认第三方确实需要名义继承它，否则不建议把它提升为推荐公共 API。
 
 **（1）代码入口**
 
 | 主题 | 处理方式 |
 |------|----------|
 | 声明位置 | [1] 同步 helper 位于 `throttled/store/base.py`<br />[2] 异步 helper 位于 `throttled/asyncio/store/base.py` |
-| 使用方 | `MemoryStore` 和 `RedisStore` 继承 helper，普通用户不需要直接标注 helper 类型。 |
+| 使用方 | `MemoryStore` 和 `RedisStore` 继承 helper，普通用户不需要直接标注 helper 类型，也不需要在文档中感知它。 |
 | 处理方式 | 默认 `make_atomic()` 只在 helper 中实现，统一从 `_backend` 构造 action。 |
 
 **（2）最小结构**
@@ -367,16 +410,22 @@ class BackendBoundStore(BaseStore, Generic[_BackendT]):
 
 ### c. AtomicAction 边界
 
-AtomicAction 边界负责“limiter 可以调用什么 action”。
+AtomicAction 边界负责"limiter 可以调用什么 action"。
 
-`BackendBoundAtomicAction` 负责“action 构造后持有什么 backend”。
+`BackendBoundAtomicAction` 负责"action 构造后持有什么 backend"。
+
+这里要比 Store 更谨慎。
+
+当前源码里的 Redis / Memory action 都直接依赖 `_backend`，而且部分 Redis action 在 `__init__` 就会 `register_script()`。
+
+所以"只继承 `BaseAtomicAction` 并实现 `do()`"并不能覆盖真实扩展需求。
 
 **（1）代码入口**
 
 | 主题 | 处理方式 |
 |------|----------|
 | 声明位置 | [1] 同步 `BaseAtomicAction` 与 `BackendBoundAtomicAction` 位于 `throttled/store/base.py`<br />[2] async 对应声明位于 `throttled/asyncio/store/base.py` |
-| 使用方 | [1] limiter 字典继续使用 `SyncAtomicActionP` 和 `AsyncAtomicActionP`<br />[2] 自定义 action 文档推荐继承 `BaseAtomicAction` |
+| 使用方 | [1] limiter 字典继续使用 `SyncAtomicActionP` 和 `AsyncAtomicActionP`<br />[2] backend-aware 自定义 action 继承 `BackendBoundAtomicAction` 或实现等价 `__init__(backend)` 契约<br />[3] `BaseAtomicAction` 只作为能力边界与文档入口，不再单独宣称足够承载 backend-aware action |
 | 处理方式 | `_backend` 和构造器只放在 backend 绑定辅助层中，算法文件按具体 backend 继承 helper。 |
 
 **（2）落点关系**
@@ -385,7 +434,7 @@ AtomicAction 边界负责“limiter 可以调用什么 action”。
 |------|----------|------|
 | Redis action | 继承 `BackendBoundAtomicAction[RedisStoreBackend]` 或等价底层 helper。 | `register_script()` 仍拿到精确 Redis backend。 |
 | Memory action | 共享 `_do(backend: MemoryStoreBackendP, ...)` 的纯计算逻辑。 | 同步和异步只在锁和 `do()` 形态上分叉。 |
-| 额外 action | 保持 `TYPE` / `STORE_TYPE` 身份筛选。 | 不要求第三方 action 暴露 backend 泛型。 |
+| 额外 action | 保持 `TYPE` / `STORE_TYPE` 身份筛选。 | 第三方不必在用户注解里暴露 backend 泛型，但如果要由 store 构造，仍需满足 backend 构造契约。 |
 
 **（3）实现约束**
 
@@ -394,6 +443,7 @@ AtomicAction 边界负责“limiter 可以调用什么 action”。
 - limiter 字典仍以 `SyncAtomicActionP` / `AsyncAtomicActionP` 保存能力。
 - 不把 Redis action 的脚本类型抽象成同步和异步混合 union。
 - 不让异步 Redis action 继承同步 Redis 执行 core。
+- 不再把"继承 `BaseAtomicAction` 并实现 `do()`"写成 backend-aware action 的唯一官方扩展口径。
 
 ### d. Throttled 构造拆分
 
@@ -538,28 +588,49 @@ async: asyncio.store.BaseStore -> asyncio.BaseRateLimiter.__init__ -> asyncio.Ba
 | 文档示例 | quickstart 不再写 `store=store`，改用 `store=_get_store()` 或具体 store 实例。 |
 | API 文档 | Sphinx docs 和 docstring 中的 `store` 参数说明与真实签名一致。 |
 | 兼容约束 | `StoreP` 不再作为核心泛型约束，也不出现在公开构造签名中。 |
+| helper 暴露 | backend 绑定 helper 不进入顶层推荐导出，也不要求用户显式标注。 |
+| action 扩展 | backend-aware action 文档明确要求 backend 构造契约，不再把 `BaseAtomicAction` 单独描述成充分条件。 |
 | 禁止形态 | 不新增 `BaseStore[Any]`、`type: ignore` 或面向用户 API 的 `cast()`。 |
 
 ## 0x05 实施进展
 
 | 时间 | 对应设计片段 | 结论调整概要 | 改动 / 验证 |
 |------|--------------|--------------|-------------|
-| `2026-05-06 03:00` | `0x01-d`、`0x02`、`0x03`、`0x04` | [1] 保留 `0x01` 调研图和架构设计图，不做大规模重写。<br />[2] 删除重复小节，把核心语义保留在用户侧类型语义。<br />[3] 类型绕行点改为链路图。<br />[4] 文档和测试验收并入验收表。 | [1] 已将 `Throttled(store=_get_store())` 应直接通过 `BaseStore` 接收的结论放在用户侧语义与验收中。<br />[2] 已把 `BaseStore[Any]`、`SyncStoreP`、`AsyncStoreP`、`cast()` 的清理点收束到验收表。 |
-| `2026-05-06 02:00` | `0x02`、`0x03-d`、`0x04` | [1] 删除独立 Store 协议删除章节，`StoreP` 废弃口径合并到架构设计。<br />[2] Throttled 共享边界改为标准 Mermaid 类图，只声明继承关系和成员归属。<br />[3] `0x03-d` 改为“共享配置，不共享组合”，补充位置参数兼容骨架。<br />[4] 验收改为只保留本需求关键测试点。 | [1] 已用 `classDiagram` 表达 `BaseThrottledShared -> 同步 / 异步` 的类关系。<br />[2] 已删除 Store、Limiter 和 Hook 的第三层依赖节点。<br />[3] 已基于当前 `BaseThrottledMixin.__init__` 位置参数顺序重写构造方案。<br />[4] 已回收难读术语，改成可对应源码动作的表达。 |
-| `2026-05-06 01:00` | `0x02`、`0x03` | [1] 架构设计改为只承载分层、类型语义与不变量。<br />[2] 开发方案改为按责任边界组织，补齐代码入口、迁移规则和禁止形态。 | [1] 已将 `BaseStore` / `BaseAtomicAction` 的最小结构下沉到开发方案。<br />[2] 已把 Store、backend 绑定辅助层、AtomicAction、Throttled 与文档测试迁移拆成独立落点。 |
-| `2026-05-06 00:00` | `0x01` 至 `0x04` | [1] 已确认 HTTPX 使用非泛型公共 transport 基类承载用户侧能力边界。<br />[2] 已确认 throttled-py 的 `BaseStore[_BackendT]` 将 backend 配对泄漏到用户侧。<br />[3] 推荐拆分 `BaseStore` 与 `BackendBoundStore[_BackendT]`，后续再拆 `BaseThrottledMixin`。 | [1] 已核对 HTTPX `BaseTransport`、`HTTPTransport`、`MockTransport`、`WSGITransport`、`ASGITransport` 与 `Client` 源码。<br />[2] 已核对 throttled-py store、types、rate limiter 与 throttled 主路径。<br />[3] 已用 `mypy --strict -c` 复现 `BaseStore` 裸用失败与 `SyncStoreP` 通过。 |
+| `2026-05-06 00:00 ~ 12:00` | `0x01` 至 `0x04` | [1] 确认 HTTPX 分层模型，补充 `redis-py` / `SQLAlchemy` / `elasticsearch-py` / `openai-python` 对照，形成 `BaseStore` / `BackendBoundStore[_BackendT]` 拆分方案。<br />[2] 架构设计收敛为分层模型、用户侧类型语义、AtomicAction 边界、Throttled 共享边界四部分。<br />[3] 开发方案按责任边界拆分为 Store 公共边界、Backend 绑定实现层、AtomicAction 边界、Throttled 构造拆分，补齐代码入口、迁移规则和禁止形态。<br />[4] 类型绕行点改为链路图，文档与测试验收并入验收表，Throttled 共享边界改用 Mermaid 类图。<br />[5] 明确公开构造签名不变，共享层只接收关键字参数，补充位置参数兼容骨架与迁移顺序。 | [1] 已核对 HTTPX 与 throttled-py 源码，复现 `BaseStore` 裸用失败。<br />[2] 已核对上述顶级库 sync / async 主入口，确认公共类型面不暴露 backend 泛型。<br />[3] 已将 `BaseStore[Any]`、`SyncStoreP`、`AsyncStoreP`、`cast()` 清理点收束到验收表。<br />[4] 已用 `classDiagram` 表达 `BaseThrottledShared` 继承关系，基于当前 `__init__` 位置参数顺序重写构造方案。 |
 
 ## 0x06 参考
 
 - [HTTPX Transports 文档](https://www.python-httpx.org/advanced/transports/)
 - [HTTPX `BaseTransport` 源码](https://github.com/encode/httpx/blob/master/httpx/_transports/base.py)
-- [HTTPX `HTTPTransport` 源码](https://github.com/encode/httpx/blob/master/httpx/_transports/default.py)
-- [HTTPX `MockTransport` 源码](https://github.com/encode/httpx/blob/master/httpx/_transports/mock.py)
-- [HTTPX `WSGITransport` 源码](https://github.com/encode/httpx/blob/master/httpx/_transports/wsgi.py)
-- [HTTPX `ASGITransport` 源码](https://github.com/encode/httpx/blob/master/httpx/_transports/asgi.py)
-- [HTTPX `Client` 源码](https://github.com/encode/httpx/blob/master/httpx/_client.py)
+- [HTTPX `HTTPTransport` 源码][httpx-http-transport]
+- [HTTPX `MockTransport` 源码][httpx-mock-transport]
+- [HTTPX `WSGITransport` 源码][httpx-wsgi-transport]
+- [HTTPX `ASGITransport` 源码][httpx-asgi-transport]
+- [HTTPX `Client` 源码][httpx-client]
+- [redis-py `Redis` 源码][redis-py-redis]
+- [redis-py async `Redis` 源码][redis-py-async-redis]
+- [SQLAlchemy `Connection` / `Engine` 源码][sqlalchemy-connection]
+- [SQLAlchemy `AsyncConnection` / `AsyncEngine` 源码][sqlalchemy-async-connection]
+- [elasticsearch-py `Elasticsearch` 源码][es-py-elasticsearch]
+- [elasticsearch-py `AsyncElasticsearch` 源码][es-py-async-elasticsearch]
+- [openai-python `OpenAI` / `AsyncOpenAI` 源码][openai-python-client]
+- [openai-python `BaseClient` 源码][openai-python-base-client]
 - [mypy strict 模式合规改造方案](../2026-04-06-mypy-strict-compliance/PLAN.md)
 - [优化存储不可用时的异常处理方案](../2026-05-03-store-unavailable-error-handling/PLAN.md)
+
+[httpx-http-transport]: https://github.com/encode/httpx/blob/master/httpx/_transports/default.py
+[httpx-mock-transport]: https://github.com/encode/httpx/blob/master/httpx/_transports/mock.py
+[httpx-wsgi-transport]: https://github.com/encode/httpx/blob/master/httpx/_transports/wsgi.py
+[httpx-asgi-transport]: https://github.com/encode/httpx/blob/master/httpx/_transports/asgi.py
+[httpx-client]: https://github.com/encode/httpx/blob/master/httpx/_client.py
+[redis-py-redis]: https://github.com/redis/redis-py/blob/master/redis/client.py
+[redis-py-async-redis]: https://github.com/redis/redis-py/blob/master/redis/asyncio/client.py
+[sqlalchemy-connection]: https://github.com/sqlalchemy/sqlalchemy/blob/main/lib/sqlalchemy/engine/base.py
+[sqlalchemy-async-connection]: https://github.com/sqlalchemy/sqlalchemy/blob/main/lib/sqlalchemy/ext/asyncio/engine.py
+[es-py-elasticsearch]: https://github.com/elastic/elasticsearch-py/blob/main/elasticsearch/_sync/client/__init__.py
+[es-py-async-elasticsearch]: https://github.com/elastic/elasticsearch-py/blob/main/elasticsearch/_async/client/__init__.py
+[openai-python-client]: https://github.com/openai/openai-python/blob/main/src/openai/_client.py
+[openai-python-base-client]: https://github.com/openai/openai-python/blob/main/src/openai/_base_client.py
 
 ## 0x07 版本锚点
 

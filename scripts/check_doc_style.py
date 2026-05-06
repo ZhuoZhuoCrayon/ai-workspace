@@ -106,6 +106,11 @@ def is_url_only_line(stripped: str) -> bool:
     )
 
 
+def is_ref_link_def_line(stripped: str) -> bool:
+    """Check if line is a reference link definition: [id]: url ..."""
+    return bool(re.match(r"^\[[^\]]+\]:\s*\S", stripped))
+
+
 def strip_inline_code(line: str) -> str:
     return INLINE_CODE_PATTERN.sub("", line)
 
@@ -236,6 +241,7 @@ def check_file(path: Path) -> list[Issue]:
                 len(line) > MAX_PROSE_LINE_LENGTH
                 and not is_table
                 and not is_url_only_line(stripped)
+                and not is_ref_link_def_line(stripped)
             ):
                 issues.append(
                     Issue(
