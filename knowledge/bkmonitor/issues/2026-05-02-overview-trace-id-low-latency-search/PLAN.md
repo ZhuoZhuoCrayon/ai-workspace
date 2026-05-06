@@ -2,9 +2,9 @@
 title: 优化首页 TraceID 全局搜索的预计算延迟 —— 实施方案
 tags: [overview, search, apm, trace, pre-calculate, low-latency, user-visit-record]
 issue: knowledge/bkmonitor/issues/2026-05-02-overview-trace-id-low-latency-search/README.md
-description: 在预计算路径之外补一条 TopN 应用原始 Trace 直查通道，与预计算并行竞速；候选应用按 UserVisitRecord 访问频次加权
+description: 在预计算路径之外补一条 TopN 应用原始 Trace 直查通道，与预计算并行竞速；候选应用按 UserVisitRecord 访问分层、业务来源与服务数加权
 created: 2026-05-02
-updated: 2026-05-03
+updated: 2026-05-06
 ---
 
 # 优化首页 TraceID 全局搜索的预计算延迟 —— 实施方案
@@ -61,26 +61,28 @@ flowchart TD
 按"访问过 / 未访问"分层赋分，访问过的层在排序上恒定优于未访问层：
 
 ```text
-score = APP_WEIGHT_CURRENT + log1p(visit)                            if visit > 0
-      = BIZ_WEIGHT_CURRENT * is_current + BIZ_WEIGHT_DEFAULT * is_default  otherwise
+score = APP_WEIGHT_CURRENT + log1p(visit)                                                       if visit > 0
+      = BIZ_WEIGHT_CURRENT * is_current + BIZ_WEIGHT_DEFAULT * is_default + APP_WEIGHT_HAS_SERVICE * has_service  otherwise
 ```
 
 | 常量 | 值 | 作用 |
 | --- | --- | --- |
 | `BIZ_WEIGHT_CURRENT` | `1` | 未访问层：当前业务加分 |
 | `BIZ_WEIGHT_DEFAULT` | `1` | 未访问层：默认业务加分 |
-| `APP_WEIGHT_CURRENT` | `BIZ_WEIGHT_CURRENT + BIZ_WEIGHT_DEFAULT = 2` | 访问过层基础分，确保 ≥ 未访问层最大值（`1 + 1` 同时命中也只能 1）|
+| `APP_WEIGHT_HAS_SERVICE` | `0.5` | 未访问层：有服务应用加分 |
+| `APP_WEIGHT_CURRENT` | `BIZ_WEIGHT_CURRENT + BIZ_WEIGHT_DEFAULT + APP_WEIGHT_HAS_SERVICE = 2.5` | 访问过层基础分，确保大于未访问层最大值 |
 
-**关键不变量**：访问过的最低分 `2 + log1p(1) ≈ 2.69` > 未访问的最高分 `1`，分层严格保序。
+**关键不变量**：访问过的最低分 `2.5 + log1p(1) ≈ 3.19` > 未访问的最高分 `2.5`，分层严格保序。
 
-**排序规则**：访问过按 `log1p(visit)` 排序，未访问按业务来源排序，同分按 `application_id` 升序。
+**排序规则**：访问过按 `log1p(visit)` 排序，未访问按业务来源与服务数排序，同分按 `application_id` 升序。
 
 对照（典型场景）：
 
 | 应用 | visit | 业务 | score |
 | --- | --- | --- | --- |
-| 任意应用 | 100 | 任意 | `2 + 4.62 ≈ 6.62` |
-| 任意应用 | 1 | 任意 | `2 + 0.69 ≈ 2.69` |
+| 任意应用 | 100 | 任意 | `2.5 + 4.62 ≈ 7.12` |
+| 任意应用 | 1 | 任意 | `2.5 + 0.69 ≈ 3.19` |
+| 未访问 | 0 | 当前 + 默认 + 有服务 | `2.5` |
 | 未访问 | 0 | 当前 / 默认 | `1` |
 | 未访问 | 0 | 其他 | `0` |
 
@@ -156,14 +158,16 @@ score = APP_WEIGHT_CURRENT + log1p(visit)                            if visit > 
 | `RAW_QUERY_TOP_N` | `15` | 直查应用上限 |
 | `BIZ_WEIGHT_CURRENT` | `1` | 未访问层：当前业务加分 |
 | `BIZ_WEIGHT_DEFAULT` | `1` | 未访问层：默认业务加分 |
-| `APP_WEIGHT_CURRENT` | `2.0` | 访问过层基础分（`= BIZ_WEIGHT_CURRENT + BIZ_WEIGHT_DEFAULT`，派生不可独立调） |
+| `APP_WEIGHT_HAS_SERVICE` | `0.5` | 未访问层：有服务应用加分 |
+| `APP_WEIGHT_CURRENT` | `2.5` | 访问过层基础分（`= BIZ_WEIGHT_CURRENT + BIZ_WEIGHT_DEFAULT + APP_WEIGHT_HAS_SERVICE`，派生不可独立调） |
 
 ## 0x04 实施进展
 
-| 日期 | 对应设计片段 | 结论概要 | 改动 / 验证 |
+| 时间 | 对应设计片段 | 结论概要 | 改动 / 验证 |
 | --- | --- | --- | --- |
-| `2026-05-02` | `0x02.a` `0x02.b` | PLAN 主干定稿：双轨并行竞速、候选应用不前置权限过滤、`log1p` 归一加权 | 待开发 |
-| `2026-05-03` | `0x01` `0x02` `0x03` | 落地与迭代<br />[1] 首版双轨竞速 + 直查通道 + `views.py` 透传 `bk_biz_id`<br />[2] 抽 `_first_truthy_concurrent` / `_safe_call` 实现路径级隔离与并发收敛<br />[3] 访问数据源切换到 `UserVisitRecord`，废弃 `FUNCTION_ACCESS_RECORD.apm_service`，删"权限保底"维度<br />[4] 打分公式定型为"分层"——访问过看 `log1p(visit)`，未访问看业务来源（commit `4c0614d5`） | [1] `ruff` / `basedpyright` 通过<br />[2] `bk_biz_id = 2` 调试残留待清理<br />[3] 待补单测与端到端回归 |
+| `2026-05-06 16:00` | `0x02.b` `0x02.c` `0x03.c` | PR #10492 review 收口：预计算路径恢复 `MIN_START_TIME`，候选应用打分修正为访问层基础分 + `log1p`，未访问层保留业务来源与服务数加权 | [1] 已发布 `2` 条 P1 inline review 评论<br />[2] 已修复 `search.py` 的时间字段与分层得分<br />[3] `uv run ruff check packages/monitor_web/overview/search.py packages/monitor_web/overview/views.py` 通过 |
+| `2026-05-03 00:00` | `0x01` `0x02` `0x03` | 落地与迭代<br />[1] 首版双轨竞速 + 直查通道 + `views.py` 透传 `bk_biz_id`<br />[2] 抽 `_first_truthy_concurrent` / `_safe_call` 实现路径级隔离与并发收敛<br />[3] 访问数据源切换到 `UserVisitRecord`，废弃 `FUNCTION_ACCESS_RECORD.apm_service` | [1] `ruff` / `basedpyright` 通过<br />[2] 待补单测与端到端回归 |
+| `2026-05-02 00:00` | `0x02.a` `0x02.b` | PLAN 主干定稿：双轨并行竞速、候选应用不前置权限过滤、`log1p` 归一加权 | 待开发 |
 
 ## 0x05 参考
 
@@ -176,5 +180,5 @@ score = APP_WEIGHT_CURRENT + log1p(visit)                            if visit > 
 
 ## 0x06 版本锚点
 
-- 分支：`feat/260502_overview-trace-low-latency`
-- PR：待开
+- 分支：`feat/apm_trace/#1010158081134011153`
+- PR：[TencentBlueKing/bk-monitor#10492](https://github.com/TencentBlueKing/bk-monitor/pull/10492)

@@ -16,6 +16,10 @@
 
 ## 0x02 最近更新
 
+- 2026-05-06：更新
+  [优化首页 TraceID 全局搜索的预计算延迟](./bkmonitor/issues/2026-05-02-overview-trace-id-low-latency-search/README.md)
+  至 bkmonitor
+  （将 PR #10492 的 review 修复、分层打分不变量与版本锚点回写到 PLAN）
 - 2026-05-06：新增
   [优化 APM 日志关联列表关系查询长耗时](./bkmonitor/issues/2026-05-06-apm-log-relation-list-uq-latency/README.md)
   至 bkmonitor
@@ -32,11 +36,3 @@
   [优化首页 TraceID 全局搜索的预计算延迟](./bkmonitor/issues/2026-05-02-overview-trace-id-low-latency-search/README.md)
   至 bkmonitor
   （在预计算路径外补一条直查 APM 应用原始 Trace 的快速通道，双轨竞速）
-- 2026-05-01：更新
-  [APM 支持应用级别配置](./bkmonitor/issues/2026-03-04-apm-app-level-config/README.md)
-  至 bkmonitor
-  （收口返回码备注服务视角优先级与 serializer 校验边界）
-- 2026-04-30：更新
-  [APM 支持跨应用共享数据源](./bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md)
-  至 bkmonitor
-  （补充 shared Trace 查询改造方案，收口 `TraceQueryGuard` 与多 table 解包边界）

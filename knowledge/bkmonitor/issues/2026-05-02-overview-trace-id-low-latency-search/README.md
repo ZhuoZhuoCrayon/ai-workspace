@@ -3,7 +3,7 @@ title: 优化首页 TraceID 全局搜索的预计算延迟
 tags: [overview, search, apm, trace, pre-calculate, low-latency]
 description: 在预计算路径之外补一条直查 APM 应用原始 Trace 的快速通道，解决新 Trace 在预计算未落盘时搜不到的问题
 created: 2026-05-02
-updated: 2026-05-02
+updated: 2026-05-06
 ---
 
 # 优化首页 TraceID 全局搜索的预计算延迟
@@ -32,8 +32,8 @@ updated: 2026-05-02
 
 - `SearchSerializer` 增加非必填 `bk_biz_id`（用户当前所在业务），仅作候选输入，不强制语义。
 - 在预计算路径之外新增一条"应用原始 Trace 直查"快速通道。
-- 候选业务来源固定为：`bk_biz_id` 入参、`UserConfig.DEFAULT_BIZ_ID`、`UserConfig.FUNCTION_ACCESS_RECORD` 中 `apm_service` 的最近访问业务。
-- 候选应用按"业务来源 + 服务数 + 最近访问次数"加权，取 TopN（默认 `15`）。
+- 候选业务来源固定为：`bk_biz_id` 入参、`UserConfig.DEFAULT_BIZ_ID`、`UserVisitRecord` 中用户最近访问过的 APM 应用所属业务。
+- 候选应用按"访问记录分层 + 业务来源 + 服务数"加权，取 TopN（默认 `15`）。
 - 预计算路径与直查路径并行竞速，先返回非空者赢，另一路立即终止。
 - 命中后装配的 item 字段与现有 `TraceSearchItem` 输出保持一致。
 
@@ -66,6 +66,7 @@ updated: 2026-05-02
 - `monitor_web/overview/search.py`：`TraceSearchItem`、`Searcher`
 - `monitor_web/overview/views.py`：`SearchSerializer`、`SearchViewSet`
 - `monitor_web/overview/resources.py`：`GetFunctionShortcutResource.get_recent_shortcuts`
-- `monitor/models/models.py`：`UserConfig.Keys.DEFAULT_BIZ_ID` / `FUNCTION_ACCESS_RECORD`
+- `monitor/models/models.py`：`UserConfig.Keys.DEFAULT_BIZ_ID`
 - `apm_web/models/application.py`：`Application.service_count`、`trace_result_table_id`
+- `apm_web/models/visit_record.py`：`UserVisitRecord`
 - `apm_web/handlers/db_handler.py`：`DbQuery.get_q`
