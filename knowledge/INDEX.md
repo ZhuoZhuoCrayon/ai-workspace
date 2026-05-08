@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-05-07
+> 最后更新：2026-05-08
 
 ## 0x01 项目知识
 
@@ -16,6 +16,10 @@
 
 ## 0x02 最近更新
 
+- 2026-05-08：更新
+  [优化 APM 日志关联列表关系查询长耗时](./bkmonitor/issues/2026-05-06-apm-log-relation-list-uq-latency/README.md)
+  至 bkmonitor
+  （将 PLAN 从调研态收敛为方案态，并确认无 workload 服务可直接短路关系查询分支）
 - 2026-05-07：新增
   [APM Span 内置指标支持声明式引用](./bkmonitor/issues/2026-05-07-apm-span-builtin-metric-declarative-reference/README.md)
   至 bkmonitor
@@ -32,7 +36,3 @@
   [优化 APM 日志关联列表关系查询长耗时](./bkmonitor/issues/2026-05-06-apm-log-relation-list-uq-latency/README.md)
   至 bkmonitor
   （记录 `log_relation_list` 样本 Trace 中 `query_multi_resource_range` 35s 级主瓶颈）
-- 2026-05-06：更新
-  [优化存储不可用时的异常处理](./throttled-py/issues/2026-05-03-store-unavailable-error-handling/README.md)
-  至 throttled-py
-  （将 PR #163 的共享注入机制、声明式变化轴与测试分层约束回写到 PLAN）

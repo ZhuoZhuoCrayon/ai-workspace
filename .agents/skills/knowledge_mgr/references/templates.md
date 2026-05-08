@@ -3,7 +3,7 @@ title: 知识对象模板
 tags: [template, documentation]
 description: 知识对象（issue、plan、snippet、troubleshooting）的标准文档模板
 created: 2026-02-09
-updated: 2026-05-04
+updated: 2026-05-08
 ---
 
 # 知识对象模板
@@ -110,6 +110,11 @@ updated: <YYYY-MM-DD>
 
 实施进展表内的条目按时间倒序排列，最新进展置于表格最上方。
 
+版本锚点约束：
+
+- `分支` 使用当前实际分支名，占位统一写作 `<branch_name>`。
+- `PR` 必须写成 Markdown 链接，不使用纯编号或裸 URL。
+
 ```markdown
 ---
 title: <标题>
@@ -150,6 +155,6 @@ updated: <YYYY-MM-DD>
 
 ## 0x07 版本锚点
 
-- 分支：`<type>/<yymmdd>_<topic>`
-- PR：`#<number>` 或 `<url>`
+- 分支：`<branch_name>`
+- PR：[ #<number> ](<pr_url>)
 ```
