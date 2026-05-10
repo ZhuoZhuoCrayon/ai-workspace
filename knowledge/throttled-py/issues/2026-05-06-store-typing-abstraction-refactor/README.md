@@ -1,9 +1,9 @@
 ---
 title: Store 类型抽象边界优化
-tags: [throttled-py, typing, store, abstraction, public-api, httpx]
-description: 基于 HTTPX transport 设计调研，重新定义 BaseStore 的公共边界与内部 backend 配对边界
+tags: [throttled-py, typing, store, abstraction, public-api, sync-async]
+description: 从底向上重画 sync / async 分界，重新定义 BaseStore 公共边界与内部执行层复用方式
 created: 2026-05-06
-updated: 2026-05-06
+updated: 2026-05-10
 ---
 
 # Store 类型抽象边界优化
@@ -42,8 +42,9 @@ def _get_store(use_redis: bool) -> types.SyncStoreP:
 
 ### b. 目标
 
-- 调研 HTTPX transport 抽象，明确主流库如何区分公共边界与底层实现细节。
+- 参考 HTTPX 与 openai-python 的公共边界和执行层隔离方式。
 - 梳理 throttled-py 当前 store、backend、atomic action、rate limiter 和 throttled 对象关系。
+- 从底向上重画 Store、AtomicAction、RateLimiter 与 Throttled 的 sync / async 分界。
 - 设计新的类型抽象边界，让 `BaseStore` 可以代表用户侧同步 store 能力。
 - 保留 `mypy --strict` 的架构收益，不回退到 `Any`、裸 `cast` 或 `type: ignore`。
 - 让文档、示例和测试不再需要用 `BaseStore[Any]` 或 `SyncStoreP` 解释普通同步 store 工厂。
@@ -53,7 +54,8 @@ def _get_store(use_redis: bool) -> types.SyncStoreP:
 - 以 HTTPX 的 `BaseTransport`、`HTTPTransport`、`Client(transport=...)` 为对照样本。
 - 重新定义 `throttled.store.BaseStore` 与 `throttled.asyncio.store.BaseStore` 的公共职责。
 - 评估是否新增 backend-bound 实现辅助类，用于保留 store/backend/action 的精确配对。
-- 同步审视 `BaseAtomicAction`、`BaseThrottledMixin` 与 `types.StoreP` 是否存在类似边界泄漏。
+- 按 Backend、AtomicAction、Store、RateLimiter、Throttled 顺序推演迁移边界。
+- 同步审视 `BaseAtomicAction`、`BaseRateLimiterMixin`、`BaseThrottledMixin` 与 `types.StoreP` 的边界泄漏。
 - 补齐类型验收用例，覆盖 `_get_store() -> BaseStore`、Redis / Memory 二选一和 `Throttled(store=...)`。
 - 更新示例与文档中的推荐类型标注。
 
@@ -77,9 +79,12 @@ def _get_store(use_redis: bool) -> types.SyncStoreP:
 - `def _get_store() -> BaseStore` 可以返回 `MemoryStore` 或 `RedisStore`。
 - `Throttled(store=_get_store())` 在 `mypy --strict` 下通过。
 - async 侧存在对称方案，不通过同步 `BaseStore` 表达 async store。
-- `BaseStore[Any]` 不再是测试 fixture、示例或文档中的常规推荐写法。
+- `BaseStore[Any]` 不再是测试夹具、示例或文档中的常规推荐写法。
 - `types.SyncStoreP` / `types.AsyncStoreP` 仅用于结构化第三方实现或内部泛型约束说明。
-- `uv run --no-sync mypy throttled tests` 与项目既有测试入口通过。
+- `AtomicAction` 只共享 identity 和纯逻辑，`do()` 按 sync / async 分叉。
+- `RateLimiter` 核心实现不再依赖 `StoreP` 或跨端泛型 mixin。
+- `typing_checks/` 这类非 `tests.*` 包中的 sync / async 类型验收通过，避免被测试包 mypy 放宽配置掩盖。
+- `uv run --no-sync mypy throttled typing_checks` 与项目既有测试入口通过。
 
 ## 0x06 参考
 

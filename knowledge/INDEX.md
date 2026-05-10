@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-05-08
+> 最后更新：2026-05-10
 
 ## 0x01 项目知识
 
@@ -16,6 +16,10 @@
 
 ## 0x02 最近更新
 
+- 2026-05-10：更新
+  [Store 类型抽象边界优化](./throttled-py/issues/2026-05-06-store-typing-abstraction-refactor/README.md)
+  至 throttled-py
+  （将 PLAN 从 `BaseStore` 局部止血重写为自底向上的 sync / async 分界与复用方案）
 - 2026-05-08：更新
   [优化 APM 日志关联列表关系查询长耗时](./bkmonitor/issues/2026-05-06-apm-log-relation-list-uq-latency/README.md)
   至 bkmonitor
@@ -32,7 +36,3 @@
   [优化首页 TraceID 全局搜索的预计算延迟](./bkmonitor/issues/2026-05-02-overview-trace-id-low-latency-search/README.md)
   至 bkmonitor
   （将 PR #10492 的 review 修复、分层打分不变量与版本锚点回写到 PLAN）
-- 2026-05-06：新增
-  [优化 APM 日志关联列表关系查询长耗时](./bkmonitor/issues/2026-05-06-apm-log-relation-list-uq-latency/README.md)
-  至 bkmonitor
-  （记录 `log_relation_list` 样本 Trace 中 `query_multi_resource_range` 35s 级主瓶颈）
