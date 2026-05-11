@@ -4,7 +4,7 @@ tags: [throttled-py, typing, store, abstraction, public-api, sync-async]
 issue: ./README.md
 description: 从底向上重画 sync / async 分界，只在纯逻辑层共享，并让 BaseStore 回到公共零泛型边界
 created: 2026-05-06
-updated: 2026-05-10
+updated: 2026-05-11
 ---
 
 # Store 类型抽象边界优化 —— 实施方案
@@ -253,7 +253,7 @@ classDiagram
 | Memory 数据结构 | `BaseMemoryStoreBackend` | 暴露 `exists()` / `ttl()` / `set()` 等无 I/O 形态差异的操作。 |
 | Memory 锁 | sync / async `MemoryStoreBackend` | 各自持有本端锁，不通过公共协议判断锁形态。 |
 | Redis 连接解析 | `BaseRedisStoreBackend` | URL、options、连接工厂在 Redis 端内部收敛。 |
-| Redis client | `BaseRedisStoreBackend` 与具体子类 | 仅 Redis 一侧暴露 `get_client()`。 |
+| Redis client | 具体 backend | `BaseStoreBackend` 不再声明 `get_client()`，按 Memory / Redis 与 sync / async 各自实现。 |
 
 **协议三问**
 
@@ -261,13 +261,13 @@ classDiagram
 | --- | --- |
 | 在哪声明 | [1] 通用配置在 `BaseStoreBackend`。<br />[2] Memory / Redis 各自子类承载本端资源与 client。 |
 | 上层如何取用 | `Store` 与 `AtomicAction` 直接持有具体 `StoreBackend`，不再绕公共协议。 |
-| 如何收敛 | [1] 异常包装读取 backend 声明的异常族。<br />[2] `get_client()` 仅落在 Redis 一侧。 |
+| 如何收敛 | [1] 异常包装读取 backend 声明的异常族。<br />[2] `get_client()` 不再是公共 backend 基类方法，而是具体 backend 自有接口。 |
 
 **收敛结果**
 
 | 移除对象 | 移除原因 | 替代边界 |
 | --- | --- | --- |
-| `types.StoreBackendP` | 公共异常包装无需借公共协议读取 backend。 | `BaseStoreBackend` 或私有局部协议。 |
+| `types.StoreBackendP` | 公共异常包装只依赖异常族，不再需要携带 `get_client()`。 | `BaseStoreBackend` 或私有局部协议。 |
 | `types.MemoryStoreBackendP` | Memory 纯逻辑可直接接收 `BaseMemoryStoreBackend`。 | `BaseMemoryStoreBackend`。 |
 | `types.SyncRedisClientP` / `types.AsyncRedisClientP` | Redis client 结构类型不再进入公共 `*P` 命名体系。 | 私有类型模块或具体 backend 内部声明。 |
 
@@ -377,7 +377,7 @@ classDiagram
         +STORE_TYPE: str
         +do(keys, args) Awaitable~tuple~
     }
-    class RedisLimitActionSpec {
+    class RedisLimitAtomActionSpec {
         +TYPE: AtomicActionTypeT
         +STORE_TYPE: str
         +SCRIPTS: str
@@ -410,8 +410,8 @@ classDiagram
 
     AtomicActionIdentity <|-- BaseAtomicAction
     AtomicActionIdentity <|-- AsyncBaseAtomicActionAlias
-    RedisLimitActionSpec <|-- RedisLimitAtomicAction
-    RedisLimitActionSpec <|-- AsyncRedisLimitAtomicAction
+    RedisLimitAtomActionSpec <|-- RedisLimitAtomicAction
+    RedisLimitAtomActionSpec <|-- AsyncRedisLimitAtomicAction
     BaseAtomicAction <|-- RedisLimitAtomicAction
     AsyncBaseAtomicActionAlias <|-- AsyncRedisLimitAtomicAction
     BaseAtomicAction <|-- MemoryLimitAtomicAction
@@ -426,9 +426,9 @@ classDiagram
 | --- | --- | --- |
 | 身份字段 | `AtomicActionIdentity` | 只放 `TYPE` 与 `STORE_TYPE`，不声明 `do()`。 |
 | 执行能力 | `BaseAtomicAction` | 仅被 `RateLimiter` 消费。 |
-| Redis 脚本 | `RedisLimitActionSpec` 等 `*Spec` | 只放 identity 与脚本常量，不持有 `Script` 实例。 |
+| Redis 脚本 | `RedisLimitAtomActionSpec` 等 `*AtomActionSpec` | 只放 identity 与脚本常量，不持有 `Script` 实例。 |
 | Memory 纯逻辑 | `MemoryLimitActionLogic` 等 `*Logic` | 只执行与锁无关的纯计算。 |
-| `StoreBackend` 与异常包装 | 具体 `AtomicAction` | 自行声明 `__init__(backend)`、`_backend`、`Script` 实例与异常包装。 |
+| `StoreBackend` 与异常包装 | 具体 `AtomicAction` | 直接声明 `__init__(backend)`、`_backend`、`Script` 实例与异常包装，不再保留单点 `*CoreMixin` 过渡层。 |
 
 **协议三问**
 
@@ -443,7 +443,8 @@ classDiagram
 | 移除对象 | 移除原因 | 替代边界 |
 | --- | --- | --- |
 | `BackendBoundAtomicAction` | 具体 `AtomicAction` 已自持 `StoreBackend` / `Script` / `do()`，中间类只会引入第二层构造协议。 | 具体 `AtomicAction` 直接定义构造函数。 |
-| `BaseAtomicActionMixin` | mixin 同时承担身份与包装，容易把 `_backend` 假设回到公共层。 | identity 基类、`*Spec`、`*Logic` 各自承担。 |
+| `BaseAtomicActionMixin` | mixin 只剩 `_backend` 注入与包装职责，容易把 `_backend` 假设回抬到公共层。<br />memory backend 绑定若继续跨端复用，也会把 sync / async 锁形态重新揉回一层。 | `AtomicActionIdentity` + 具体 `AtomicAction.__init__(backend)` + `*AtomActionSpec` / `*ActionLogic`。 |
+| 单点 `*AtomicActionCoreMixin` | 仅剩单个具体 action 继承时，没有形成稳定复用面，只增加层级与跳转成本。 | 具体 `AtomicAction` 直接继承 `*AtomActionSpec` / `*ActionLogic`。 |
 | `types.SyncAtomicActionP` / `types.AsyncAtomicActionP` | `BaseAtomicAction` 已表达执行能力。 | `BaseAtomicAction`。 |
 
 ### d. `RateLimiter` 改造
@@ -724,10 +725,13 @@ throttled = Throttled(store=get_store(False))
 
 ## 0x05 实施进展
 
-| 时间 | 对应设计片段 | 结论调整概要 | 改动 / 验证 |
+| 时间 | 对应设计片段 | 关键进展 | 关键验证 |
 | --- | --- | --- | --- |
-| `2026-05-10 22:30` | `0x01` 至 `0x04` | [1] 推倒旧的 `BaseStore` 局部止血方案，改为自底向上重画 sync / async 分界<br />[2] 架构设计保留整体类图与不变量，开发方案按 `StoreBackend` / `Store` / `AtomicAction` / `RateLimiter` / `Throttled` 对象分层<br />[3] 明确 sync / async 采用同名类，通过模块路径区分执行端<br />[4] 判定 `BackendBoundStore` 与 `BackendBoundAtomicAction` 不进入目标结构<br />[5] 公共 `*P` 协议、跨端 `TypeVar` 与 `*Mixin` 均从目标结构移除<br />[6] 基于源码补充 backend `get_client()` 下沉、`Store` 最终配对校验、分端 registry、`RateLimiter` 自声明 action 目录与 `Throttled` 单次懒加载约束<br />[7] 全文统一名词大小写为 `StoreBackend` / `Store` / `AtomicAction` / `RateLimiter` / `Throttled` / `Quota` / `Hook`<br />[8] 每层统一「职责分配 → 协议三问 → 收敛结果」节奏，删除「取用路径」「补充说明」异构小节<br />[9] `0x02` 拆为「整体类图 / 不变量 / 命名约定」，`0x04` 拆为「外部契约 / 类型验收用例 / 回归口径」<br />[10] 删除职责分配 / 协议三问 / 收敛结果中 sync / async 镜像行，把分端结构留给类图表达<br />[11] `0x04.a` 表只保留外部可观测契约（用户类型流、`Throttled` 组合、异常透出），内部 invariant 信任 `0x02.b` 表达<br />[12] 按 `0x02.c` 命名约定「文中称呼默认指当前执行端」，清理「本端 `Base*`」冗余前缀，仅保留表达分端约束的「本端 + 普通名词」<br />[13] `Throttled` 组合状态由长句改为列表（`Store` / `RateLimiter` / `Hook` / `threading.Lock`） | [1] 已对照 `throttled/store/base.py`、`throttled/types.py`、`throttled/rate_limiter/base.py`、`throttled/throttled.py` 与 async 端同构源码核对术语<br />[2] 已重新核对 `Store`、`AtomicAction`、`RateLimiter`、`Throttled` 继承链<br />[3] 已统一类图箭头与标签<br />[4] `pre-commit run --files` 通过<br />[5] `git diff --check` 通过 |
-| `2026-05-06 00:00` | `0x01` 至 `0x04` | [1] 旧方案形成 `BaseStore` + `BackendBoundStore[_BackendT]` 两层结构<br />[2] 该方案后续被判定为局部止血，不能覆盖 `RateLimiter` / `AtomicAction` 的复用边界问题 | [1] 已核对 HTTPX `BaseTransport` 与 openai-python `_base_client.py` / `_client.py` / `__init__.py` 源码<br />[2] 已复现 `BaseStore` 裸用失败与公共类零泛型需求 |
+| `2026-05-11` | `0x03.a`、`0x03.c` | [1] `BaseStoreBackend.get_client()` 已从公共基类移除，backend 公共边界只保留通用配置与异常族<br />[2] `BaseAtomicActionMixin` 与单点 `*AtomicActionCoreMixin` 已完全移除，backend 绑定直接落在具体 `AtomicAction`<br />[3] `AtomicAction` 层级最终收敛为仅保留有复用价值的 `*AtomActionSpec` / `*ActionLogic`，memory backend 绑定也改为 sync / async 分端实现 | `mypy` 与相关回归测试通过 |
+| `2026-05-11 00:10` | `0x03.b`、`0x04.a` | [1] `types.SyncStoreP` / `types.AsyncStoreP` 已从源码移除，公共 store 边界收敛为 sync / async 各自的 `BaseStore`<br />[2] 不可用场景测试替身改为基于真实 `BaseStore` 的本地 stub，避免继续依赖已删除的公共 store 协议 | `mypy` 与 store-unavailable 场景测试通过 |
+| `2026-05-10 23:40` | `0x03.a` 至 `0x04.c` | [1] `BaseStore` / `throttled.asyncio.BaseStore` 已回到零泛型公共边界，`make_atomic()` 下沉到具体 `Store`<br />[2] `RateLimiter` / `Throttled` 主链不再依赖跨端 store 协议与类型变量驱动<br />[3] 新增显式类型验收用例，确认 `_get_store() -> BaseStore` 与 `Throttled(store=...)` 的用户写法可通过 | `mypy strict` 与主链回归测试通过 |
+| `2026-05-10 22:30` | `0x01` 至 `0x04` | [1] 推倒旧的 `BaseStore` 局部止血方案，改为自底向上重画 sync / async 分界<br />[2] 明确 `StoreBackend` / `Store` / `AtomicAction` / `RateLimiter` / `Throttled` 的分层职责与目标结构<br />[3] 确认 `BackendBoundStore`、`BackendBoundAtomicAction`、公共 `*P` 协议与跨端 `TypeVar` 不进入目标结构 | 方案与源码边界完成对齐校对 |
+| `2026-05-06` | `0x01` 至 `0x04` | 旧方案以 `BaseStore + BackendBoundStore[_BackendT]` 为核心，后续被判定为局部止血，不能覆盖 `RateLimiter` / `AtomicAction` 的复用边界问题 | 已完成外部设计参照与问题复现 |
 
 ## 0x06 参考
 
