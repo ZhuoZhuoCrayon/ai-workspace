@@ -4,7 +4,7 @@ tags: [throttled-py, typing, store, abstraction, public-api, sync-async]
 issue: ./README.md
 description: 从底向上重画 sync / async 分界，只在纯逻辑层共享，并让 BaseStore 回到公共零泛型边界
 created: 2026-05-06
-updated: 2026-05-11
+updated: 2026-05-13
 ---
 
 # Store 类型抽象边界优化 —— 实施方案
@@ -275,8 +275,10 @@ classDiagram
 
 `Store` 是用户、`Throttled`、`RateLimiter` 共同依赖的能力边界，遵循以下分层：
 
-- `BaseStore` 只表达「能做什么」，不表达「绑定哪种 `StoreBackend`」。
-- `StoreBackend` 类型由具体 `Store` 持有。
+- `BaseStore` 只表达「能做什么」，不携带 `StoreBackend` 泛型进入用户签名。
+- `BaseStore` 可以持有 `_backend: BaseStoreBackend`，只用于异常包装与通用状态暴露。
+- 具体 `Store` 构造本端 `StoreBackend`，再将 `_backend` 窄化为 Memory / Redis 的具体 backend。
+- `BaseStoreMixin` 拆为 `StoreSpec` 与 `StoreValidationLogic`，生命周期由 sync / async `BaseStore` 各自声明。
 
 ```mermaid
 classDiagram
@@ -284,12 +286,14 @@ classDiagram
 
     class BaseStore {
         +TYPE: str
+        -_backend: BaseStoreBackend
         +exists(key) bool
         +ttl(key) int
         +make_atomic(action_cls)
     }
     class AsyncBaseStoreAlias {
         +TYPE: str
+        -_backend: BaseStoreBackend
         +exists(key) Awaitable~bool~
         +ttl(key) Awaitable~int~
         +make_atomic(action_cls)
@@ -324,31 +328,33 @@ classDiagram
 
 | 责任 | 所属对象 | 说明 |
 | --- | --- | --- |
-| 公共能力 | `BaseStore` | 只声明命令、`TYPE` 与 `make_atomic()`，不带 `StoreBackend` 泛型。 |
-| `StoreBackend` 持有 | `MemoryStore` / `RedisStore` 与 async 同名类 | 各自持有 `_backend`，不向基类上移泛型。 |
+| 公共能力与 backend 槽位 | `BaseStore` | 声明命令、`TYPE`、`make_atomic()`、`_BACKEND_CLASS` 与 `_backend: BaseStoreBackend`，不带 `StoreBackend` 泛型。 |
+| 具体 backend 窄化 | `MemoryStore` / `RedisStore` 与 async 同名类 | 只声明本端 `_BACKEND_CLASS`，并把 `_backend` 窄化为本端具体类型。 |
+| 纯声明与校验 | `StoreSpec` / `StoreValidationLogic` | 前者只放 `TYPE` 与包装方法名，后者只放 timeout 校验。 |
 | `AtomicAction` 构造 | 具体 `Store` 的 `make_atomic()` | 按 `STORE_TYPE` 校验匹配后注入自身 `StoreBackend`。 |
-| 校验与异常包装 | 私有函数或具体 `Store` 显式调用 | 不通过 mixin 注入。 |
+| 异常包装 | `BaseStore` + `AutoWrapMethodsMixin` | sync / async `BaseStore` 各自继承包装钩子，包装逻辑只读 `_backend.base_exceptions`。 |
 
 **协议三问**
 
 | 问 | 回答 |
 | --- | --- |
-| 在哪声明 | [1] 公共能力在 `BaseStore`。<br />[2] `StoreBackend` 类型在具体 `Store`。 |
+| 在哪声明 | [1] 公共能力在 `BaseStore`。<br />[2] identity 与包装声明在 `StoreSpec`。<br />[3] timeout 校验在 `StoreValidationLogic`。<br />[4] 具体 backend 类型在具体 `Store`。 |
 | 上层如何取用 | 用户、`Throttled`、`RateLimiter` 把 `Store` 视为 `BaseStore`。 |
-| 如何收敛 | `RateLimiter` 通过 `store.make_atomic(action_cls)` 取 `AtomicAction`，不直接读 `_backend`。 |
+| 如何收敛 | [1] `BaseStore.__init__(server, options)` 保持原构造入参，并通过 `self._BACKEND_CLASS(server, options)` 构造 `_backend`。<br />[2] 具体 `Store` 通过类属性窄化 `_BACKEND_CLASS` 与 `_backend`。<br />[3] `RateLimiter` 通过 `store.make_atomic(action_cls)` 取 `AtomicAction`，不直接读 `_backend`。 |
 
 **收敛结果**
 
 | 移除对象 | 移除原因 | 替代边界 |
 | --- | --- | --- |
-| `BackendBoundStore` | 中间层抵消具体 `Store` 自定义 `__init__` 的收益。 | 具体 `Store` 直接持有 `_backend`。 |
-| `BaseStoreMixin` | mixin 隐藏基类对 `_backend` 的假设。 | 私有函数或具体 `Store` 显式调用。 |
+| `BackendBoundStore` | 中间层抵消具体 `Store` 自定义 `__init__` 的收益。 | 具体 `Store` 声明 `_BACKEND_CLASS`，由 `BaseStore.__init__(server, options)` 统一构造 backend。 |
+| `BaseStoreMixin` | mixin 同时承载声明、校验与生命周期，隐藏基类对 `_backend` 的假设。 | `StoreSpec` + `StoreValidationLogic` + sync / async `BaseStore.__init__(server, options)`。 |
 | `types.SyncStoreP` / `types.AsyncStoreP` / `types.StoreP` | `BaseStore` 已表达上层所需 `Store` 能力。 | `BaseStore`。 |
 
 **`_BACKEND_CLASS` 边界**
 
 - `_BACKEND_CLASS` 只是具体 `Store` 创建 `StoreBackend` 的便捷写法，不是本方案核心约束。
-- 只要具体 `Store` 自持 `_backend` 且自行实现 `make_atomic()`，方案即成立。
+- 只要具体 `Store` 声明本端 `_BACKEND_CLASS`，并自行实现 `make_atomic()`，方案即成立。
+- 具体 `Store` 无额外构造副作用时不覆写 `__init__`，直接继承本端 `BaseStore.__init__(server, options)`。
 
 ### c. `AtomicAction` 改造
 
@@ -727,6 +733,7 @@ throttled = Throttled(store=get_store(False))
 
 | 时间 | 对应设计片段 | 关键进展 | 关键验证 |
 | --- | --- | --- | --- |
+| `2026-05-13 01:00` | `0x03.b`、`0x04.a` | [1] `BaseStoreMixin` 已从 sync / async store 导出和继承链移除<br />[2] Store 共享层拆为 `StoreSpec` 与 `StoreValidationLogic`，只保留 identity / 包装声明和 timeout 校验<br />[3] sync / async `BaseStore` 保持 `__init__(server, options)` 入参，并通过 `_BACKEND_CLASS` 构造 `_backend: BaseStoreBackend`<br />[4] 具体 `MemoryStore` / `RedisStore` 只声明类属性，不再覆写无副作用 `__init__` | `mypy`、`ruff`、store / rate_limiter 重点回归与完整 `tests/` 回归通过 |
 | `2026-05-11` | `0x03.a`、`0x03.c` | [1] `BaseStoreBackend.get_client()` 已从公共基类移除，backend 公共边界只保留通用配置与异常族<br />[2] `BaseAtomicActionMixin` 与单点 `*AtomicActionCoreMixin` 已完全移除，backend 绑定直接落在具体 `AtomicAction`<br />[3] `AtomicAction` 层级最终收敛为仅保留有复用价值的 `*AtomActionSpec` / `*ActionLogic`，memory backend 绑定也改为 sync / async 分端实现 | `mypy` 与相关回归测试通过 |
 | `2026-05-11 00:10` | `0x03.b`、`0x04.a` | [1] `types.SyncStoreP` / `types.AsyncStoreP` 已从源码移除，公共 store 边界收敛为 sync / async 各自的 `BaseStore`<br />[2] 不可用场景测试替身改为基于真实 `BaseStore` 的本地 stub，避免继续依赖已删除的公共 store 协议 | `mypy` 与 store-unavailable 场景测试通过 |
 | `2026-05-10 23:40` | `0x03.a` 至 `0x04.c` | [1] `BaseStore` / `throttled.asyncio.BaseStore` 已回到零泛型公共边界，`make_atomic()` 下沉到具体 `Store`<br />[2] `RateLimiter` / `Throttled` 主链不再依赖跨端 store 协议与类型变量驱动<br />[3] 新增显式类型验收用例，确认 `_get_store() -> BaseStore` 与 `Throttled(store=...)` 的用户写法可通过 | `mypy strict` 与主链回归测试通过 |

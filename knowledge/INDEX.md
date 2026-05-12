@@ -17,6 +17,10 @@
 ## 0x02 最近更新
 
 - 2026-05-13：更新
+  [Store 类型抽象边界优化](./throttled-py/issues/2026-05-06-store-typing-abstraction-refactor/README.md)
+  至 throttled-py
+  （将 `BaseStoreMixin` 收敛为 `StoreSpec` / `StoreValidationLogic`，并让 sync / async `BaseStore` 各自持有 backend 槽位）
+- 2026-05-13：更新
   [APM 支持跨应用共享数据源](./bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md)
   至 bkmonitor
   （将 `TraceDatasourceTarget` 工厂方法命名收敛为 `build()`）
