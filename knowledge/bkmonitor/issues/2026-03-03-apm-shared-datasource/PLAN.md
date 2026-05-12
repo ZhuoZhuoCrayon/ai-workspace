@@ -4,7 +4,7 @@ tags: [apm, datasource, es, shared-storage, architecture]
 issue: knowledge/bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md
 description: APM 跨应用共享数据源的实现方案与开发方案
 created: 2026-03-03
-updated: 2026-04-30
+updated: 2026-05-13
 ---
 
 # APM 跨应用共享数据源 —— 实施方案
@@ -520,11 +520,15 @@ class TraceDatasourceTarget:
     app: APMAppTarget
 
     @classmethod
-    def from_(cls, bk_biz_id: int, app_name: str, table_id: str) -> "TraceDatasourceTarget":
+    def build(cls, bk_biz_id: int, app_name: str, table_id: str) -> "TraceDatasourceTarget":
         return cls(table_id=table_id, app=APMAppTarget(bk_biz_id=bk_biz_id, app_name=app_name))
 ```
 
 `TraceDatasourceTarget` 表示一条 `table_id -> APM 应用` 绑定关系。
+
+工厂方法统一命名为 `build()`：`from` 是 Python 关键字，不能作为方法名。
+
+`from_` 语义不稳定，容易被误认为误输入。
 
 多 table 查询通过多个 target 表达，禁止把 `bk_biz_id` 与 `app_name` 拆成两个独立列表。
 
@@ -561,8 +565,8 @@ class TraceQueryGuard:
 
 ```python
 targets = [
-    TraceDatasourceTarget.from_(2, "app_a", t1),
-    TraceDatasourceTarget.from_(2, "app_b", t2),
+    TraceDatasourceTarget.build(2, "app_a", t1),
+    TraceDatasourceTarget.build(2, "app_b", t2),
 ]
 
 q = TraceQueryGuard.get_q(targets).time_field(OtlpKey.END_TIME).filter(trace_id__eq=trace_id)
@@ -612,6 +616,7 @@ rg "DataSourceLabel\.BK_APM"
 
 | 时间 | 对应设计片段 | 结论调整概要 | 改动 / 验证 |
 |:--|:--|:--|:--|
+| `2026-05-13 00:00` | `0x02.g` | [1] 收口 PR #10583 review 结论：`TraceDatasourceTarget` 工厂方法统一命名为 `build()`<br />[2] 明确不使用 `from_()`，避免关键字规避写法被误读为误输入 | [1] 已更新查询目标模型与消费示例<br />[2] 已在 PR review 中给出命名调整建议 |
 | `2026-04-30 20:00` | `0x02.a` `0x02.b` `0x02.e` | [1] 收口 PR #10415 最终 review 结论：共享 Trace 的 `start` / `stop` 每次启停调整共享池计数，`start_trace` 需补充与 `stop_trace` 对称的幂等保护<br />[2] `apply_datasource` 按可重入口径处理，不再作为阻塞问题<br />[3] `shared_datasource_types` 接受非 Trace 类型视为扩展预留，不要求本 PR 调整 | [1] 已更新 `usage_count` 主干语义与应用生命周期边界<br />[2] 已将 review 结论收敛为 1 个 P1：`start_trace` 幂等保护<br />[3] 已 Approve PR #10415 |
 | `2026-04-30 00:00` | `0x02.g` | [1] 将「查询路径审计」调整为「查询改造」，明确 shared Trace 查询隔离只在 `TraceQueryGuard` 收口<br />[2] 补充 `APMAppTarget` / `TraceDatasourceTarget` 目标模型，保留 `table_id -> APM 应用` 一一绑定<br />[3] 明确 `UnifyQueryCompiler.as_sql` 仅负责多 table 解包，不承载 APM shared 前缀判断 | [1] 已更新查询改造方案主干与审计命令<br />[2] 本次仅更新方案文档，未改代码 |
 | `2026-04-27 20:00` | `0x02.a` `0x02.b` `0x02.e` | [1] PR review 收口共享池计数边界：补充 `acquire()` 与 `release()` 成对语义，并要求二者复用 `_change_usage_count(delta)`<br />[2] 明确共享 Trace 启停不操作 `switch_result_table()`，删除释放共享池占用但不删除共享日志索引集<br />[3] 补充以 `ApplyDatasourceResource.shared_datasource_types` 为入口的显式迁入 / 迁出方案：不传表示保持数据库现状，传入列表表示目标共享状态<br />[4] 撤回查询隔离默认开启阻塞意见，查询隔离作为后续 PR 的已知拆分事项继续保留在方案约束中 | [1] 已复查 PR #10415 最新 head `a104714`<br />[2] 仍需开发修复删除共享应用未释放 `usage_count`、`release()` 负数保护，以及 apply 更新路径迁入 / 迁出状态判断<br />[3] 本次仅更新方案文档与 review 结论，不修改 PR 代码 |

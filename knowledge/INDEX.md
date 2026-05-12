@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-05-10
+> 最后更新：2026-05-13
 
 ## 0x01 项目知识
 
@@ -16,6 +16,10 @@
 
 ## 0x02 最近更新
 
+- 2026-05-13：更新
+  [APM 支持跨应用共享数据源](./bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md)
+  至 bkmonitor
+  （将 `TraceDatasourceTarget` 工厂方法命名收敛为 `build()`）
 - 2026-05-10：更新
   [Store 类型抽象边界优化](./throttled-py/issues/2026-05-06-store-typing-abstraction-refactor/README.md)
   至 throttled-py
@@ -32,7 +36,3 @@
   [Store 类型抽象边界优化](./throttled-py/issues/2026-05-06-store-typing-abstraction-refactor/README.md)
   至 throttled-py
   （基于 HTTPX transport 设计调研，记录 BaseStore 公共边界与 backend 配对边界的拆分方案）
-- 2026-05-06：更新
-  [优化首页 TraceID 全局搜索的预计算延迟](./bkmonitor/issues/2026-05-02-overview-trace-id-low-latency-search/README.md)
-  至 bkmonitor
-  （将 PR #10492 的 review 修复、分层打分不变量与版本锚点回写到 PLAN）
