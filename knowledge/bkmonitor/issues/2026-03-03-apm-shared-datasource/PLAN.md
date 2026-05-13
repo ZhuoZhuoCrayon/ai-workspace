@@ -111,7 +111,9 @@ flowchart LR
 
 **写入**：bk-collector 从 Token 反解 `bk_biz_id` 、 `app_name`，注入到原始数据。
 
-**预计算**：BMW 预计算从 Span 顶层字段优先识别业务和应用上下文，再按 `bk_biz_id + app_name + trace_id` 聚合、回补历史 Span、写入 Trace 视图和上报关系指标。
+**预计算**：BMW 预计算优先从 Span 顶层字段识别业务和应用上下文，取不到时回退到 Consul `BaseInfo`。
+
+完成上下文解析后，再按 `bk_biz_id + app_name + trace_id` 聚合、回补历史 Span、写入 Trace 视图和上报关系指标。
 
 **查询**：
 
@@ -616,7 +618,7 @@ rg "DataSourceLabel\.BK_APM"
 
 ### i. 预计算 Trace 视图隔离
 
-预计算链路的隔离入口在 Span，而不是 `data_id`。
+预计算链路优先从 Span 解析隔离上下文，而不是只依赖 `data_id`。
 
 现状与风险：
 
@@ -649,16 +651,23 @@ flowchart LR
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `bk_biz_id` | `string` | 是 | 从 Span 顶层 `bk_biz_id` 提取，输入为数字时转成字符串。 |
-| `app_name` | `string` | 是 | 从 Span 顶层 `app_name` 提取。 |
+| `bk_biz_id` | `string` | 是 | 优先从 Span 顶层 `bk_biz_id` 提取，取不到时回退到 Consul `BaseInfo`。 |
+| `app_name` | `string` | 是 | 优先从 Span 顶层 `app_name` 提取，取不到时回退到 Consul `BaseInfo`。 |
 | `trace_id` | `string` | 是 | 继续使用 Span 原有 `trace_id`。 |
 
-兼容策略：
+解析优先级：
 
-- 共享模式：Span 缺少 `bk_biz_id` 或 `app_name` 时，跳过本批 Span 的预计算并记录异常指标。
-- 独占模式：Span 缺少应用上下文时，兼容回退到 Consul `BaseInfo`。
+- Span 优先：`bk_biz_id` 和 `app_name` 存在于 Span 顶层时，以 Span 为准。
+- BaseInfo 兜底：Span 缺少任一字段时，从当前 `data_id` 对应的 Consul `BaseInfo` 回填缺失字段。
+- 类型归一：`bk_biz_id` 允许字符串或数字，进入 `TraceAppContext` 后统一为字符串。
+- 异常处理：Span 与 `BaseInfo` 都无法补齐字段时，跳过本批预计算并记录异常指标。
+
+兼容边界：
+
+- `BaseInfo` 兜底只用于兼容历史 Span 或字段注入不完整的链路。
+- 共享池内多应用精确隔离仍依赖 Span 顶层字段，`BaseInfo` 兜底只提供旧链路兼容能力。
+- 兜底后的窗口、缓存、历史查询、写入和指标仍只消费 `TraceAppContext`。
 - 上下文提取只发生在 Span 标准化阶段。
-- `Processor`、`MetricProcessor`、storage 只消费 `TraceAppContext`。
 
 #### 聚合边界
 
@@ -679,50 +688,61 @@ flowchart LR
 
 #### 写入路由
 
-预计算结果表路由保持与 SaaS `PrecalculateStorage(bk_biz_id, app_name)` 一致，不按共享 `data_id` 固定单表写入。
+预计算结果表的选择逻辑不变。
 
-Consul 协议补充：
-
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `is_shared` | `bool` | 否 | 标识当前 Trace DataID 是否为共享数据源，缺省为独占模式。 |
-| `pre_calculate_storage_infos[]` | `array<object>` | 否 | 预计算写入候选表集合，缺失时回退到旧 `save_es_info`。 |
-| `pre_calculate_storage_infos[].result_table_id` | `string` | 是 | 预计算结果表，例如 `apm_global.precalculate_storage_auto_1`。 |
-| `pre_calculate_storage_infos[].index_name` | `string` | 是 | 写入索引前缀。 |
-| `pre_calculate_storage_infos[].host` | `string` | 是 | ES 地址。 |
-| `pre_calculate_storage_infos[].username` | `string` | 否 | ES 用户名。 |
-| `pre_calculate_storage_infos[].password` | `string` | 否 | ES 密码。 |
+仍复用 SaaS `PrecalculateStorage(bk_biz_id, app_name)` 的一致性哈希口径，不按共享 `data_id` 固定单表写入。
 
 路由规则：
 
-- 新协议：BMW 侧按 `bk_biz_id + app_name` 对 `pre_calculate_storage_infos` 做一致性哈希。
-- 写入目标：一致性哈希结果决定当前 Trace 视图写入表。
-- 旧协议：`save_es_info` 继续作为单节点配置，保证独占应用和未升级配置可用。
+- 路由输入：使用解析后的 `TraceAppContext.bk_biz_id` 和 `TraceAppContext.app_name`。
+- 路由算法：沿用现有 `PrecalculateStorage(bk_biz_id, app_name)` 一致性哈希。
+- 路由边界：隔离改造不新增 Consul 配置字段，也不要求配置下发方新增预计算结果表协议。
+- 兼容要求：独占模式和历史 `BaseInfo` 兜底链路继续走现有写入逻辑。
+
+#### 改造规模
+
+本改造属于隔离兼容，不应演变成预计算模块的大规模重构。
+
+保留边界：
+
+- 任务模型：仍按 `data_id` 创建一个 daemon task，不拆成每个应用一个任务。
+- 主流程：保留现有 window、`Processor`、`MetricProcessor` 和 storage 调用链。
+- 数据结构：只补充轻量 `TraceAppContext`，不重写 Trace 聚合模型。
+- 写入兼容：不改预计算结果表选择算法，不新增 Consul 配置协议。
+
+必要改动：
+
+- 上下文解析：在 Span 标准化阶段完成 Span 优先、`BaseInfo` 兜底。
+- 隔离键：window、Bloom、Cache 和 ES `_id` 使用 `bk_biz_id + app_name + trace_id`。
+- 查询条件：历史 Span 回补追加 `bk_biz_id` 和 `app_name`。
+- 写入路由：使用 `TraceAppContext` 作为现有一致性哈希入参，独占模式保持旧路由。
 
 #### 开发落点
 
 | 路径 | 处理方式 |
 | --- | --- |
-| `core/meta.go` | 扩展 Consul 配置结构，支持 `is_shared` 和预计算存储候选列表。 |
-| `window/window.go` | `Span` / `StandardSpan` 增加 `TraceAppContext`，标准化阶段完成字段提取和缺失判定。 |
+| `core/meta.go` | 不新增配置协议，继续提供 `BaseInfo` 给 `TraceAppContext` 兜底。 |
+| `window/window.go` | `Span` / `StandardSpan` 增加 `TraceAppContext`，标准化阶段完成 Span 优先与 `BaseInfo` 兜底。 |
 | `window/distributive.go` | window hash、`CollectTrace` 和 `Event` 使用应用隔离键。 |
 | `window/processor.go` | TraceInfo、历史 Span 回补、Bloom、Cache 和 SaveEs 写入全部消费 event 级上下文。 |
 | `window/metrics_processor.go` | 关系指标 label 使用 event 级 `app_name`，自定义服务配置查询使用 event 级 `bk_biz_id + app_name`。 |
-| `storage/es.go` / `storage/storage.go` | `EsStorageData` 支持按应用路由目标写入，同时保留默认 `saveEs`。 |
+| `storage/es.go` / `storage/storage.go` | 不重构写入逻辑，仅确认写入字段和 ES `_id` 使用 `TraceAppContext`。 |
 
 验收点：
 
+- Span 缺少 `bk_biz_id` 或 `app_name` 时，能回退到 Consul `BaseInfo` 补齐 `TraceAppContext`。
+- Span 与 `BaseInfo` 都无法补齐字段时，跳过预计算并记录异常指标。
 - 同一共享 `data_id` 下两个应用使用相同 `trace_id` 时，窗口、缓存、Bloom 和 ES `_id` 互不影响。
 - shared 表回补历史 Span 的 DSL 同时包含 `trace_id`、`bk_biz_id` 和 `app_name`。
-- Trace 视图字段 `biz_id`、`app_name` 与 Span 顶层字段一致。
-- 关系指标中的 `apm_application_name` 使用 Span 归属应用，不使用共享 `data_id` 的静态 `BaseInfo.AppName`。
+- Trace 视图字段 `biz_id`、`app_name` 与解析后的 `TraceAppContext` 一致。
+- 关系指标中的 `apm_application_name` 使用 `TraceAppContext`，不在指标阶段重新读取静态 `BaseInfo`。
 - 共享 `data_id` 只创建一个 daemon task，多个应用不会互相覆盖 Consul 配置。
 
 ## 0x03 实施进展
 
 | 时间 | 对应设计片段 | 结论调整概要 | 改动 / 验证 |
 |:--|:--|:--|:--|
-| `2026-05-13 11:00` | `0x01.e` `0x02.i` | [1] 补充 BMW 预计算 Trace 视图隔离方案：隔离入口从 `data_id` 下沉到 Span 顶层 `bk_biz_id + app_name`<br />[2] 明确窗口、历史回补、写入路由和关系指标都消费 event 级应用上下文<br />[3] 保留独占模式缺字段回退，shared 模式缺字段跳过预计算并记录异常指标 | [1] 已核对 `bkmonitor-datalink` 预计算模块的 notifier、window、processor、storage 与 Consul 配置结构<br />[2] 本次仅更新方案文档，未改代码 |
+| `2026-05-13 12:00` | `0x01.e` `0x02.i` | [1] 补充 BMW 预计算 Trace 视图隔离方案：上下文解析从静态 `data_id` 调整为 Span 优先、Consul `BaseInfo` 兜底<br />[2] 明确窗口、历史回补、写入路由和关系指标都消费 event 级应用上下文<br />[3] 明确本改造属于隔离兼容，只补必要隔离键、查询条件和上下文入参，不做大规模重构<br />[4] 删除容易误导的 Consul 配置契约描述，确认预计算结果表选择逻辑不变 | [1] 已核对 `bkmonitor-datalink` 预计算模块的 notifier、window、processor、storage 与 Consul 配置结构<br />[2] 按澄清更新缺字段回退策略、改造规模边界与写入路由边界<br />[3] 本次仅更新方案文档，未改代码 |
 | `2026-05-13 00:00` | `0x02.g` | [1] 收口 PR #10583 review 结论：`TraceDatasourceTarget` 工厂方法统一命名为 `build()`<br />[2] 明确不使用 `from_()`，避免关键字规避写法被误读为误输入 | [1] 已更新查询目标模型与消费示例<br />[2] 已在 PR review 中给出命名调整建议 |
 | `2026-04-30 20:00` | `0x02.a` `0x02.b` `0x02.e` | [1] 收口 PR #10415 最终 review 结论：共享 Trace 的 `start` / `stop` 每次启停调整共享池计数，`start_trace` 需补充与 `stop_trace` 对称的幂等保护<br />[2] `apply_datasource` 按可重入口径处理，不再作为阻塞问题<br />[3] `shared_datasource_types` 接受非 Trace 类型视为扩展预留，不要求本 PR 调整 | [1] 已更新 `usage_count` 主干语义与应用生命周期边界<br />[2] 已将 review 结论收敛为 1 个 P1：`start_trace` 幂等保护<br />[3] 已 Approve PR #10415 |
 | `2026-04-30 00:00` | `0x02.g` | [1] 将「查询路径审计」调整为「查询改造」，明确 shared Trace 查询隔离只在 `TraceQueryGuard` 收口<br />[2] 补充 `APMAppTarget` / `TraceDatasourceTarget` 目标模型，保留 `table_id -> APM 应用` 一一绑定<br />[3] 明确 `UnifyQueryCompiler.as_sql` 仅负责多 table 解包，不承载 APM shared 前缀判断 | [1] 已更新查询改造方案主干与审计命令<br />[2] 本次仅更新方案文档，未改代码 |
