@@ -277,7 +277,7 @@ classDiagram
 
 - `BaseStore` 只表达「能做什么」，不携带 `StoreBackend` 泛型进入用户签名。
 - `BaseStore` 可以持有 `_backend: BaseStoreBackend`，只用于异常包装与通用状态暴露。
-- 具体 `Store` 构造本端 `StoreBackend`，再将 `_backend` 窄化为 Memory / Redis 的具体 backend。
+- 具体 `Store` 声明本端 `_BACKEND_CLASS`，再将 `_backend` 窄化为 Memory / Redis 的具体 backend。
 - `BaseStoreMixin` 拆为 `StoreSpec` 与 `StoreValidationLogic`，生命周期由 sync / async `BaseStore` 各自声明。
 
 ```mermaid
