@@ -13,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DOC_SUFFIXES = {".md", ".mdc"}
 EXCLUDED_PARTS = {".git", "node_modules", "__pycache__", ".venv", "venv"}
 MAX_PROSE_LINE_LENGTH = 120
+STRUCTURED_SPLIT_HINT = "拆分时先判断信息关系，并按段落与载体规则选择承载方式，不要只做源码硬换行"
+TABLE_SPLIT_HINT = "若内容有多层结构，改成编号换行、子表或表格外说明"
 
 LOWERCASE_FILENAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*\.(md|mdc)$")
 UPPERCASE_MD_FILENAME = re.compile(r"^[A-Z0-9]+\.md$")
@@ -248,7 +250,7 @@ def check_file(path: Path) -> list[Issue]:
                         rel_path,
                         line_no,
                         "line-too-long",
-                        f"单行避免过长，请控制在 {MAX_PROSE_LINE_LENGTH} 个字符内，或拆行改写",
+                        f"单行避免过长，请控制在 {MAX_PROSE_LINE_LENGTH} 个字符内。{STRUCTURED_SPLIT_HINT}",
                     )
                 )
 
@@ -272,7 +274,7 @@ def check_file(path: Path) -> list[Issue]:
                     rel_path,
                     line_no,
                     "sentence-split-period",
-                    "同一 Markdown 段落或列表项里不要出现两个句号，请拆分",
+                    f"同一 Markdown 段落或列表项里不要出现两个句号。{STRUCTURED_SPLIT_HINT}",
                 )
             )
         if ";" in block or "；" in block:
@@ -281,7 +283,7 @@ def check_file(path: Path) -> list[Issue]:
                     rel_path,
                     line_no,
                     "sentence-split-semicolon",
-                    "同一 Markdown 段落或列表项里不要出现分号，请改成分句、列表或拆段",
+                    f"同一 Markdown 段落或列表项里不要出现分号。{STRUCTURED_SPLIT_HINT}",
                 )
             )
         raw_block = " ".join(line.strip() for line in source_lines).strip()
@@ -292,7 +294,7 @@ def check_file(path: Path) -> list[Issue]:
                     rel_path,
                     line_no,
                     "single-sentence-soft-wrap",
-                    f"单句内容合并后不超过 {MAX_PROSE_LINE_LENGTH} 个字符时，不要拆成多行",
+                    f"单句内容合并后不超过 {MAX_PROSE_LINE_LENGTH} 个字符时，不要拆成多行。需要拆分时使用结构化载体",
                 )
             )
 
@@ -306,7 +308,7 @@ def check_file(path: Path) -> list[Issue]:
                     rel_path,
                     line_no,
                     "table-cell-semicolon",
-                    "表格单元格内不要出现分号，请改成换行、列表或表格外脚注",
+                    f"表格单元格内不要出现分号。{TABLE_SPLIT_HINT}",
                 )
             )
         if line_no in table_multi_end_punct_lines:
@@ -319,7 +321,7 @@ def check_file(path: Path) -> list[Issue]:
                         rel_path,
                         line_no,
                         "table-cell-multi-end-punct",
-                        "表格单元格未分段时不要出现多个结束符，请改成 `<br />` 编号或表格外脚注",
+                        f"表格单元格未分段时不要出现多个结束符。{TABLE_SPLIT_HINT}",
                     )
                 )
                 break
