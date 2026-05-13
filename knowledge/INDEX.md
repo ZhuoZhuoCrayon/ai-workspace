@@ -23,7 +23,7 @@
 - 2026-05-13：更新
   [APM 支持跨应用共享数据源](./bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md)
   至 bkmonitor
-  （将 `TraceDatasourceTarget` 工厂方法命名收敛为 `build()`）
+  （补充 BMW 预计算 Trace 视图隔离方案，明确从 Span 顶层字段发现业务和应用上下文）
 - 2026-05-10：更新
   [Store 类型抽象边界优化](./throttled-py/issues/2026-05-06-store-typing-abstraction-refactor/README.md)
   至 throttled-py
