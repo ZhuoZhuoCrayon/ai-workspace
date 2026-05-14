@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-05-13
+> 最后更新：2026-05-14
 
 ## 0x01 项目知识
 
@@ -16,14 +16,18 @@
 
 ## 0x02 最近更新
 
+- 2026-05-14：新增
+  [APM 预计算适配共享数据源](./bkmonitor/issues/2026-05-14-apm-precalc-shared-multi-app/README.md)
+  至 bkmonitor
+  （从 `2026-03-03-apm-shared-datasource/PLAN.md` 的 `0x02.i` 拆出独立 issue，方案改为「单任务多应用窗口」）
+- 2026-05-14：更新
+  [APM 支持跨应用共享数据源](./bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md)
+  至 bkmonitor
+  （复查 PR #10583 检索隔离收口，确认旧 review 线程已修复并完成 resolve）
 - 2026-05-13：更新
   [Store 类型抽象边界优化](./throttled-py/issues/2026-05-06-store-typing-abstraction-refactor/README.md)
   至 throttled-py
   （将 `BaseStoreMixin` 收敛为 `StoreSpec` / `StoreValidationLogic`，并让 sync / async `BaseStore` 各自持有 backend 槽位）
-- 2026-05-13：更新
-  [APM 支持跨应用共享数据源](./bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md)
-  至 bkmonitor
-  （补充 BMW 预计算 Trace 视图隔离方案，明确从 Span 顶层字段发现业务和应用上下文）
 - 2026-05-10：更新
   [Store 类型抽象边界优化](./throttled-py/issues/2026-05-06-store-typing-abstraction-refactor/README.md)
   至 throttled-py
@@ -36,7 +40,3 @@
   [APM Span 内置指标支持声明式引用](./bkmonitor/issues/2026-05-07-apm-span-builtin-metric-declarative-reference/README.md)
   至 bkmonitor
   （将 Trace 概览图 Span 指标查询从手工参数拼接收敛为声明式指标算子）
-- 2026-05-06：新增
-  [Store 类型抽象边界优化](./throttled-py/issues/2026-05-06-store-typing-abstraction-refactor/README.md)
-  至 throttled-py
-  （基于 HTTPX transport 设计调研，记录 BaseStore 公共边界与 backend 配对边界的拆分方案）
