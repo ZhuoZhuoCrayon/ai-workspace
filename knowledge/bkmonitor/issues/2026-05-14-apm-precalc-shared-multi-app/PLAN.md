@@ -2,9 +2,9 @@
 title: APM 预计算适配共享数据源 —— 实施方案
 tags: [apm, pre-calculate, shared-datasource, multi-app, bmw, architecture]
 issue: knowledge/bkmonitor/issues/2026-05-14-apm-precalc-shared-multi-app/README.md
-description: 方案 4「单任务多应用窗口」，在 KafkaNotifier 与 DistributiveWindow 之间插入 Dispatcher，按应用派生 appBundle，Proxy handler map 化
+description: 方案 4「单任务多应用窗口」。在 KafkaNotifier 与 DistributiveWindow 之间插入 Dispatcher，按 AppKey 派生 M 份 appBundle，Proxy 的 prometheus handler 升级为 map
 created: 2026-05-14
-updated: 2026-05-14
+updated: 2026-05-15
 ---
 
 # APM 预计算适配共享数据源 —— 实施方案
@@ -15,11 +15,14 @@ updated: 2026-05-14
 
 ### a. 任务实例的静态绑定
 
-蓝鲸监控 SaaS 端 Celery beat 周期任务 `bmw_task_cron` 每 `15` 分钟触发 `PreCalculateCheck`，按 `data_id` 维度刷新 Consul 并调 BMW 创建任务接口。
+**任务装配链路**
 
-BMW 端按 `data_id` 派生任务唯一键 `taskUniId`，单点绑定到一个 worker 实例。
+1. 蓝鲸监控 SaaS 端 Celery beat 每 `15` 分钟触发 `bmw_task_cron`，调 `PreCalculateCheck` 按 `data_id` 刷 Consul，并请求 BMW 创建任务。
+2. BMW 端按 `data_id` 派生唯一键 `taskUniId`，单点绑定到一个 worker 实例。
 
-任务实例内的组件依赖如下，实线表示 `New` 或持有，虚线表示运行期 chan 或引用。
+**实例内组件依赖**
+
+实线表示 `New` 或持有，虚线表示运行期 chan 或引用。
 
 ```mermaid
 graph TB
@@ -89,14 +92,12 @@ graph TB
 
 ## 0x02 架构设计
 
-### a. 拆分边界
+**拆分维度**：按 AppKey 把单 `data_id` 的 Kafka 链路切成 `M` 条应用维度子链路。
 
-**拆分轴**：按 AppKey 把单 `data_id` 的 Kafka 链路切成 `M` 条应用维度子链路。
-
-**三段切法**：
+**三层切分**：
 
 - **上游汇聚**：`KafkaNotifier` 不动，按 `data_id` 一份消费。
-- **应用切分**：新增 `Dispatcher`，按 Span 顶层 AppKey 路由到 `M` 份 `appBundle`（应用维度的三元组）。
+- **应用切分**：新增 `Dispatcher`，按 Span 顶层 AppKey 路由到 `M` 份 `appBundle`。
 - **下游收敛**：`Proxy` 单实例，无状态后端共享，仅 `prometheusMetricsHandler` 按 AppKey 分发。
 
 ```mermaid
@@ -134,7 +135,7 @@ graph TB
 | `Dispatcher` | `0` | `1`（新增） |
 | `DistributiveWindow` / `Processor` / `MetricProcessor` / `promClient` | `1` | `M` |
 | `distributiveSubWindow` goroutine | `N` | `M × N` |
-| `Proxy.prometheusMetricsHandler` | `1`（单字段） | `M`（map 字段） |
+| `Proxy.prometheusMetricsHandler` | `1`（`*MetricDimensionsHandler`） | `M`（`map[core.AppKey]*MetricDimensionsHandler`） |
 | `Processor.traceEsQueryLimiter` | `1` | `M` |
 
 **回应 `0x01.b` 的四项失效**：
@@ -143,10 +144,10 @@ graph TB
 | --- | --- |
 | 协议互相覆盖 | Consul Value 升级为 `apps[]`，`MetadataCenter` 按 AppKey 取应用上下文 |
 | 上下文归属错乱 | `appBundle` 构造期按 AppKey 注入 `BaseInfo`，内部组件不感知共享模式 |
-| 路由 token 绑定首应用 | `Proxy.prometheusMetricsHandler` 按 AppKey 分发，每应用一个 `promClient` 持有自身 token |
-| 历史回补串读 | `Processor.listSpanFromStorage` 查询条件扩展为 `trace_id + bk_biz_id + app_name` 三条件 |
+| 路由 token 绑定首应用 | `Proxy.prometheusMetricsHandler` 升级为 `map[AppKey]*MetricDimensionsHandler`，按 `PrometheusStorageData.AppKey` 分发，每应用一个 `promClient` 持有自身 token |
+| 历史回补串读 | `Processor.listSpanFromStorage` 维持 `trace_id` 单条件，撞库语义与 SaveEs `_id` 对齐，见 `0x03.f` |
 
-独占场景退化为 `M = 1` 的特例。`appBundle` 内部组件构造与处理路径在两种模式下完全一致，差异仅在 `M`：
+独占场景退化为 `M = 1` 的特例，两模式仅差实例数 `M`，`appBundle` 构造流程与运行时数据流相同：
 
 | 模式 | `appBundle` 数量 |
 | --- | --- |
@@ -155,141 +156,248 @@ graph TB
 
 ## 0x03 开发方案
 
-### a. Notifier（Span 标准化扩展）
+### a. Span 字段扩展
 
-`KafkaNotifier` 现有职责是消费 Kafka 消息、反序列化 raw JSON 为 `[]StandardSpan` 后推入 `messageChan`。
-
-本方案在 Span 标准化阶段扩展一个动作：统一填充每条 Span 的 `BkBizId` / `AppName`，让下游 `Dispatcher` 与 `appBundle` 不感知模式差异。
+`Span` / `StandardSpan` 顶层新增 `BkBizId` / `AppName` 两个可选字段，供 Dispatcher 构造 AppKey 时读取。
 
 ```mermaid
-flowchart TB
-    Raw["Raw Span JSON<br/>bytes from Kafka"]
-    Parse["ToStandardSpan / ToStandardSpanFromMapping"]
-    Raw --> Parse
-    Parse --> Check{"Span 顶层<br/>BkBizId / AppName<br/>是否非空？"}
-    Check -->|"是 · 共享场景<br/>(bk-collector 注入)"| Use["保留 Span 顶层值"]
-    Check -->|"否 · 独占场景<br/>(无注入)"| Fb["从 MetadataCenter<br/>baseInfo(dataId) 兜底填充"]
-    Use --> Std["StandardSpan 带 AppKey"]
-    Fb --> Std
-    Std --> Out["推入 messageChan"]
+flowchart LR
+    Raw["Raw Span JSON · Kafka"]
+    Span["Span<br/>(+ BkBizId / AppName · 可空)"]
+    Std["StandardSpan<br/>(+ BkBizId / AppName · 可空)"]
+    Raw -->|"jsonx.Unmarshal"| Span
+    Span -->|"ToStandardSpan · 纯字段拷贝"| Std
+    Std --> MC[messageChan]
+    MC --> DSP["Dispatcher · 在此读字段 + 构造 AppKey + 兜底"]
 ```
 
-**填充策略**
+**`Span` 与 `StandardSpan` 变更**
 
-| 场景 | Span 顶层字段 | AppKey 填充策略 |
-| --- | --- | --- |
-| 共享 | bk-collector 注入 `bk_biz_id` / `app_name`（来源是上报 Token） | 直接取 Span 顶层值 |
-| 独占 | 不注入 | 从 `MetadataCenter` 的 `baseInfo(dataId)` 兜底填充 |
+`pre_calculate/window/window.go`
 
-填充后独占场景退化为 `M = 1` 的特例，下游处理路径与共享场景完全一致。
+| 变更点 | 目标 |
+| --- | --- |
+| **[Field]** `Span.BkBizId` / `Span.AppName` | 新增 · `jsonx.Unmarshal` 从 Span JSON 顶层填入，对应 bk-collector 同名字段，上游异常时为空 |
+| **[Field]** `StandardSpan.BkBizId` / `StandardSpan.AppName` | 新增 · 承载给 Dispatcher 读取的 AppKey 提示，下游不消费 |
+| **[Method]** `ToStandardSpan` | 保持纯字段拷贝语义，新增字段从 `Span` 拷贝到 `StandardSpan` |
 
-**字段消费链路**
+**上游事实**
 
-- `window.Span` 加 `BkBizId` / `AppName` 字段，共享场景下 `jsonx.Unmarshal` 直接填入。
-- `window.StandardSpan` 加同名字段。
-- `ToStandardSpan` / `ToStandardSpanFromMapping` 在字段为空时按上表兜底，并把 AppKey 写入 `StandardSpan`。
+- bk-collector 在 `exporter/converter/traces.go` 由 `record.Token` 无条件注入这两个字段到 Span 顶层。
+- 独占、共享场景一致，正常链路 99%+ 命中。
+
+**零改动模块**
+
+- `KafkaNotifier`：兜底与路由都由 Dispatcher 承担，见 `0x03.b`。
+- `ToStandardSpanFromMapping`：历史回补 Span 经 `revertToCollect` 直入 graph，不过 Dispatcher。
 
 ### b. Dispatcher
 
-新增的路由层，位于 `KafkaNotifier` 与各 `appBundle` 之间。
+**职责**：按 AppKey 把 `KafkaNotifier` 的单 `messageChan` 切分为 `M` 份 `appBundle.spanChan`。
+
+**装配位置**：`RunInstance.startWindowHandler`。
+
+**为什么需要单点路由层**
+
+- `messageChan` 单批 `[]StandardSpan` 在共享场景下跨应用混杂，下游无法直接消费。
+- `DistributiveWindow.Handle` 只按 `xxhash(trace_id) % N` 做 trace 维度分流，不感知应用维度。
+- Go channel 单消费者语义决定应用切分必须落在单点 goroutine。
+
+**位置与并发模型**
 
 ```mermaid
 flowchart LR
-    Notifier["KafkaNotifier (1)"]
-    DSP["Dispatcher (1) 新增"]
-    AB["appBundle × M"]
+    KN["KafkaNotifier<br/>n.Spans() chan"]
+    DSP["Dispatcher.Run<br/>1 goroutine 新增"]
+    AB1["appBundle[a].spanChan<br/>→ DistributiveWindow.Handle"]
+    AB2["appBundle[b].spanChan<br/>→ DistributiveWindow.Handle"]
+    ABN["appBundle[…].spanChan<br/>→ DistributiveWindow.Handle"]
+    SR["共享 saveReqChan"]
+    PX["*storage.Proxy"]
 
-    Notifier -->|"messageChan<br/>[]StandardSpan (含 AppKey)"| DSP
-    DSP -->|"spanChan #AppKey"| AB
+    KN -->|"messageChan (1)<br/>[]StandardSpan 含 AppKey"| DSP
+    DSP -->|"分桶推入"| AB1
+    DSP -->|"分桶推入"| AB2
+    DSP -->|"分桶推入"| ABN
+    AB1 --> SR
+    AB2 --> SR
+    ABN --> SR
+    SR --> PX
 ```
 
-**路由职责**
+**改造点清单**
 
-- 从 `messageChan` 接收 `[]StandardSpan`。
-- 按 `StandardSpan` 的 `(BkBizId, AppName)` 命中 Consul `apps[]`（独占场景 `apps[]` 长度为 `1`）。
-- 分组写入对应 `appBundle.spanChan`。
+| 文件 · 位置 | 改动 |
+| --- | --- |
+| `pre_calculate/dispatcher.go` 新增 | 新增 `dispatcher` 类型与 `Run` 方法 |
+| `pre_calculate/builder.go` · `RunInstance` 结构体 | 字段 `windowHandler window.Operation` → `windowHandlers map[core.AppKey]*appBundle` |
+| `pre_calculate/builder.go` · `RunInstance.startWindowHandler` | 遍历 `MetadataCenter.ListAppKeys(dataId)` 装配 `M` 份 `appBundle`，起 `1` 个 `Dispatcher` |
+| `pre_calculate/builder.go` · `RunInstance.startRecordSemaphoreAcquired` | 字段改名连带适配：`GetWindowsLength` / `RecordTraceAndSpanCountMetric` 遍历 `windowHandlers` 累加，反压水位维度保持 `dataId` 不变 |
 
-**命中失败处理**
+其余模块保持现状。
 
-- Span 被丢弃，不回退到默认应用。
-- 异常指标维度 `(data_id, bk_biz_id, app_name)`，定位 Span 顶层字段与 SaaS 注册 `apps[]` 不一致的应用。
+**`AppKey` 类型、`dispatcher` 与 `appBundle` 定义**
+
+`AppKey` 是 `(BkBizId, AppName)` 二元组，被多包共享。为避免 `storage → window` 反向依赖，类型定义放在 `core` 包：
+
+```go
+// pre_calculate/core/app_key.go 新增
+type AppKey struct {
+    BkBizId string
+    AppName string
+}
+
+// pre_calculate/dispatcher.go 新增
+type dispatcher struct {
+    dataId   string
+    bundles  map[core.AppKey]*appBundle
+    baseInfo core.BaseInfo               // 独占场景非零 · 共享场景零值
+    errChan  chan<- error
+}
+
+// pre_calculate/builder.go 新增
+type appBundle struct {
+    appKey    core.AppKey                    // 应用维度键
+    spanChan  chan []window.StandardSpan     // Dispatcher → DistributiveWindow 入口
+    operation window.Operation               // 内含 DistributiveWindow
+    processor window.Processor               // 应用维度 Processor，持有 MetricProcessor 引用
+}
+```
+
+**`appBundle` 与 `Dispatcher` 装配（`RunInstance.startWindowHandler` 内）**
+
+```go
+// 伪代码，省略错误处理与日志
+mc := core.GetMetadataCenter()
+apps := mc.ListAppKeys(p.startInfo.DataId)                // 共享 M>=1 · 独占 M=1
+baseInfo := mc.GetBaseInfo(p.startInfo.DataId)            // 独占非零 · 共享零值（Dispatcher 兜底用）
+
+bundles := make(map[core.AppKey]*appBundle, len(apps))
+for _, appKey := range apps {
+    spanChan := make(chan []window.StandardSpan, perBundleBuffer)
+    proc := window.NewProcessor(
+        p.ctx, p.startInfo.DataId, appKey, p.proxy, p.config.processorConfig...,
+    )
+    op := window.Operation{Operator: window.NewDistributiveWindow(
+        p.startInfo.DataId, p.ctx, proc, saveReqChan, p.config.distributiveWindowConfig...,
+    )}
+    op.Run(spanChan, p.errorReceiveChan, p.config.runtimeConfig...)
+    bundles[appKey] = &appBundle{
+        appKey: appKey, spanChan: spanChan, operation: op, processor: proc,
+    }
+}
+p.windowHandlers = bundles
+go newDispatcher(p.ctx, p.startInfo.DataId, bundles, baseInfo, p.errorReceiveChan).Run(messageChan)
+```
+
+**`Dispatcher.Run` 内循环**
+
+```go
+// 伪代码，buckets 在外层复用，避免每批次分配
+for {
+    select {
+    case batch, ok := <-messageChan:
+        if !ok { return }
+        for ak := range buckets { buckets[ak] = buckets[ak][:0] }
+        for _, span := range batch {
+            ak := core.AppKey{BkBizId: span.BkBizId, AppName: span.AppName}
+            // 上游异常 Span 顶层缺字段 · 用 baseInfo 兜底
+            // 独占场景 baseInfo 非零生效，共享场景 baseInfo 零值自动失效（必丢弃）
+            if (ak.BkBizId == "" || ak.AppName == "") && d.baseInfo.BkBizId != "" {
+                ak = core.AppKey{BkBizId: d.baseInfo.BkBizId, AppName: d.baseInfo.AppName}
+            }
+            if _, ok := d.bundles[ak]; !ok {
+                // AppKey 空或不在 apps[] · 丢弃 + 异常指标
+                metrics.AddApmPreCalcDispatcherDropTotal(d.dataId, ak)
+                continue
+            }
+            buckets[ak] = append(buckets[ak], span)
+        }
+        for ak, slice := range buckets {
+            if len(slice) == 0 { continue }
+            out := make([]window.StandardSpan, len(slice))
+            copy(out, slice)
+            d.bundles[ak].spanChan <- out // 阻塞即反压
+        }
+    case <-ctx.Done():
+        for _, b := range d.bundles { close(b.spanChan) }
+        return
+    }
+}
+```
+
+最热应用阻塞沿 `bundle.spanChan → messageChan → notifier.spans` 回压至 Kafka 消费端，反压链路与现状同构。
 
 ### c. appBundle
 
-位于 `Dispatcher` 下游、`Proxy` 上游的应用维度三元组 `(DistributiveWindow, Processor, MetricProcessor)`，是预计算的实际承载者，每应用一份。
+`appBundle` 内部组件改造，结构体定义见 `0x03.b`。
 
 ```mermaid
-flowchart LR
-    DSP[["Dispatcher (上游)"]]
-    PX[["Proxy (下游)"]]
+flowchart TB
+    spanChan(["spanChan · []StandardSpan"])
+    DW["DistributiveWindow<br/>(operation.Operator)"]
+    SW["distributiveSubWindow × N"]
+    Proc["Processor<br/>+ appKey · baseInfo(by appKey)"]
+    MP["MetricProcessor<br/>+ appKey · bkBizId / appName(by appKey)"]
+    SR(["共享 saveReqChan"])
 
-    subgraph BD["appBundle (每应用一份)"]
-        direction TB
-        DW["DistributiveWindow<br/>主窗口"]
-        SW["distributiveSubWindow × N<br/>默认 N = 3"]
-        Proc["Processor<br/>{appKey, baseInfo, ...}"]
-        MP["MetricProcessor"]
-
-        DW -->|"xxhash(trace_id) % N"| SW
-        SW -.共享引用.-> Proc
-        Proc -->|"new"| MP
-    end
-
-    DSP -->|"spanChan #AppKey"| DW
-    Proc -.SaveRequest{AppKey}.-> PX
-    MP -.SaveRequest{AppKey}.-> PX
+    spanChan --> DW
+    DW -->|"xxhash(trace_id) % N"| SW
+    SW -.持有引用.-> Proc
+    Proc -->|"持有"| MP
+    Proc -.SaveEs / Cache / BloomFilter.-> SR
+    MP -.Prometheus + AppKey.-> SR
 ```
 
-**内部结构**
+图示数据流：
 
-- `DistributiveWindow`：接收 `spanChan` 中的 Span，按 `xxhash(trace_id) % N` 路由到 `N` 个 `distributiveSubWindow`（默认 `N = 3`）。
-- `Processor`：处理 `CollectTrace` 事件，触发历史 Span 回补、生成 Trace 视图，被 `N` 个子窗口共享引用。
-- `MetricProcessor`：由 `Processor` 持有，生成关系与流量指标。
+- `Processor` 出 `Cache` / `BloomFilter` / `SaveEs` 三类 `SaveRequest`，不携 AppKey
+- `MetricProcessor` 出 `Prometheus`，AppKey 嵌在 `PrometheusStorageData.AppKey`，下游路由见 `0x03.d`
 
-**构造期注入**（两种模式统一走 `appKey` 入口）
+**Processor 改造**
 
-| 字段 | 注入来源 |
+`pre_calculate/window/processor.go`
+
+| 变更点 | 目标 |
 | --- | --- |
-| `Processor.appKey` | 构造期绑定的 `appKey`（独占场景为 `apps[]` 唯一元素的 AppKey） |
-| `Processor.baseInfo` | `MetadataCenter.GetAppInfo(dataId, appKey).BaseInfo` |
-| `MetricProcessor.appName` 等 | 同上 |
+| **[Field]** `Processor.appKey` | 新增 · 构造期注入本应用 AppKey，承载「`Processor` 实例与 AppKey 绑定」不变量 |
+| **[Field]** `Processor.dataIdBaseInfo` / `baseInfo` | 类型与字段名保持，取值来源切换为 `MetadataCenter.GetAppInfo(dataId, appKey).BaseInfo`，自动让 Cache key 与索引名带上正确应用维度 |
+| **[Method]** `NewProcessor` | 入参追加 `appKey`，构造期向 `newMetricProcessor` 透传 |
 
-**`appKey` 的运行期传递**
+`Processor.sendStorageRequests` 出 `Cache` / `BloomFilter` / `SaveEs` 三类 `SaveRequest`，本方案不增 `SaveRequest` 字段，无需改动。
 
-- `storage.SaveRequest` 扩字段 `AppKey AppKey`。
-- `Processor` 与 `MetricProcessor` 写 `saveReqChan` 时把构造期绑定的 `appKey` 填入 `SaveRequest.AppKey`。
-- 下游 `Proxy` 据此选择对应应用的 `MetricDimensionsHandler` 写出指标。
+`recoverSpans` / `ToStandardSpanFromMapping` 保持不变，回补 Span 经 `revertToCollect` 直入 graph，无下游消费 AppKey 字段。
 
-**`traceEsQueryLimiter`**
+**MetricProcessor 改造**
 
-每 `Processor` 独立，共享池下 ES 查询总速率与 `M` 线性，按 SaaS 侧容量规划评估。
+`pre_calculate/window/metrics_processor.go`
 
-**内部逻辑零改动**
+| 变更点 | 目标 |
+| --- | --- |
+| **[Field]** `MetricProcessor.appKey` | 新增 · 构造期注入，作为出 `PrometheusStorageData` 时携带的路由键 |
+| **[Field]** `MetricProcessor.bkBizId` / `appName` | 取值来源由 `GetBaseInfo(dataId)` 切换为 `GetAppInfo(dataId, appKey)` |
+| **[Method]** `newMetricProcessor` | 入参追加 `appKey` 参数 |
+| **[Method]** `MetricProcessor.sendToSave` | 出 `SaveRequest` 时把 `m.appKey` 填入 `PrometheusStorageData.AppKey`，`SaveRequest` 自身无变化 |
 
-- `Processor.PreProcess` / `Processor.listSpanFromStorage` / `MetricProcessor.ToMetrics` 等内部方法不感知模式差异。
-- `Processor.appKey` 只用于填充 `SaveRequest` 与构造历史回补查询条件，不参与子窗口路由或键计算。
+**DistributiveWindow / distributiveSubWindow**
+
+`pre_calculate/window/distributive.go` 无字段或方法层改造，子窗口的 `Processor` 引用在 `startWindowHandler` 内切换为本 `appBundle` 实例。
 
 ### d. Proxy
 
-是「`SaveRequest` 到 token 与后端」的唯一分发入口。
+`SaveRequest` 到 token 与后端的唯一分发入口，自身结构保持原样，只有 Prometheus 链路载体 `PrometheusStorageData` 引入 AppKey。
 
-**字段升级**：
+**`PrometheusStorageData` 与 `Proxy` 变更**
 
-| 字段 | 类型（现状） | 类型（方案 4） |
-| --- | --- | --- |
-| `Proxy.prometheusMetricsHandler` | `*MetricDimensionsHandler` | `map[AppKey]*MetricDimensionsHandler` |
+`pre_calculate/storage/storage.go` 与 `pre_calculate/storage/metrics_handler.go`
 
-**分发逻辑变更**：
-
-- `Proxy.ReceiveSaveRequest` 的 `case Prometheus` 分支按 `SaveRequest.AppKey` 选 `MetricDimensionsHandler` 实例。
-- 其余 `case` 分支（`SaveEs` / `Cache` / `BloomFilter` / `TraceEs`）保持现状。
-
-**token 注入路径不变**：
-
-- 每个 `MetricDimensionsHandler` 仍由 `NewMetricDimensionHandler` 在构造期注入 token，`promClient` 写入期不感知 AppKey。
-- `Proxy.NewProxyInstance` 按 `apps[]` 循环构造 `M` 个 handler，独占场景 `apps[]` 长度为 `1`，构造路径与共享场景一致。
-
-**关闭语义**：`<-ctx.Done()` 时遍历 `prometheusMetricsHandlers` map 逐个 `Close()`。
+| 变更点 | 目标 |
+| --- | --- |
+| **[Field]** `PrometheusStorageData.AppKey` | 新增 `core.AppKey` · `MetricProcessor.sendToSave` 写入时填充，下游路由依据 |
+| **[Field]** `Proxy.prometheusMetricsHandler` | 类型由 `*MetricDimensionsHandler` 升级为 `map[core.AppKey]*MetricDimensionsHandler` |
+| **[Method]** `NewProxyInstance` | 按 `MetadataCenter.ListAppKeys(dataId)` 循环构造 `M` 个 `MetricDimensionsHandler`，独占场景退化为单元素 map |
+| **[Method]** `Proxy.ReceiveSaveRequest` | `case Prometheus` 分支按 `item.AppKey` 选 `MetricDimensionsHandler`，`SaveEs` / `Cache` / `BloomFilter` 分支不变 |
+| **[Method]** `Proxy` 关闭流程 | `<-ctx.Done()` 时遍历 `prometheusMetricsHandlers` map 逐个 `Close()`，与现状单实例 `Close()` 语义一致 |
 
 ### e. Consul 协议与变更感知
 
@@ -313,69 +421,93 @@ flowchart LR
 
 共享 `data_id` 下 `kafka_info` / `trace_es_info` / `save_es_info` 必须一致，作为「共享数据链路」的隐式前提，由 SaaS 端注册流程保证。
 
-**`MetadataCenter` 接口扩展**：
+**`MetadataCenter` 与 `DataIdInfo` 变更**
 
-- `core.DataIdInfo` 新增 `Apps map[AppKey]AppInfo` 字段，`AppInfo` 含 `Token` 与 `BaseInfo`。
-- 独占模式下，`MetadataCenter.AddDataId` 把 Consul 顶层 `BaseInfo` / `Token` 映射为 `Apps` map 的唯一元素。
-- 新增 `MetadataCenter.GetAppInfo(dataId, appKey) AppInfo`，作为 `appBundle` 构造期取应用上下文的统一入口。
-- 保留 `MetadataCenter.GetBaseInfo(dataId)` 仅供 Span 标准化阶段（Notifier）兜底填充 AppKey 时使用。
+`pre_calculate/core/meta.go`
+
+| 变更点 | 目标 |
+| --- | --- |
+| **[Field]** `DataIdInfo.Apps` | 新增 `map[AppKey]AppInfo` 字段，`AppInfo` 含 `Token` 与 `BaseInfo` |
+| **[Method]** `MetadataCenter.AddDataId` | 独占模式下把 Consul 顶层 `BaseInfo` / `Token` 映射为 `Apps` map 的唯一元素 |
+| **[Method]** `MetadataCenter.GetAppInfo(dataId, appKey)` | 新增 · `appBundle` 构造期取应用上下文的统一入口，返回 `AppInfo` |
+| **[Method]** `MetadataCenter.ListAppKeys(dataId)` | 新增 · 供 `startWindowHandler` 装配 `M` 份 `appBundle`，独占场景返回单元素切片 |
+| **[Method]** `MetadataCenter.GetBaseInfo(dataId)` | 保留 · 仅供 `Dispatcher` 构造 AppKey 时兜底使用，独占非零生效、共享零值自动失效 |
 
 **变更感知**：
 
-- `watchConsulConfigUpdate` 当前调 `MetadataCenter.CheckUpdate(dataId)`，内部用 `cmp.Diff` 整结构比较 `DataIdInfo`。
-- `Apps` 字段加入后自动纳入比较，无需新增通知通道。
-- `apps[]` 任意变化都抛 `reload for config update` 触发整个 `RunInstance` 重启，所有 `appBundle` 与 `prometheusMetricsHandler` 重新实例化。
+- `watchConsulConfigUpdate` → `MetadataCenter.CheckUpdate(dataId)` 通过 `cmp.Diff` 整结构比较 `DataIdInfo`，`Apps` 字段自动纳入。
+- `apps[]` 变化抛 `reload for config update`，整个 `RunInstance` 重启，`appBundle` 与 `prometheusMetricsHandler` 重新实例化。
 
 ### f. 持久化键策略
 
-**保留裸 `trace_id`**：`distributiveSubWindow.locate`、`sync.Map[trace_id]CollectTrace`、布隆过滤器 key、预计算结果表 ES `_id` 不引入 AppKey。
+**保留裸 `trace_id`** 的载体：
+
+- `distributiveSubWindow.locate`
+- `sync.Map[trace_id]CollectTrace`
+- 布隆过滤器 key
+- 预计算结果表 ES `_id`
+- `Processor.listSpanFromStorage` 的 `TraceEs` 查询条件
+
+**Cache 路径例外**：`listSpanFromStorage` 的 Cache 已按 `(BkBizId, AppName, TraceId)` 三段写读，随 `dataIdBaseInfo` 切换自动启用 AppKey 维度。
 
 取舍依据：
 
 - `trace_id` 是 `128` bit 随机值，撞库工程概率约 `2^-64`。
 - 引入 AppKey 反而带来发布前后键格式不兼容：布隆过期前漏读、ES 双文档。
-- 共享场景下 `Dispatcher` 已按 AppKey 把跨应用的 Span 路由到不同 `appBundle`，子窗口内部不会跨应用聚合。
-- 两个 `appBundle` 各自写 ES 时同 `_id` 相互覆盖，与改造前独占应用之间偶发撞库的行为完全一致。
+- `Dispatcher` 已按 AppKey 把跨应用的 Span 分发到不同 `appBundle`，子窗口内部不跨应用聚合。
+- 撞库时写 `SaveEs` 同 `_id` 相互覆盖、读 `TraceEs` 读到对方 doc，与改造前独占应用偶发撞库行为一致。
 
-**历史 Span 回补**：
+### g. 禁止形态
 
-- `Processor.listSpanFromStorage` 的 ES 查询条件扩展为 `trace_id + bk_biz_id + app_name` 三条件。
-- 三条件取值来自 `Processor.appKey` 与 `event.TraceId`。
-- `recoverSpans` 路径 `ToStandardSpanFromMapping` 直接从 `map[string]any` 读 `bk_biz_id` / `app_name`，回填到 `StandardSpan` 字段。
+避免实现期走偏的三条边界：
 
-### g. 设计禁区
-
-避免实现期走偏的三条禁止形态：
-
-- `appBundle` 内部禁止按 AppKey 反查 Consul，应用上下文只通过构造期注入。
-- `promClient` 禁止在写入期按事件覆盖 token，token 仅在 `NewMetricDimensionHandler` 构造期注入。
-- `Dispatcher` 之外禁止再次校验 Span 是否命中 `apps[]`，命中失败处理收敛在 `Dispatcher` 一处。
+| 禁止形态 | 唯一允许路径 |
+| --- | --- |
+| `appBundle` 内部按 AppKey 反查 Consul | 应用上下文仅通过构造期注入 |
+| `promClient` 写入期按事件覆盖 token | token 仅在 `NewMetricDimensionHandler` 构造期注入 |
+| `Dispatcher` 之外重复校验 Span 是否命中 `apps[]` | 命中失败处理收敛在 `Dispatcher` 一处 |
 
 ## 0x04 验收与验证
 
+**任务粒度**
+
 - 共享 `data_id` 在 BMW 仅存在一个常驻任务实例。
-- 共享 `data_id` 下两应用不同 `trace_id` 时，各自 Trace 视图字段只反映自身应用 Span。
-- 共享 `data_id` 下两应用不同 `trace_id` 时，关系与流量指标 label `apm_application_name` 与对应应用一致。
-- 共享 `data_id` 下两应用不同 `trace_id` 时，上报 `X-BK-TOKEN` 与对应应用在 Consul `apps[]` 中登记的 token 一致。
-- 共享 `data_id` 下两应用同 `trace_id` 时，`Dispatcher` 按 AppKey 路由到不同 `appBundle`，子窗口内部不合并。
-- 共享 `data_id` 下两应用同 `trace_id` 时，ES `_id` 相互覆盖与改造前独占应用偶发撞库行为一致。
-- 共享池移出某应用后，下一次 `bmw_task_cron` 周期内 Consul `apps[]` 不含该应用，`watchConsulConfigUpdate` 触发整个 `RunInstance` 重启，重启后不再上报该应用指标。
+
+**共享 + 两应用不同 `trace_id`**
+
+- 各自 Trace 视图字段只反映自身应用 Span。
+- 关系与流量指标 label `apm_application_name` 与对应应用一致。
+- 上报 `X-BK-TOKEN` 与对应应用在 Consul `apps[]` 登记的 token 一致。
+
+**共享 + 两应用同 `trace_id`**
+
+- `Dispatcher` 按 AppKey 路由到不同 `appBundle`，子窗口内部不合并。
+- ES `_id` 相互覆盖行为与改造前独占应用偶发撞库一致。
+
+**配置变更**
+
+- 共享池移出某应用后，下一次 `bmw_task_cron` 周期内 Consul `apps[]` 不含该应用，`watchConsulConfigUpdate` 触发 `RunInstance` 重启，重启后不再上报该应用指标。
+
+**异常分支**
+
 - Span 顶层缺失 `bk_biz_id` 或 `app_name` 时，`Dispatcher` 丢弃 Span 并记录异常指标。
-- 独占场景的 Trace 视图字段、缓存键、指标 label、token 行为与改造前完全一致。
+
+**独占退化**
+
+- Trace 视图字段、缓存键、指标 label、token 行为与改造前完全一致。
 
 ## 0x05 实施进展
 
 | 时间 | 对应设计片段 | 结论调整概要 | 改动 / 验证 |
 | --- | --- | --- | --- |
-| `2026-05-14` | `0x01` / `0x02` / `0x03` / `0x04` 全部 | 方案「单任务多应用窗口」：Notifier 统一填充 AppKey（独占走 `BaseInfo` 兜底），Dispatcher 路由到 `appBundle`，独占即 `M=1`，回补扩展为三条件。 | [1] 已核对 master `pkg/bk-monitor-worker/internal/apm/pre_calculate/**` 与 `pkg/collector/exporter/converter/traces.go` 共 `25` 个事实点<br />[2] 本次仅创建方案文档，未改代码 |
+| `2026-05-15` | `0x01` / `0x02` / `0x03` / `0x04` 全部 | 方案「单任务多应用窗口」<br />[1] `Notifier` 零改动，`Span` / `StandardSpan` 新增可选 AppKey 字段<br />[2] 单点 `Dispatcher` 收敛读字段 / 构造 AppKey / 兜底 / 路由四个职责，`AppKey` 类型上移 `core` 包并通过 `PrometheusStorageData` 流转<br />[3] `M` 份 `appBundle.spanChan`，`DistributiveWindow` 内部不动<br />[4] 持久化键全量保留裸 `trace_id`、撞库容忍 | [1] 已核对 master `pkg/bk-monitor-worker/internal/apm/pre_calculate/**` 与 `pkg/collector/exporter/converter/traces.go` 全部 `30+` 个事实点<br />[2] 本次仅创建方案文档，未改代码 |
 
 ## 0x06 参考
 
 - 父 issue：[APM 支持跨应用共享数据源](../2026-03-03-apm-shared-datasource/README.md)
 - BMW 预计算模块：`pkg/bk-monitor-worker/internal/apm/pre_calculate/**`
-- bk-collector 共享场景 Span 顶层字段注入：`pkg/collector/exporter/converter/traces.go`
+- bk-collector Span 顶层 `bk_biz_id` / `app_name` 无条件注入：`pkg/collector/exporter/converter/traces.go`
 
 ## 0x07 版本锚点
 
-- 分支：`<branch_name>`
-- PR：暂未提交
+PR 提交后在此回填分支与 PR 链接。
