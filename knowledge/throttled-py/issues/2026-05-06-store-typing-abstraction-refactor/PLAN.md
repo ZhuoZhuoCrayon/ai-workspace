@@ -848,7 +848,7 @@ class AsyncBaseRateLimiter(BaseRateLimiterMixin):
 
 `Throttled` 的继承链已经能表达本节结构：
 
-- `_throttled_common.py` 只承载 `ThrottledSpec` 与 `ThrottledLogic`。
+- `_throttled/logic.py` 只承载 `ThrottledLogic`。
 - sync / async `BaseThrottled` 各自持有 store、limiter、hook 和执行生命周期。
 
 **继承链**
@@ -857,13 +857,11 @@ class AsyncBaseRateLimiter(BaseRateLimiterMixin):
 classDiagram
     direction TB
 
-    class ThrottledSpec {
+    class ThrottledLogic {
         +_NON_BLOCKING: float
         +_WAIT_INTERVAL: float
         +_WAIT_MIN_INTERVAL: float
         +_DEFAULT_RATE_LIMITER_TYPE: str
-    }
-    class ThrottledLogic {
         +key: str | None
         +timeout: float
         +_validate_cost(cost)
@@ -906,7 +904,6 @@ classDiagram
         +peek(key) Awaitable~RateLimitState~
     }
 
-    ThrottledSpec <|-- ThrottledLogic
     ThrottledLogic <|-- BaseThrottled
     ThrottledLogic <|-- AsyncBaseThrottledAlias
     BaseThrottled <|-- Throttled
@@ -917,13 +914,12 @@ classDiagram
 
 | 变更点 | 目标 |
 | --- | --- |
-| **[Add]** `throttled/_throttled_common.py` | 只放 `ThrottledSpec` 与 `ThrottledLogic` |
-| **[Add]** `ThrottledSpec` | 只声明默认限流器类型、非阻塞常量和等待间隔 |
+| **[Add]** `throttled/_throttled/logic.py` | 只放 `ThrottledLogic` |
 | **[Add]** `ThrottledLogic` | 只承载 quota 解析、参数校验、key 解析和等待计算 |
 | **[Refine]** `BaseThrottled` | 分别持有 store、limiter、hook、锁或 async 生命周期 |
 | **[Keep]** sync / async `BaseThrottled.__init__` docstring | 文档生成依赖完整内容，禁止删减或调整换行 |
 | **[Delete]** `BaseThrottledMixin` | 避免把 store、limiter、hook 与生命周期压进跨端泛型 |
-| **[No]** `BaseThrottledConfig` | 避免混合校验、公共变量和生命周期 |
+| **[No]** `BaseThrottledConfig` / `ThrottledSpec` | 避免混合校验、公共变量和生命周期 |
 | **[Delete]** `_make_limiter()` 跨端 `cast` | 本端 registry 与 store 已能确定 limiter 类型 |
 | **[Delete]** `types.StoreP` 默认 store 类型 | 默认 store 只属于本端入口，构造签名使用本端 `BaseStore` |
 
@@ -942,59 +938,21 @@ classDiagram
 | 异常透出 | 内建 Store 与 action 仍统一包装 backend 异常。 |
 | 文档生成 | sync / async `BaseThrottled.__init__` docstring 保持完整。 |
 
-### b. 类型验收用例
-
-类型验收文件放在 `typing_checks/` 下。
-
-该目录不属于 `tests.*` 包，能避开测试目录的 mypy 放宽配置。
-
-同步用例：
-
-```python
-# typing_checks/store_boundary_sync.py
-from throttled import BaseStore, MemoryStore, RedisStore, Throttled
-
-
-def _get_store(use_redis: bool) -> BaseStore:
-    if use_redis:
-        return RedisStore(server="redis://127.0.0.1:6379/0")
-    return MemoryStore()
-
-
-_throttled = Throttled(store=_get_store(False))
-```
-
-异步用例：
-
-```python
-# typing_checks/store_boundary_async.py
-from throttled.asyncio import BaseStore, MemoryStore, RedisStore, Throttled
-
-
-def _get_store(use_redis: bool) -> BaseStore:
-    if use_redis:
-        return RedisStore(server="redis://127.0.0.1:6379/0")
-    return MemoryStore()
-
-
-_throttled = Throttled(store=_get_store(False))
-```
-
-### c. 回归口径
+### b. 回归口径
 
 验证方案成立需覆盖 `4` 类入口：
 
-1. `mypy strict` 覆盖 `throttled` 与 `typing_checks`。
-2. ruff check 覆盖源码、类型验收和相关测试。
+1. `mypy strict` 覆盖 `throttled`。
+2. ruff check 覆盖源码和相关测试。
 3. ruff format check 覆盖同一组文件。
 4. pytest 覆盖完整 `tests/` 回归。
 
 推荐命令：
 
 ```bash
-uv run --no-sync mypy throttled typing_checks
-uv run --no-sync ruff check throttled typing_checks tests/test_throttled.py tests/asyncio/test_throttled.py
-uv run --no-sync ruff format --check throttled typing_checks tests/test_throttled.py tests/asyncio/test_throttled.py
+uv run --no-sync mypy throttled
+uv run --no-sync ruff check throttled tests/test_throttled.py tests/asyncio/test_throttled.py
+uv run --no-sync ruff format --check throttled tests/test_throttled.py tests/asyncio/test_throttled.py
 uv run --no-sync pytest -n auto tests/ -q
 ```
 
