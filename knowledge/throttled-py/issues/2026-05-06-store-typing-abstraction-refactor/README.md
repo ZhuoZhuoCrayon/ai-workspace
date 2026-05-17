@@ -3,7 +3,7 @@ title: Store 类型抽象边界优化
 tags: [throttled-py, typing, store, abstraction, public-api, sync-async]
 description: 从底向上重画 sync / async 分界，重新定义 BaseStore 公共边界与内部执行层复用方式
 created: 2026-05-06
-updated: 2026-05-13
+updated: 2026-05-17
 ---
 
 # Store 类型抽象边界优化

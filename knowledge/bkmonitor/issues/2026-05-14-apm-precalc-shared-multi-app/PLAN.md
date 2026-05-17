@@ -500,7 +500,7 @@ flowchart TB
 
 | 时间 | 对应设计片段 | 结论调整概要 | 改动 / 验证 |
 | --- | --- | --- | --- |
-| `2026-05-15` | `0x01` / `0x02` / `0x03` / `0x04` 全部 | 方案「单任务多应用窗口」<br />[1] `Notifier` 零改动，`Span` / `StandardSpan` 新增可选 AppKey 字段<br />[2] 单点 `Dispatcher` 收敛读字段 / 构造 AppKey / 兜底 / 路由四个职责，`AppKey` 类型上移 `core` 包并通过 `PrometheusStorageData` 流转<br />[3] `M` 份 `appBundle.spanChan`，`DistributiveWindow` 内部不动<br />[4] 持久化键全量保留裸 `trace_id`、撞库容忍 | [1] 已核对 master `pkg/bk-monitor-worker/internal/apm/pre_calculate/**` 与 `pkg/collector/exporter/converter/traces.go` 全部 `30+` 个事实点<br />[2] 本次仅创建方案文档，未改代码 |
+| `2026-05-15 10:00` | `0x03.a` / `0x03.b` / `0x03.c` / `0x03.d` / `0x03.e` | 完成「单任务多应用窗口」主链路实现。<br />[1] `core.AppKey`、Consul `apps[]`、`MetadataCenter.ListAppKeys/GetAppInfo` 已落地<br />[2] `Span` / `StandardSpan` 已承载顶层 AppKey，`Dispatcher` 已接入 `KafkaNotifier` 与多 `appBundle` 之间<br />[3] `Processor` / `MetricProcessor` / `Proxy` 已按 AppKey 持有应用上下文与 Prometheus handler<br />[4] 修复向前兼容测试失败：独占应用保留单应用 fallback，指标 handler 对空 TTL 提供默认值，window fixture 同步新增维度字段 | [1] 新增 metadata 独占 / 共享解析测试与 Dispatcher 路由测试<br />[2] 修正 storage / window 既有测试对新增维度字段与 Prometheus 数据结构的断言<br />[3] `go test ./internal/apm/pre_calculate/... -timeout 60s` 通过 |
 
 ## 0x06 参考
 

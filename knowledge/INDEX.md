@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-05-14
+> 最后更新：2026-05-17
 
 ## 0x01 项目知识
 
@@ -16,6 +16,14 @@
 
 ## 0x02 最近更新
 
+- 2026-05-17：更新
+  [Store 类型抽象边界优化](./throttled-py/issues/2026-05-06-store-typing-abstraction-refactor/README.md)
+  至 throttled-py
+  （完成 `Throttled` sync / async 组合状态分端持有，移除 `BaseThrottledMixin` 跨端泛型，并补齐 `typing_checks` 类型验收）
+- 2026-05-15：更新
+  [APM 预计算适配共享数据源](./bkmonitor/issues/2026-05-14-apm-precalc-shared-multi-app/README.md)
+  至 bkmonitor
+  （开始实现 BMW 单任务多应用窗口主链路，已落地 AppKey、Dispatcher 与 Prometheus handler 按应用路由）
 - 2026-05-14：新增
   [APM 预计算适配共享数据源](./bkmonitor/issues/2026-05-14-apm-precalc-shared-multi-app/README.md)
   至 bkmonitor
@@ -28,15 +36,3 @@
   [Store 类型抽象边界优化](./throttled-py/issues/2026-05-06-store-typing-abstraction-refactor/README.md)
   至 throttled-py
   （将 `BaseStoreMixin` 收敛为 `StoreSpec` / `StoreValidationLogic`，并让 sync / async `BaseStore` 各自持有 backend 槽位）
-- 2026-05-10：更新
-  [Store 类型抽象边界优化](./throttled-py/issues/2026-05-06-store-typing-abstraction-refactor/README.md)
-  至 throttled-py
-  （将 PLAN 从 `BaseStore` 局部止血重写为自底向上的 sync / async 分界与复用方案）
-- 2026-05-08：更新
-  [优化 APM 日志关联列表关系查询长耗时](./bkmonitor/issues/2026-05-06-apm-log-relation-list-uq-latency/README.md)
-  至 bkmonitor
-  （将 PLAN 从调研态收敛为方案态，并确认无 workload 服务可直接短路关系查询分支）
-- 2026-05-07：新增
-  [APM Span 内置指标支持声明式引用](./bkmonitor/issues/2026-05-07-apm-span-builtin-metric-declarative-reference/README.md)
-  至 bkmonitor
-  （将 Trace 概览图 Span 指标查询从手工参数拼接收敛为声明式指标算子）

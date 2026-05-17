@@ -4,45 +4,56 @@ tags: [throttled-py, typing, store, abstraction, public-api, sync-async]
 issue: ./README.md
 description: 从底向上重画 sync / async 分界，只在纯逻辑层共享，并让 BaseStore 回到公共零泛型边界
 created: 2026-05-06
-updated: 2026-05-13
+updated: 2026-05-17
 ---
 
 # Store 类型抽象边界优化 —— 实施方案
 
-> 基于 [README.md](./README.md) 制定。
+本版沿用原方案的写作骨架，以当前分支实现回填结论、边界与架构图。
+
+当前代码基线为 `refactor/260511_mypy_strict_typing_new` 相对 `main`。
+
+仓库本地没有 `master` ref，本文按 `main` / `origin/main` 作为主干基线。
+
+本文只沉淀当前有效方案，不追加阶段日志。
 
 ## 0x01 调研与约束
 
 ### a. 症状
 
-`mypy strict` 改造后，`BaseStore` 由零泛型公共边界变为 `BaseStore[_BackendT]`。
+`mypy strict` 改造后，`BaseStore` 曾从零泛型公共边界变为 `BaseStore[_BackendT]`。
 
-用户在表达「返回一个同步 `Store`」时被迫回答「这个 `Store` 绑定哪个 `StoreBackend`」：
+用户在表达“返回一个同步 Store”时，被迫回答内部 backend 类型：
 
-| 用户写法 | 结果 | 阻断原因 |
+| 用户写法 | 原阻断 | 当前目标 |
 | --- | --- | --- |
-| `_get_store() -> BaseStore` | 不通过 | 裸 `BaseStore` 缺泛型实参。 |
-| `_get_store() -> BaseStore[BaseStoreBackend[object]]` | 不通过 | 具体 `Store` 返回值类型不匹配。 |
-| `_get_store() -> BaseStore[types.StoreBackendP]` | 不通过 | `StoreBackend` 协议不能代表具体 `Store`。 |
-| `_get_store() -> types.SyncStoreP` | 通过 | 用户被迫理解内部协议类型。 |
+| `_get_store() -> BaseStore` | 裸 `BaseStore` 缺泛型实参。 | 作为用户侧标准写法。 |
+| `_get_store() -> BaseStore[BaseStoreBackend[object]]` | 具体 `Store` 返回类型不匹配。 | 不再需要写 backend 实参。 |
+| `_get_store() -> BaseStore[types.StoreBackendP]` | 协议不能代表具体 `Store`。 | 不再暴露 `StoreBackendP`。 |
+| `_get_store() -> types.SyncStoreP` | 需要用户理解内部协议。 | 删除 Store 侧 public 协议绕路。 |
+
+当前有效问题不是“如何给 `BaseStore` 找到一个更宽的泛型实参”。
+
+真实问题是：`StoreBackend` 与 `AtomicAction` 的配对关系存在，但它不应进入公共 API。
 
 ### b. 复杂度来源
 
 入口症状由 `3` 条复用轴在公共边界交叉造成：
 
-| 复用轴 | 当前形态 | 边界泄漏 |
+| 复用轴 | 原形态 | 当前收敛 |
 | --- | --- | --- |
-| sync / async 执行模型 | `SyncStoreP` / `AsyncStoreP`、`SyncAtomicActionP` / `AsyncAtomicActionP` 与 `BaseThrottledMixin` 全部带泛型。 | 执行模型差异扩散到核心泛型链。 |
-| 公共 API 能力边界 | `BaseStore[_BackendT]` 同时充当用户注解与实现基类。 | 内部 `StoreBackend` 类型泄漏到用户侧。 |
-| `StoreBackend` / `AtomicAction` 配对 | `BaseStore.make_atomic()` 与 `BaseAtomicAction[_BackendT]` 共享同一 `StoreBackend` 类型变量。 | 配对关系真实存在，但被提升到过高层。 |
+| sync 与 async 执行模型 | Store、AtomicAction、Throttled 通过跨端协议和泛型复用。 | 只共享纯逻辑，执行端各自声明生命周期。 |
+| 公共 API 能力边界 | `BaseStore[_BackendT]` 同时充当用户注解与实现基类。 | `BaseStore` 回到零泛型公共边界。 |
+| backend 与 action 配对 | `BaseStore.make_atomic()` 与 `BaseAtomicAction[_BackendT]` 共享类型变量。 | 配对下沉到具体 `Store` 与具体 action base。 |
 
-结论从「让 `BaseStore` 不带泛型」的局部止血，升级为自底向上重画 sync / async 分界。
+结论从“让 `BaseStore` 不带泛型”的局部止血，升级为自底向上重画 sync / async 分界。
 
 ### c. 复用判定
 
-设计原则：
+复用原则：
 
-> 仅在无 I/O 形态差异的纯逻辑层复用，出现 `def` / `async def`、锁、Redis script、client 协议或构造生命周期差异即分叉。
+- 仅在无 I/O 形态差异的纯逻辑层复用。
+- 出现 `def` / `async def`、锁、Redis script、client 协议或构造生命周期差异时拆回两端。
 
 满足共享需同时具备 `2` 个条件：
 
@@ -53,18 +64,26 @@ updated: 2026-05-13
 
 | 层 | 可共享 | 必须分叉 |
 | --- | --- | --- |
-| `StoreBackend` | URL 解析、options 归一化、异常族声明。 | sync / async Redis client 协议、连接默认值。 |
-| `AtomicAction` | Redis Lua 脚本常量、Memory 纯计算函数。 | `Script` / `AsyncScript`、`do()` / `async do()`、锁进入方式。 |
-| `Store` | 命令名称、参数校验、异常包装规则。 | 公共基类、`make_atomic()` 构造、sync / async 方法签名。 |
-| `RateLimiter` | `Quota` 结构、key 生成、结果解释纯函数。 | `limit()` / `peek()` 执行入口、`Store` / `AtomicAction` 类型、await 边界。 |
-| `Throttled` | `Quota` 解析、`timeout` / `cost` 校验、等待时间计算。 | `RateLimiter` 懒加载、`Hook`、context manager、装饰器执行形态。 |
+| `StoreBackend` | server、options、异常族、Redis URL 解析、Memory 数据结构。 | sync 与 async Redis client 协议、Memory 锁。 |
+| `AtomicAction` | `TYPE`、`STORE_TYPE`、Lua 脚本常量、Memory 纯计算。 | `Script`、`AsyncScript`、`do()`、`async do()`、锁进入方式。 |
+| `Store` | `TYPE`、包装方法声明、timeout 校验。 | 公共基类、命令签名、`make_atomic()` 返回类型。 |
+| `RateLimiter` | `Quota`、结果对象、key 准备、算法纯计算。 | store/action 字段、注册表命名空间、`limit()`、`peek()`。 |
+| `Throttled` | 默认常量、quota 解析、参数校验、等待时间计算。 | limiter 懒加载、hook、锁、context manager、装饰器。 |
 
 ## 0x02 架构设计
 
-目标结构按「`StoreBackend` 资源层 → `Store` / `AtomicAction` 执行层 → `RateLimiter` 组合层 → `Throttled` 用户入口层」自底向上分层，遵循以下约束：
+目标结构按“资源层 → 执行层 → 组合层 → 用户入口层”自底向上分层：
 
-- `Base*` 只表达公共能力，具体类自持 `_backend`。
-- `BackendBoundStore` 与 `BackendBoundAtomicAction` 不进入目标结构。
+1. `StoreBackend` 固定资源形态。
+2. `Store` 与 `AtomicAction` 固定执行入口。
+3. `RateLimiter` 组合本端 Store 与 action。
+4. `Throttled` 只消费下层已收口的本端对象。
+
+核心约束：
+
+- `Base*` 只表达公共能力，不能携带 `StoreBackend` 泛型进入用户签名。
+- 具体类自持 `_backend`，不再引入 `BackendBoundStore` 或 `BackendBoundAtomicAction`。
+- 共享层只能放 spec 与 logic，不承载生命周期。
 
 ### a. 整体类图
 
@@ -76,88 +95,114 @@ classDiagram
         +server: str | None
         +options: dict
         +base_exceptions: tuple
-        +get_client()
     }
-    class SyncStore {
+    class StoreSpec {
         +TYPE: str
-        -_backend
+        +_WRAPPED_METHOD_NAMES: tuple
+    }
+    class StoreValidationLogic {
+        +_validate_timeout(timeout)
+    }
+    class SyncBaseStore {
+        +_BACKEND_CLASS: type
+        -_backend: BaseStoreBackend
+        +make_atomic(action_cls) BaseAtomicAction
         +exists(key) bool
-        +make_atomic(action_cls)
     }
-    class AsyncStore {
-        +TYPE: str
-        -_backend
+    class AsyncBaseStore {
+        +_BACKEND_CLASS: type
+        -_backend: BaseStoreBackend
+        +make_atomic(action_cls) AsyncBaseAtomicAction
         +exists(key) Awaitable~bool~
-        +make_atomic(action_cls)
     }
-    class SyncAtomicAction {
+    class SyncBaseAtomicAction {
         +TYPE: str
         +STORE_TYPE: str
-        -_backend
+        -_backend: BaseStoreBackend
         +do(keys, args) tuple
     }
-    class AsyncAtomicAction {
+    class AsyncBaseAtomicAction {
         +TYPE: str
         +STORE_TYPE: str
-        -_backend
+        -_backend: BaseStoreBackend
         +do(keys, args) Awaitable~tuple~
     }
-    class SyncRateLimiter {
-        -_store: SyncStore
+    class BaseRateLimiterMixin {
+        +KEY_PREFIX: str
+        +quota: Quota
+        +_prepare_key(key) str
+        +_supported_atomic_action_types()
+    }
+    class SyncBaseRateLimiter {
+        -_store: SyncBaseStore
         -_atomic_actions: dict
         +limit(key, cost) RateLimitResult
         +peek(key) RateLimitState
     }
-    class AsyncRateLimiter {
-        -_store: AsyncStore
+    class AsyncBaseRateLimiter {
+        -_store: AsyncBaseStore
         -_atomic_actions: dict
         +limit(key, cost) Awaitable~RateLimitResult~
         +peek(key) Awaitable~RateLimitState~
     }
-    class BaseThrottledConfig {
-        +key: KeyT | None
-        +timeout: float
-        -_quota: Quota
-        -_cost: int
-        +_get_key(key)
-        +_get_wait_time(retry_after)
+    class ThrottledSpec {
+        +_NON_BLOCKING: float
+        +_WAIT_INTERVAL: float
+        +_DEFAULT_RATE_LIMITER_TYPE: str
     }
-    class SyncThrottled {
-        -_store: SyncStore
-        -_limiter: SyncRateLimiter | None
-        +limit(key, cost, timeout) RateLimitResult
+    class ThrottledLogic {
+        +_parse_quota(quota) Quota
+        +_validate_timeout(timeout)
+        +_get_key(key) KeyT
+        +_get_wait_time(retry_after) float
     }
-    class AsyncThrottled {
-        -_store: AsyncStore
-        -_limiter: AsyncRateLimiter | None
-        +limit(key, cost, timeout) Awaitable~RateLimitResult~
+    class SyncBaseThrottled {
+        -_store: SyncBaseStore
+        -_limiter_cls: type~SyncBaseRateLimiter~
+        -_limiter: SyncBaseRateLimiter | None
+        -_lock: threading.Lock
+        +_make_limiter() SyncBaseRateLimiter
+    }
+    class AsyncBaseThrottled {
+        -_store: AsyncBaseStore
+        -_limiter_cls: type~AsyncBaseRateLimiter~
+        -_limiter: AsyncBaseRateLimiter | None
+        +_make_limiter() AsyncBaseRateLimiter
     }
 
-    SyncStore *-- BaseStoreBackend : _backend
-    AsyncStore *-- BaseStoreBackend : _backend
-    SyncStore ..> SyncAtomicAction : make_atomic()
-    AsyncStore ..> AsyncAtomicAction : make_atomic()
-    SyncRateLimiter o-- SyncStore : store
-    AsyncRateLimiter o-- AsyncStore : store
-    SyncRateLimiter *-- SyncAtomicAction : _atomic_actions
-    AsyncRateLimiter *-- AsyncAtomicAction : _atomic_actions
-    BaseThrottledConfig <|-- SyncThrottled
-    BaseThrottledConfig <|-- AsyncThrottled
-    SyncThrottled o-- SyncStore : store
-    AsyncThrottled o-- AsyncStore : store
-    SyncThrottled *-- SyncRateLimiter : _limiter
-    AsyncThrottled *-- AsyncRateLimiter : _limiter
+    StoreSpec <|-- SyncBaseStore
+    StoreSpec <|-- AsyncBaseStore
+    StoreValidationLogic <|-- SyncBaseStore
+    StoreValidationLogic <|-- AsyncBaseStore
+    SyncBaseStore *-- BaseStoreBackend : _backend
+    AsyncBaseStore *-- BaseStoreBackend : _backend
+    SyncBaseStore ..> SyncBaseAtomicAction : make_atomic()
+    AsyncBaseStore ..> AsyncBaseAtomicAction : make_atomic()
+    BaseRateLimiterMixin <|-- SyncBaseRateLimiter
+    BaseRateLimiterMixin <|-- AsyncBaseRateLimiter
+    SyncBaseRateLimiter o-- SyncBaseStore : store
+    AsyncBaseRateLimiter o-- AsyncBaseStore : store
+    SyncBaseRateLimiter *-- SyncBaseAtomicAction : _atomic_actions
+    AsyncBaseRateLimiter *-- AsyncBaseAtomicAction : _atomic_actions
+    ThrottledSpec <|-- ThrottledLogic
+    ThrottledLogic <|-- SyncBaseThrottled
+    ThrottledLogic <|-- AsyncBaseThrottled
+    SyncBaseThrottled o-- SyncBaseStore : store
+    AsyncBaseThrottled o-- AsyncBaseStore : store
+    SyncBaseThrottled *-- SyncBaseRateLimiter : _limiter
+    AsyncBaseThrottled *-- AsyncBaseRateLimiter : _limiter
 ```
 
 ### b. 不变量
 
 | 维度 | 不变量 |
 | --- | --- |
-| 公共边界 | `BaseStore` 是零泛型公共边界。 |
-| `Store` 持有 | 具体 `Store` 拥有 `_backend`、`_BACKEND_CLASS` 与 `make_atomic()`。 |
-| `AtomicAction` 持有 | 具体 `AtomicAction` 拥有 `_backend` 与构造函数。 |
-| `RateLimiter` 配对 | `RateLimiter` 不接收另一端 `Store` / `AtomicAction`。 |
-| 共享层访问 | 共享层不能访问 `_backend`、锁、`Script`、`await` 或 registry 返回类。 |
+| 公共边界 | sync / async 两端的 `BaseStore` 都是零泛型公共边界。 |
+| backend 所有权 | 具体 `Store` 拥有 `_BACKEND_CLASS` 与窄化后的 `_backend`。 |
+| action 所有权 | 具体 action base 拥有 backend 窄化、锁进入方式和 script 实例。 |
+| limiter 配对 | `RateLimiter` 只消费本端 `BaseStore` 与本端 `BaseAtomicAction`。 |
+| Throttled 共享层 | `ThrottledLogic` 不持有 `_store`、`_limiter`、hook 或锁。 |
+| 文档入口 | sync / async `BaseThrottled.__init__` 各自保留完整 docstring。 |
 
 ### c. 命名约定
 
@@ -165,9 +210,9 @@ classDiagram
 
 | 项 | 约定 |
 | --- | --- |
-| 源码类名 | sync / async 同名，通过模块路径区分（`throttled.*` 与 `throttled.asyncio.*`）。 |
-| 文中称呼 | 默认指当前执行端的同名类，例如 `MemoryStoreBackend`、`BaseStore`、`BaseRateLimiter`。 |
-| 类图别名 | 同时展示两端时使用 `Sync*` / `Async*` 作为图内别名，不代表源码类名带该前缀。 |
+| 源码类名 | sync / async 同名，通过模块路径区分。 |
+| 文中称呼 | 默认指当前执行端的同名类。 |
+| 类图别名 | 同时展示两端时使用 `Sync*` / `Async*`，不代表源码类名带该前缀。 |
 
 类图关系：
 
@@ -175,32 +220,47 @@ classDiagram
 | --- | --- | --- |
 | `<|--` | 继承 | 子类直接继承父类能力边界。 |
 | `*--` | 组合 | 左侧持有右侧，且右侧生命周期由左侧收口。 |
-| `o--` | 关联 | 右侧由外部注入或独立存在，左侧仅长期持有引用。 |
-| `..>` | 依赖 | 左侧只在工厂、注册或纯逻辑调用中使用右侧，不持有其生命周期。 |
+| `o--` | 关联 | 右侧由外部注入或独立存在，左侧长期持有引用。 |
+| `..>` | 依赖 | 左侧只在工厂、注册或纯逻辑调用中使用右侧。 |
 
 抽象命名：
 
 | 名称 | 含义 | 使用边界 |
 | --- | --- | --- |
-| `Base*` | 对外可继承或可注解的能力边界。 | 不能携带 `StoreBackend` 泛型进入用户签名。 |
-| `*Common` | 跨 sync / async 共享的纯逻辑。 | 不能访问 I/O、锁、`Script`、registry 或生命周期状态。 |
-| `*Spec` / `*Logic` | 常量、Lua 脚本声明或纯计算函数。 | 只能被执行层调用，不能反向依赖 `Store` / `RateLimiter`。 |
+| `Base*` | 对外可继承或可注解的能力边界。 | 不能携带 backend 泛型进入用户签名。 |
+| `*Spec` | 常量、身份字段、脚本声明或静态规格。 | 不能持有执行期状态。 |
+| `*Logic` | 校验、解析、计算和结果转换。 | 不能访问 I/O、锁、script 或 registry 生命周期。 |
+| `*Mixin` | 已存在的局部复用形态。 | 只在收益明确时保留，不能重新引入跨端泛型。 |
 
 ## 0x03 开发方案
 
-自底向上推进，每层一个责任，统一按「职责分配 → 协议三问 → 收敛结果」节奏展开。
+自底向上推进，每层一个责任。
+
+每层先用架构图表达主结构。
+
+架构图已经表达清楚的继承、组合和依赖关系，正文不再逐项复述。
+
+存在稳定协议骨架时，先写协议骨架，再用改造点清单承接图外差异和对象去留。
+
+协议骨架只展示当前小节所属对象。
+
+上下游对象只以类型标注或流程图节点出现，不在骨架中展开。
 
 | 层 | 责任 |
 | --- | --- |
 | `StoreBackend` | 固定资源形态。 |
-| `Store` | 固定公共能力与 `StoreBackend` 所有权。 |
+| `Store` | 固定公共能力与 backend 所有权。 |
 | `AtomicAction` | 固定原子执行入口。 |
-| `RateLimiter` | 固定组合关系。 |
-| `Throttled` | 固定用户生命周期。 |
+| `RateLimiter` | 固定 store 与 action 的组合关系。 |
+| `Throttled` | 固定用户入口和生命周期。 |
 
 ### a. `StoreBackend` 改造
 
-`StoreBackend` 只承担资源接入，不替 `Store` / `AtomicAction` 表达执行能力，也不向上游透出 Redis client 协议。
+`StoreBackend` 的目标是把资源接入从执行能力里剥离出来：
+
+- 公共层只保留配置和异常族。
+- Memory 层共享数据结构，本端 backend 只补锁。
+- Redis 层共享解析与连接工厂，本端 backend 只补 client 协议。
 
 ```mermaid
 classDiagram
@@ -214,253 +274,408 @@ classDiagram
     class BaseMemoryStoreBackend {
         +max_size: int
         +expire_info: dict
+        +get_client() OrderedDict
         +exists(key) bool
         +ttl(key) int
         +set(key, value, timeout)
     }
-    class SyncMemoryStoreBackend {
-        +lock: SyncLock
+    class MemoryStoreBackend {
+        +lock: SyncLockP
     }
     class AsyncMemoryStoreBackend {
-        +lock: AsyncLock
+        +lock: AsyncLockP
     }
     class BaseRedisStoreBackend {
-        -_client
+        -_client: RedisClientT | None
         -_connection_factory
         +_parse(server, options)
-        +get_client()
+        +get_client() RedisClientT
     }
-    class SyncRedisStoreBackend {
-        +get_client() SyncRedisClient
+    class RedisStoreBackend {
+        +get_client() SyncRedisClientP
     }
     class AsyncRedisStoreBackend {
-        +get_client() AsyncRedisClient
+        +get_client() AsyncRedisClientP
     }
 
     BaseStoreBackend <|-- BaseMemoryStoreBackend
     BaseStoreBackend <|-- BaseRedisStoreBackend
-    BaseMemoryStoreBackend <|-- SyncMemoryStoreBackend
+    BaseMemoryStoreBackend <|-- MemoryStoreBackend
     BaseMemoryStoreBackend <|-- AsyncMemoryStoreBackend
-    BaseRedisStoreBackend <|-- SyncRedisStoreBackend
+    BaseRedisStoreBackend <|-- RedisStoreBackend
     BaseRedisStoreBackend <|-- AsyncRedisStoreBackend
 ```
 
-**职责分配**
+**协议骨架**
 
-| 责任 | 所属对象 | 说明 |
-| --- | --- | --- |
-| 通用配置 | `BaseStoreBackend` | 收敛 `server`、`options`、`base_exceptions`。 |
-| Memory 数据结构 | `BaseMemoryStoreBackend` | 暴露 `exists()` / `ttl()` / `set()` 等无 I/O 形态差异的操作。 |
-| Memory 锁 | sync / async `MemoryStoreBackend` | 各自持有本端锁，不通过公共协议判断锁形态。 |
-| Redis 连接解析 | `BaseRedisStoreBackend` | URL、options、连接工厂在 Redis 端内部收敛。 |
-| Redis client | 具体 backend | `BaseStoreBackend` 不再声明 `get_client()`，按 Memory / Redis 与 sync / async 各自实现。 |
+协议骨架只展示 backend 层对象。
 
-**协议三问**
+```python
+class BaseStoreBackend:
+    base_exceptions: tuple[type[Exception], ...] = ()
 
-| 问 | 回答 |
+    def __init__(
+        self,
+        server: str | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> None: ...
+
+
+class BaseMemoryStoreBackend(BaseStoreBackend):
+    max_size: int
+    expire_info: dict[str, float]
+    _client: OrderedDict[KeyT, StoreBucketValueT]
+
+    def get_client(self) -> OrderedDict[KeyT, StoreBucketValueT]: ...
+    def exists(self, key: KeyT) -> bool: ...
+    def ttl(self, key: KeyT) -> int: ...
+    def set(self, key: KeyT, value: StoreValueT, timeout: int) -> None: ...
+
+
+class MemoryStoreBackend(BaseMemoryStoreBackend):
+    lock: SyncLockP
+
+
+class AsyncMemoryStoreBackend(BaseMemoryStoreBackend):
+    lock: AsyncLockP
+
+
+class BaseRedisStoreBackend(BaseStoreBackend, Generic[RedisClientT]):
+    base_exceptions: tuple[type[Exception], ...]
+    _client: RedisClientT | None
+    _connection_factory: BaseConnectionFactory
+
+    @classmethod
+    def _parse(
+        cls,
+        server: str | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> tuple[str | None, dict[str, Any]]: ...
+
+    def get_client(self) -> RedisClientT: ...
+
+
+class RedisStoreBackend(BaseRedisStoreBackend[SyncRedisClientP]): ...
+
+
+class AsyncRedisStoreBackend(BaseRedisStoreBackend[AsyncRedisClientP]): ...
+```
+
+**改造点清单**
+
+| 变更点 | 目标 |
 | --- | --- |
-| 在哪声明 | [1] 通用配置在 `BaseStoreBackend`。<br />[2] Memory / Redis 各自子类承载本端资源与 client。 |
-| 上层如何取用 | `Store` 与 `AtomicAction` 直接持有具体 `StoreBackend`，不再绕公共协议。 |
-| 如何收敛 | [1] 异常包装读取 backend 声明的异常族。<br />[2] `get_client()` 不再是公共 backend 基类方法，而是具体 backend 自有接口。 |
+| **[Keep]** `BaseStoreBackend` | 只保留 `server`、`options`、`base_exceptions`，不声明 `get_client()` |
+| **[Keep]** `BaseMemoryStoreBackend` | 承载 LRU、TTL、hash 等 Memory 纯数据结构逻辑 |
+| **[Keep]** sync / async `MemoryStoreBackend` | 只补本端锁，避免公共层判断锁形态 |
+| **[Keep]** `BaseRedisStoreBackend` | 统一处理 URL、options、sentinel、cluster 与连接工厂 |
+| **[Keep]** `SyncRedisClientP` / `AsyncRedisClientP` | 仅表达 Redis client 边界，由 `types.RedisClientT` 绑定 Redis backend |
+| **[Keep]** `SyncLockP` / `AsyncLockP` | 仅表达 Memory 锁边界，由具体 Memory backend 字段使用 |
+| **[Delete]** `types.StoreBackendP` | 公共异常包装只需要异常族，不再需要 backend 协议 |
+| **[Delete]** `types.MemoryStoreBackendP` | Memory 纯逻辑直接接收 `BaseMemoryStoreBackend` |
 
-**收敛结果**
+**边界备注**
 
-| 移除对象 | 移除原因 | 替代边界 |
-| --- | --- | --- |
-| `types.StoreBackendP` | 公共异常包装只依赖异常族，不再需要携带 `get_client()`。 | `BaseStoreBackend` 或私有局部协议。 |
-| `types.MemoryStoreBackendP` | Memory 纯逻辑可直接接收 `BaseMemoryStoreBackend`。 | `BaseMemoryStoreBackend`。 |
-| `types.SyncRedisClientP` / `types.AsyncRedisClientP` | Redis client 结构类型不再进入公共 `*P` 命名体系。 | 私有类型模块或具体 backend 内部声明。 |
+- `Store` 与 action 直接持有具体 backend，不再绕公共 backend 协议。
+- Redis client 只从 Redis backend 取用，不进入 Store 公共 API。
 
 ### b. `Store` 改造
 
-`Store` 是用户、`Throttled`、`RateLimiter` 共同依赖的能力边界，遵循以下分层：
+`Store` 是用户、`Throttled`、`RateLimiter` 共同依赖的能力边界。
 
-- `BaseStore` 只表达「能做什么」，不携带 `StoreBackend` 泛型进入用户签名。
-- `BaseStore` 可以持有 `_backend: BaseStoreBackend`，只用于异常包装与通用状态暴露。
-- 具体 `Store` 声明本端 `_BACKEND_CLASS`，再将 `_backend` 窄化为 Memory / Redis 的具体 backend。
-- `BaseStoreMixin` 拆为 `StoreSpec` 与 `StoreValidationLogic`，生命周期由 sync / async `BaseStore` 各自声明。
+改造后的分层：
+
+- `BaseStore` 只表达“能做什么”，不携带 backend 泛型进入用户签名。
+- `BaseStore` 持有 `_backend: BaseStoreBackend`，用于包装与统一构造。
+- 具体 `Store` 声明 `_BACKEND_CLASS`，并把 `_backend` 窄化为本端具体 backend。
+- `StoreSpec` 与 `StoreValidationLogic` 承担共享声明和共享校验。
+- sync / async `BaseStore` 各自声明方法签名和 `make_atomic()` 返回类型。
 
 ```mermaid
 classDiagram
     direction LR
 
-    class BaseStore {
+    class StoreSpec {
         +TYPE: str
+        +_WRAPPED_METHOD_NAMES: tuple
+    }
+    class StoreValidationLogic {
+        +_validate_timeout(timeout)
+    }
+    class BaseStore {
+        +_BACKEND_CLASS: type~BaseStoreBackend~
         -_backend: BaseStoreBackend
+        +make_atomic(action_cls) BaseAtomicAction
         +exists(key) bool
         +ttl(key) int
-        +make_atomic(action_cls)
     }
     class AsyncBaseStoreAlias {
-        +TYPE: str
+        +_BACKEND_CLASS: type~BaseStoreBackend~
         -_backend: BaseStoreBackend
+        +make_atomic(action_cls) AsyncBaseAtomicAction
         +exists(key) Awaitable~bool~
         +ttl(key) Awaitable~int~
-        +make_atomic(action_cls)
     }
     class MemoryStore {
-        -_backend: SyncMemoryStoreBackend
-        +make_atomic(action_cls)
+        +_BACKEND_CLASS: type~MemoryStoreBackend~
+        -_backend: MemoryStoreBackend
     }
     class RedisStore {
-        -_backend: SyncRedisStoreBackend
-        +make_atomic(action_cls)
+        +_BACKEND_CLASS: type~RedisStoreBackend~
+        -_backend: RedisStoreBackend
     }
     class AsyncMemoryStore {
+        +_BACKEND_CLASS: type~AsyncMemoryStoreBackend~
         -_backend: AsyncMemoryStoreBackend
-        +make_atomic(action_cls)
     }
     class AsyncRedisStore {
+        +_BACKEND_CLASS: type~AsyncRedisStoreBackend~
         -_backend: AsyncRedisStoreBackend
-        +make_atomic(action_cls)
     }
+
+    StoreSpec <|-- BaseStore
+    StoreSpec <|-- AsyncBaseStoreAlias
+    StoreValidationLogic <|-- BaseStore
+    StoreValidationLogic <|-- AsyncBaseStoreAlias
     BaseStore <|-- MemoryStore
     BaseStore <|-- RedisStore
     AsyncBaseStoreAlias <|-- AsyncMemoryStore
     AsyncBaseStoreAlias <|-- AsyncRedisStore
-    MemoryStore *-- SyncMemoryStoreBackend
-    RedisStore *-- SyncRedisStoreBackend
+    MemoryStore *-- MemoryStoreBackend
+    RedisStore *-- RedisStoreBackend
     AsyncMemoryStore *-- AsyncMemoryStoreBackend
     AsyncRedisStore *-- AsyncRedisStoreBackend
 ```
 
-**职责分配**
+**协议骨架**
 
-| 责任 | 所属对象 | 说明 |
-| --- | --- | --- |
-| 公共能力与 backend 槽位 | `BaseStore` | 声明命令、`TYPE`、`make_atomic()`、`_BACKEND_CLASS` 与 `_backend: BaseStoreBackend`，不带 `StoreBackend` 泛型。 |
-| 具体 backend 窄化 | `MemoryStore` / `RedisStore` 与 async 同名类 | 只声明本端 `_BACKEND_CLASS`，并把 `_backend` 窄化为本端具体类型。 |
-| 纯声明与校验 | `StoreSpec` / `StoreValidationLogic` | 前者只放 `TYPE` 与包装方法名，后者只放 timeout 校验。 |
-| `AtomicAction` 构造 | 具体 `Store` 的 `make_atomic()` | 按 `STORE_TYPE` 校验匹配后注入自身 `StoreBackend`。 |
-| 异常包装 | `BaseStore` + `AutoWrapMethodsMixin` | sync / async `BaseStore` 各自继承包装钩子，包装逻辑只读 `_backend.base_exceptions`。 |
+协议骨架只展示 Store 层对象。
 
-**协议三问**
+```python
+class StoreSpec:
+    TYPE: str
+    _WRAPPED_METHOD_NAMES: tuple[str, ...]
 
-| 问 | 回答 |
+
+class StoreValidationLogic:
+    @classmethod
+    def _validate_timeout(cls, timeout: int) -> None: ...
+
+
+class BaseStore(StoreSpec, StoreValidationLogic):
+    _BACKEND_CLASS: type[BaseStoreBackend] = BaseStoreBackend
+    _backend: BaseStoreBackend
+
+    def __init__(
+        self,
+        server: str | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> None: ...
+
+    def make_atomic(
+        self,
+        action_cls: type[BaseAtomicAction],
+    ) -> BaseAtomicAction:
+        # Store 只注入当前 backend，不表达 action 计算逻辑。
+        return action_cls(backend=self._backend)
+
+    def exists(self, key: KeyT) -> bool: ...
+    def ttl(self, key: KeyT) -> int: ...
+
+
+class MemoryStore(BaseStore):
+    TYPE: str
+    _BACKEND_CLASS: type[MemoryStoreBackend]
+    _backend: MemoryStoreBackend
+
+
+class RedisStore(BaseStore):
+    TYPE: str
+    _BACKEND_CLASS: type[RedisStoreBackend]
+    _backend: RedisStoreBackend
+```
+
+async 端只改命令形态和 action 返回类型：
+
+```python
+class AsyncBaseStore(StoreSpec, StoreValidationLogic):
+    _BACKEND_CLASS: type[BaseStoreBackend] = BaseStoreBackend
+    _backend: BaseStoreBackend
+
+    def make_atomic(
+        self,
+        action_cls: type[AsyncBaseAtomicAction],
+    ) -> AsyncBaseAtomicAction: ...
+
+    async def exists(self, key: KeyT) -> bool: ...
+    async def ttl(self, key: KeyT) -> int: ...
+```
+
+**改造点清单**
+
+| 变更点 | 目标 |
 | --- | --- |
-| 在哪声明 | [1] 公共能力在 `BaseStore`。<br />[2] identity 与包装声明在 `StoreSpec`。<br />[3] timeout 校验在 `StoreValidationLogic`。<br />[4] 具体 backend 类型在具体 `Store`。 |
-| 上层如何取用 | 用户、`Throttled`、`RateLimiter` 把 `Store` 视为 `BaseStore`。 |
-| 如何收敛 | [1] `BaseStore.__init__(server, options)` 保持原构造入参，并通过 `self._BACKEND_CLASS(server, options)` 构造 `_backend`。<br />[2] 具体 `Store` 通过类属性窄化 `_BACKEND_CLASS` 与 `_backend`。<br />[3] `RateLimiter` 通过 `store.make_atomic(action_cls)` 取 `AtomicAction`，不直接读 `_backend`。 |
+| **[Keep]** sync / async `BaseStore` | 作为用户与上层组合对象共同使用的零泛型注解边界 |
+| **[Split]** `BaseStoreMixin` | 拆为 `StoreSpec` 与 `StoreValidationLogic`，分离声明、校验和生命周期 |
+| **[Keep]** `_BACKEND_CLASS` / `_backend` | 由具体 `Store` 创建并窄化 backend，不成为新的公共协议 |
+| **[Keep]** `make_atomic()` | 作为 Store / action 配对唯一入口，向 action 注入当前 `_backend` |
+| **[No]** `BackendBoundStore` | 中间层会稀释具体 Store 的 backend 所有权，不进入方案 |
+| **[Delete]** `types.SyncStoreP` / `types.AsyncStoreP` | 本端 `BaseStore` 已表达用户所需能力 |
+| **[Delete]** `types.StoreP` | 跨端 Store 联合协议会把执行模型泄回用户侧 |
 
-**收敛结果**
+**边界备注**
 
-| 移除对象 | 移除原因 | 替代边界 |
-| --- | --- | --- |
-| `BackendBoundStore` | 中间层抵消具体 `Store` 自定义 `__init__` 的收益。 | 具体 `Store` 声明 `_BACKEND_CLASS`，由 `BaseStore.__init__(server, options)` 统一构造 backend。 |
-| `BaseStoreMixin` | mixin 同时承载声明、校验与生命周期，隐藏基类对 `_backend` 的假设。 | `StoreSpec` + `StoreValidationLogic` + sync / async `BaseStore.__init__(server, options)`。 |
-| `types.SyncStoreP` / `types.AsyncStoreP` / `types.StoreP` | `BaseStore` 已表达上层所需 `Store` 能力。 | `BaseStore`。 |
-
-**`_BACKEND_CLASS` 边界**
-
-- `_BACKEND_CLASS` 只是具体 `Store` 创建 `StoreBackend` 的便捷写法，不是本方案核心约束。
-- 只要具体 `Store` 声明本端 `_BACKEND_CLASS`，并自行实现 `make_atomic()`，方案即成立。
-- 具体 `Store` 无额外构造副作用时不覆写 `__init__`，直接继承本端 `BaseStore.__init__(server, options)`。
+- 具体 `Store` 无额外构造副作用时，不覆写 `__init__`。
+- 具体 `Store` 需要更窄 backend 类型时，通过类属性重新声明 `_backend`。
 
 ### c. `AtomicAction` 改造
 
-`AtomicAction` 是 `StoreBackend` 配对真正发生的位置：`Store` 注入 `StoreBackend`，`AtomicAction` 完成原子操作。
+`AtomicAction` 有两条结构线：
 
-**复用边界**
+- 继承链：`BaseAtomicAction` 如何分到 Memory / Redis。
+- 初始化链：`RateLimiter` 如何通过 `Store.make_atomic()` 绑定当前 backend。
 
-- 共享：身份字段、Redis Lua 脚本常量、Memory 纯计算。
-- 分叉：`do()`、`Script` 实例、锁进入方式、异常包装。
+**继承链**
 
 ```mermaid
 classDiagram
-    direction LR
+    direction TB
 
-    class AtomicActionIdentity {
-        +TYPE: AtomicActionTypeT
-        +STORE_TYPE: str
-    }
     class BaseAtomicAction {
         +TYPE: AtomicActionTypeT
         +STORE_TYPE: str
+        +__init__(backend)
         +do(keys, args) tuple
     }
-    class AsyncBaseAtomicActionAlias {
+    class AsyncBaseAtomicAction {
         +TYPE: AtomicActionTypeT
         +STORE_TYPE: str
+        +__init__(backend)
         +do(keys, args) Awaitable~tuple~
     }
-    class RedisLimitAtomActionSpec {
-        +TYPE: AtomicActionTypeT
+    class BaseMemoryAtomicActionSpec {
         +STORE_TYPE: str
-        +SCRIPTS: str
-    }
-    class MemoryLimitActionLogic {
         +_do(backend, keys, args) tuple
     }
-    class RedisLimitAtomicAction {
-        -_backend: SyncRedisStoreBackend
-        -_script: Script
-        +__init__(backend)
+    class BaseMemoryAtomicAction {
+        -_backend: MemoryStoreBackend
         +do(keys, args) tuple
     }
-    class AsyncRedisLimitAtomicAction {
-        -_backend: AsyncRedisStoreBackend
-        -_script: AsyncScript
-        +__init__(backend)
-        +do(keys, args) Awaitable~tuple~
-    }
-    class MemoryLimitAtomicAction {
-        -_backend: SyncMemoryStoreBackend
-        +__init__(backend)
-        +do(keys, args) tuple
-    }
-    class AsyncMemoryLimitAtomicAction {
+    class AsyncBaseMemoryAtomicAction {
         -_backend: AsyncMemoryStoreBackend
-        +__init__(backend)
         +do(keys, args) Awaitable~tuple~
+    }
+    class BaseRedisAtomicAction {
+        -_backend: RedisStoreBackend
+        +_register_script(script) Script
+    }
+    class AsyncBaseRedisAtomicAction {
+        -_backend: AsyncRedisStoreBackend
+        +_register_script(script) AsyncScript
     }
 
-    AtomicActionIdentity <|-- BaseAtomicAction
-    AtomicActionIdentity <|-- AsyncBaseAtomicActionAlias
-    RedisLimitAtomActionSpec <|-- RedisLimitAtomicAction
-    RedisLimitAtomActionSpec <|-- AsyncRedisLimitAtomicAction
-    BaseAtomicAction <|-- RedisLimitAtomicAction
-    AsyncBaseAtomicActionAlias <|-- AsyncRedisLimitAtomicAction
-    BaseAtomicAction <|-- MemoryLimitAtomicAction
-    AsyncBaseAtomicActionAlias <|-- AsyncMemoryLimitAtomicAction
-    MemoryLimitAtomicAction ..> MemoryLimitActionLogic : _do()
-    AsyncMemoryLimitAtomicAction ..> MemoryLimitActionLogic : _do()
+    BaseAtomicAction <|-- BaseMemoryAtomicAction
+    AsyncBaseAtomicAction <|-- AsyncBaseMemoryAtomicAction
+    BaseAtomicAction <|-- BaseRedisAtomicAction
+    AsyncBaseAtomicAction <|-- AsyncBaseRedisAtomicAction
+    BaseMemoryAtomicActionSpec <|-- BaseMemoryAtomicAction
+    BaseMemoryAtomicActionSpec <|-- AsyncBaseMemoryAtomicAction
 ```
 
-**职责分配**
+**初始化链**
 
-| 责任 | 所属对象 | 说明 |
-| --- | --- | --- |
-| 身份字段 | `AtomicActionIdentity` | 只放 `TYPE` 与 `STORE_TYPE`，不声明 `do()`。 |
-| 执行能力 | `BaseAtomicAction` | 仅被 `RateLimiter` 消费。 |
-| Redis 脚本 | `RedisLimitAtomActionSpec` 等 `*AtomActionSpec` | 只放 identity 与脚本常量，不持有 `Script` 实例。 |
-| Memory 纯逻辑 | `MemoryLimitActionLogic` 等 `*Logic` | 只执行与锁无关的纯计算。 |
-| `StoreBackend` 与异常包装 | 具体 `AtomicAction` | 直接声明 `__init__(backend)`、`_backend`、`Script` 实例与异常包装，不再保留单点 `*CoreMixin` 过渡层。 |
+```mermaid
+flowchart LR
+    R["BaseRateLimiter._register_atomic_actions"]
+    F["action_cls.STORE_TYPE == store.TYPE"]
+    M["BaseStore.make_atomic(action_cls)"]
+    I["action_cls(backend=self._backend)"]
+    A["BaseAtomicAction.do"]
 
-**协议三问**
+    R --> F --> M --> I --> A
+```
 
-| 问 | 回答 |
+**协议骨架**
+
+协议骨架只展示 `AtomicAction` 层对象。
+
+```python
+class BaseAtomicAction:
+    TYPE: AtomicActionTypeT
+    STORE_TYPE: str
+    _backend: BaseStoreBackend
+
+    def __init__(self, backend: BaseStoreBackend) -> None: ...
+
+    def do(
+        self,
+        keys: Sequence[KeyT],
+        args: Sequence[StoreValueT] | None,
+    ) -> tuple[int | float, ...]: ...
+
+
+class BaseMemoryAtomicAction(BaseMemoryAtomicActionSpec, BaseAtomicAction):
+    _backend: MemoryStoreBackend
+
+    def do(
+        self,
+        keys: Sequence[KeyT],
+        args: Sequence[StoreValueT] | None,
+    ) -> tuple[int | float, ...]:
+        # Memory 只共享 _do，锁进入方式留在本端 do / async do。
+        ...
+
+
+class BaseRedisAtomicAction(BaseAtomicAction):
+    STORE_TYPE: str
+    _backend: RedisStoreBackend
+
+    def _register_script(self, scripts: str) -> Script:
+        # Redis 只共享脚本常量，Script / AsyncScript 实例留在本端 action。
+        ...
+```
+
+async 端只改执行形态和 backend 窄化，不重复列完整骨架：
+
+```python
+class AsyncBaseAtomicAction:
+    async def do(
+        self,
+        keys: Sequence[KeyT],
+        args: Sequence[StoreValueT] | None,
+    ) -> tuple[int | float, ...]: ...
+
+
+class AsyncBaseMemoryAtomicAction(
+    BaseMemoryAtomicActionSpec,
+    AsyncBaseAtomicAction,
+):
+    _backend: AsyncMemoryStoreBackend
+```
+
+**改造点清单**
+
+| 变更点 | 目标 |
 | --- | --- |
-| 在哪声明 | [1] 身份在 `AtomicActionIdentity`。<br />[2] 执行能力在 `BaseAtomicAction`。 |
-| 上层如何取用 | `Store.make_atomic()` 选择 `AtomicAction` 类并注入 `StoreBackend`。 |
-| 如何收敛 | `RateLimiter` 仅保存 `AtomicAction` 实例，只调用 `do()`。 |
-
-**收敛结果**
-
-| 移除对象 | 移除原因 | 替代边界 |
-| --- | --- | --- |
-| `BackendBoundAtomicAction` | 具体 `AtomicAction` 已自持 `StoreBackend` / `Script` / `do()`，中间类只会引入第二层构造协议。 | 具体 `AtomicAction` 直接定义构造函数。 |
-| `BaseAtomicActionMixin` | mixin 只剩 `_backend` 注入与包装职责，容易把 `_backend` 假设回抬到公共层。<br />memory backend 绑定若继续跨端复用，也会把 sync / async 锁形态重新揉回一层。 | `AtomicActionIdentity` + 具体 `AtomicAction.__init__(backend)` + `*AtomActionSpec` / `*ActionLogic`。 |
-| 单点 `*AtomicActionCoreMixin` | 仅剩单个具体 action 继承时，没有形成稳定复用面，只增加层级与跳转成本。 | 具体 `AtomicAction` 直接继承 `*AtomActionSpec` / `*ActionLogic`。 |
-| `types.SyncAtomicActionP` / `types.AsyncAtomicActionP` | `BaseAtomicAction` 已表达执行能力。 | `BaseAtomicAction`。 |
+| **[Refine]** `BaseAtomicAction` | 去掉 backend 泛型，只保留身份、backend 注入和本端执行入口 |
+| **[Add]** `BaseMemoryAtomicAction` | 收敛 Memory backend 窄化与锁进入方式 |
+| **[Add]** `BaseRedisAtomicAction` | 收敛 Redis backend 窄化与 script 注册 |
+| **[Keep]** `BaseMemoryAtomicActionSpec` | 继续共享 Memory 纯计算 |
+| **[Keep]** `Redis*AtomActionSpec` | 继续共享 Redis Lua 脚本常量 |
+| **[Delete]** `BaseAtomicActionMixin` | 避免把 `_backend` 假设重新抬到公共层 |
+| **[Delete]** 单点 `*AtomicActionCoreMixin` | 单一子类复用收益不足，改由 `*AtomActionSpec` 或 `*ActionLogic` 表达 |
+| **[Delete]** `types.SyncAtomicActionP` / `types.AsyncAtomicActionP` | 本端 `BaseAtomicAction` 已表达执行能力 |
+| **[No]** `BackendBoundAtomicAction` | 继承链已表达 backend 绑定，不再引入中间层 |
 
 ### d. `RateLimiter` 改造
 
-`RateLimiter` 把 `Store`、`AtomicAction` 与算法组合起来。
+`RateLimiter` 有三条结构线：
 
-**复用边界**
+- 继承链：registry、base 与算法 core 如何复用。
+- 初始化链：limiter 如何用当前 store 注册 action。
+- 执行链：sync / async 只在 `_limit()`、`_peek()` 与公共入口形态上分叉。
 
-- 共享：算法准备、结果解释。
-- 分叉：执行入口。
+**继承链**
 
 ```mermaid
 classDiagram
@@ -472,32 +687,27 @@ classDiagram
         +register(new_cls)
         +get(type)
     }
-    class RateLimiterCommon {
+    class RateLimiterMeta {
+        +_REGISTRY_CLASS: type~RateLimiterRegistry~
+        +__new__(name, bases, attrs)
+    }
+    class AsyncRateLimiterRegistry {
+        +_NAMESPACE: str
+        +_RATE_LIMITERS: dict
+    }
+    class AsyncRateLimiterMeta {
+        +_REGISTRY_CLASS: type~AsyncRateLimiterRegistry~
+    }
+    class BaseRateLimiterMixin {
+        +KEY_PREFIX: str
         +quota: Quota
         +_prepare_key(key) str
         +_supported_atomic_action_types()
     }
-    class BaseStore {
-        +TYPE: str
-        +make_atomic(action_cls)
-    }
-    class AsyncBaseStoreAlias {
-        +TYPE: str
-        +make_atomic(action_cls)
-    }
-    class BaseAtomicAction {
-        +TYPE: AtomicActionTypeT
-        +STORE_TYPE: str
-        +do(keys, args) tuple
-    }
-    class AsyncBaseAtomicActionAlias {
-        +TYPE: AtomicActionTypeT
-        +STORE_TYPE: str
-        +do(keys, args) Awaitable~tuple~
-    }
     class BaseRateLimiter {
         -_store: BaseStore
         -_atomic_actions: dict
+        +_DEFAULT_ATOMIC_ACTION_CLASSES: Sequence
         +_register_atomic_actions(classes)
         +limit(key, cost) RateLimitResult
         +peek(key) RateLimitState
@@ -505,13 +715,14 @@ classDiagram
     class AsyncBaseRateLimiterAlias {
         -_store: AsyncBaseStoreAlias
         -_atomic_actions: dict
+        +_DEFAULT_ATOMIC_ACTION_CLASSES: Sequence
         +_register_atomic_actions(classes)
         +limit(key, cost) Awaitable~RateLimitResult~
         +peek(key) Awaitable~RateLimitState~
     }
-    class TokenBucketLogic {
-        +prepare(quota, key)
-        +to_result(raw) RateLimitResult
+    class TokenBucketRateLimiterCoreMixin {
+        +_prepare(key)
+        +_to_result(raw) RateLimitResult
     }
     class TokenBucketRateLimiter {
         +_limit(key, cost) RateLimitResult
@@ -520,95 +731,152 @@ classDiagram
         +_limit(key, cost) Awaitable~RateLimitResult~
     }
 
-    BaseRateLimiter ..> RateLimiterRegistry : register/get
-    AsyncBaseRateLimiterAlias ..> RateLimiterRegistry : register/get
-    RateLimiterCommon <|-- BaseRateLimiter
-    RateLimiterCommon <|-- AsyncBaseRateLimiterAlias
+    RateLimiterRegistry <|-- AsyncRateLimiterRegistry
+    RateLimiterMeta <|-- AsyncRateLimiterMeta
+    BaseRateLimiterMixin <|-- BaseRateLimiter
+    BaseRateLimiterMixin <|-- AsyncBaseRateLimiterAlias
+    BaseRateLimiterMixin <|-- TokenBucketRateLimiterCoreMixin
     BaseRateLimiter <|-- TokenBucketRateLimiter
     AsyncBaseRateLimiterAlias <|-- AsyncTokenBucketRateLimiterAlias
-    TokenBucketRateLimiter ..> TokenBucketLogic : uses
-    AsyncTokenBucketRateLimiterAlias ..> TokenBucketLogic : uses
-    BaseRateLimiter o-- BaseStore : store
-    AsyncBaseRateLimiterAlias o-- AsyncBaseStoreAlias : store
-    BaseRateLimiter *-- BaseAtomicAction : _atomic_actions
-    AsyncBaseRateLimiterAlias *-- AsyncBaseAtomicActionAlias : _atomic_actions
+    TokenBucketRateLimiterCoreMixin <|-- TokenBucketRateLimiter
+    TokenBucketRateLimiterCoreMixin <|-- AsyncTokenBucketRateLimiterAlias
 ```
 
-**职责分配**
+**初始化链**
 
-| 责任 | 所属对象 | 说明 |
-| --- | --- | --- |
-| 注册表 | `RateLimiterRegistry` | sync / async 各自维护，可同名 `type` 但不混表。 |
-| 算法公共部分 | `RateLimiterCommon` 与 `*Logic` | 只放 `Quota`、key 准备、结果构造、脚本结果解释。 |
-| `AtomicAction` 注册 | `BaseRateLimiter` | 先给出本算法所需 `AtomicAction` 类列表，再交由当前 `Store` 创建实例。 |
+```mermaid
+flowchart LR
+    I["BaseRateLimiter.__init__"]
+    R["BaseRateLimiter._register_atomic_actions"]
+    D["BaseRateLimiter._default_atomic_action_classes"]
+    F["action_cls.STORE_TYPE == self._store.TYPE"]
+    M["self._store.make_atomic(action_cls)"]
+    V["BaseRateLimiter._validate_registered_atomic_actions"]
 
-**协议三问**
+    I --> R --> D --> F --> M --> V
+```
 
-| 问 | 回答 |
+**协议骨架**
+
+协议骨架只展示 `RateLimiter` 层对象。
+
+```python
+class RateLimiterRegistry:
+    _NAMESPACE: str
+    _RATE_LIMITERS: dict[RateLimiterTypeT, type[Any]]
+
+    @classmethod
+    def get_register_key(cls, _type: str) -> str: ...
+
+    @classmethod
+    def register(cls, new_cls: type[Any]) -> None: ...
+
+    @classmethod
+    def get(cls, _type: RateLimiterTypeT) -> type[Any]: ...
+
+
+class BaseRateLimiterMixin:
+    KEY_PREFIX: str
+    quota: Quota
+
+    class Meta:
+        type: RateLimiterTypeT
+
+    @classmethod
+    def _supported_atomic_action_types(cls) -> Sequence[AtomicActionTypeT]: ...
+
+    def _prepare_key(self, key: str) -> str: ...
+
+
+class BaseRateLimiter(BaseRateLimiterMixin):
+    _store: BaseStore
+    _atomic_actions: dict[AtomicActionTypeT, BaseAtomicAction]
+    _DEFAULT_ATOMIC_ACTION_CLASSES: Sequence[type[BaseAtomicAction]]
+
+    def __init__(
+        self,
+        quota: Quota,
+        store: BaseStore,
+        additional_atomic_actions: Sequence[type[BaseAtomicAction]] | None = None,
+    ) -> None: ...
+
+    def _register_atomic_actions(
+        self,
+        classes: Sequence[type[BaseAtomicAction]],
+    ) -> None:
+        # action 配对只经过当前 store，不引入跨端 StoreT / ActionT。
+        ...
+
+    def _limit(self, key: str, cost: int) -> RateLimitResult: ...
+    def _peek(self, key: str) -> RateLimitState: ...
+    def limit(self, key: str, cost: int = 1) -> RateLimitResult: ...
+    def peek(self, key: str) -> RateLimitState: ...
+```
+
+async 端只改执行入口形态和本端类型：
+
+```python
+class AsyncRateLimiterRegistry(RateLimiterRegistry):
+    _NAMESPACE: str
+    _RATE_LIMITERS: dict[str, type[Any]]
+
+
+class AsyncBaseRateLimiter(BaseRateLimiterMixin):
+    _store: AsyncBaseStore
+    _atomic_actions: dict[AtomicActionTypeT, AsyncBaseAtomicAction]
+
+    async def _limit(self, key: str, cost: int) -> RateLimitResult: ...
+    async def _peek(self, key: str) -> RateLimitState: ...
+    async def limit(self, key: str, cost: int = 1) -> RateLimitResult: ...
+    async def peek(self, key: str) -> RateLimitState: ...
+```
+
+**改造点清单**
+
+| 变更点 | 目标 |
 | --- | --- |
-| 在哪声明 | `BaseRateLimiter` 声明组合状态与执行入口。 |
-| 上层如何取用 | `Throttled` 在 `RateLimiterRegistry` 取 `RateLimiter` 类，构造时传入本端 `Store`。 |
-| 如何收敛 | 通过 `store.make_atomic()` 获取 `AtomicAction`，算法只调用 `do()`。 |
-
-`AtomicAction` 注册流程：
-
-1. `RateLimiter` 声明本算法所需的 `AtomicAction` 类列表。
-2. 按 `STORE_TYPE` 过滤掉与当前 `Store` 不匹配的项。
-3. 由 `store.make_atomic(action_cls)` 决定该类能否落到当前 `Store`。
-4. `_supported_atomic_action_types()` 给出算法最低需求集合。
-
-**收敛结果**
-
-| 移除对象 | 移除原因 | 替代边界 |
-| --- | --- | --- |
-| `BaseRateLimiterMixin` | 把跨端 `Store`、`AtomicAction` 与执行入口压进同一泛型模板。 | `BaseRateLimiter` 各自声明组合状态。 |
-| `types.StoreForLimiterP` | `RateLimiter` 不再通过协议猜测 `Store` 能力。 | `BaseStore`。 |
-| `types.StoreT` / `types.ActionT` | 跨端 `TypeVar` 仅服务 mixin。 | 字段类型与 `BaseAtomicAction`。 |
-
-**`AtomicAction` 注册边界**
-
-不引入全局 `AtomicAction` 注册表，每个 `RateLimiter` 自声明所需 `AtomicAction`。
+| **[Refine]** `BaseRateLimiterMixin` | 收窄为纯算法公共层，不再承载 store/action 字段 |
+| **[Refine]** `BaseRateLimiter` | 分别持有本端 store、action 字典和执行入口 |
+| **[Refine]** `RateLimiterRegistry` | 通过 `_NAMESPACE` 隔离 sync / async 同名算法 |
+| **[Refine]** 算法 `*CoreMixin` | 只共享参数准备和结果转换，供两端算法类继承 |
+| **[Keep]** `_DEFAULT_ATOMIC_ACTION_CLASSES` | 每个 limiter 自声明所需 action，不引入全局 action 注册表 |
+| **[Delete]** `types.StoreForLimiterP` | limiter 不再通过协议猜测 store 能力 |
+| **[Delete]** `types.StoreT` / `types.ActionT` | 跨端类型变量只服务旧 mixin |
+| **[No]** 跨端 registry 表 | sync 与 async 必须隔离注册命名空间 |
 
 ### e. `Throttled` 改造
 
-`Throttled` 是用户入口，只消费下层已收口的 `Store` 与 `RateLimiter`。
+`Throttled` 的继承链已经能表达本节结构：
 
-**复用边界**
+- `_throttled_common.py` 只承载 `ThrottledSpec` 与 `ThrottledLogic`。
+- sync / async `BaseThrottled` 各自持有 store、limiter、hook 和执行生命周期。
 
-- 共享：配置解析。
-- 分叉：`RateLimiter` 懒加载、`Hook` 执行、context manager、装饰器调用形态。
+**继承链**
 
 ```mermaid
 classDiagram
-    direction LR
+    direction TB
 
-    class BaseThrottledConfig {
-        +key: KeyT | None
+    class ThrottledSpec {
+        +_NON_BLOCKING: float
+        +_WAIT_INTERVAL: float
+        +_WAIT_MIN_INTERVAL: float
+        +_DEFAULT_RATE_LIMITER_TYPE: str
+    }
+    class ThrottledLogic {
+        +key: str | None
         +timeout: float
-        -_quota: Quota
-        -_cost: int
-        +_parse_quota(quota) Quota
+        +_validate_cost(cost)
         +_validate_timeout(timeout)
+        +_parse_quota(quota) Quota
         +_get_key(key) KeyT
+        +_get_timeout(timeout) float
         +_get_wait_time(retry_after) float
-    }
-    class BaseStore {
-        +TYPE: str
-        +make_atomic(action_cls)
-    }
-    class AsyncBaseStoreAlias {
-        +TYPE: str
-        +make_atomic(action_cls)
-    }
-    class BaseRateLimiter {
-        +limit(key, cost) RateLimitResult
-        +peek(key) RateLimitState
-    }
-    class AsyncBaseRateLimiterAlias {
-        +limit(key, cost) Awaitable~RateLimitResult~
-        +peek(key) Awaitable~RateLimitState~
+        +_is_exit_waiting(start, retry_after, timeout) bool
     }
     class BaseThrottled {
+        -_quota: Quota
+        -_cost: int
         -_store: BaseStore
         -_limiter_cls: type~BaseRateLimiter~
         -_limiter: BaseRateLimiter | None
@@ -618,6 +886,8 @@ classDiagram
         +limit(key, cost, timeout) RateLimitResult
     }
     class AsyncBaseThrottledAlias {
+        -_quota: Quota
+        -_cost: int
         -_store: AsyncBaseStoreAlias
         -_limiter_cls: type~AsyncBaseRateLimiterAlias~
         -_limiter: AsyncBaseRateLimiterAlias | None
@@ -636,61 +906,47 @@ classDiagram
         +peek(key) Awaitable~RateLimitState~
     }
 
-    BaseThrottledConfig <|-- BaseThrottled
-    BaseThrottledConfig <|-- AsyncBaseThrottledAlias
+    ThrottledSpec <|-- ThrottledLogic
+    ThrottledLogic <|-- BaseThrottled
+    ThrottledLogic <|-- AsyncBaseThrottledAlias
     BaseThrottled <|-- Throttled
     AsyncBaseThrottledAlias <|-- AsyncThrottledAlias
-    BaseThrottled o-- BaseStore : store
-    AsyncBaseThrottledAlias o-- AsyncBaseStoreAlias : store
-    BaseThrottled *-- BaseRateLimiter : _limiter
-    AsyncBaseThrottledAlias *-- AsyncBaseRateLimiterAlias : _limiter
 ```
 
-**职责分配**
+**改造点清单**
 
-| 责任 | 所属对象 | 说明 |
-| --- | --- | --- |
-| 配置解析 | `BaseThrottledConfig` | 处理 `Quota`、`cost`、`key`、`timeout` 与等待时间计算。 |
-| 组合状态 | `BaseThrottled` | 持有以下组合：<br />[1] `Store`<br />[2] `RateLimiter` 类与实例<br />[3] `Hook`<br />[4] `threading.Lock`（仅 sync 端） |
-| 用户入口 | `Throttled` | 保留公开调用路径，执行形态在本端完成。 |
-
-**协议三问**
-
-| 问 | 回答 |
+| 变更点 | 目标 |
 | --- | --- |
-| 在哪声明 | [1] 配置在 `BaseThrottledConfig`。<br />[2] 组合状态在 `BaseThrottled`。 |
-| 上层如何取用 | 用户实例化 `Throttled` 或 `throttled.asyncio.Throttled`，构造期只接收本端 `Store`。 |
-| 如何收敛 | [1] `_make_limiter()` 只返回本端 `RateLimiter`。<br />[2] `_limiter` 首次访问时构造，构造后复用。 |
-
-**收敛结果**
-
-| 移除对象 | 移除原因 | 替代边界 |
-| --- | --- | --- |
-| `BaseThrottledMixin` | 把 `Store`、`RateLimiter`、`Hook` 与生命周期统一为跨端泛型。 | `BaseThrottledConfig` 只共享配置，组合状态落在本端基类。 |
-| `_make_limiter()` 跨端 `cast` | `RateLimiter` 类与 `Store` 已在本端确定，无需 `TypeVar` 反推。 | 各自实现 `_make_limiter()` 返回 `RateLimiter`。 |
-| `types.StoreP` 默认 store 类型 | 默认 `Store` 仅属于本端入口。 | 构造签名使用 `BaseStore`。 |
-
-**生命周期**
-
-- `Throttled` 实例创建后不再修改配置。
-- `_limiter` 缓存仅解决懒加载与并发安全，不承担热更新。
-- 切换 `Store` / `Quota` / `RateLimiter` 类型时新建 `Throttled` 实例。
+| **[Add]** `throttled/_throttled_common.py` | 只放 `ThrottledSpec` 与 `ThrottledLogic` |
+| **[Add]** `ThrottledSpec` | 只声明默认限流器类型、非阻塞常量和等待间隔 |
+| **[Add]** `ThrottledLogic` | 只承载 quota 解析、参数校验、key 解析和等待计算 |
+| **[Refine]** `BaseThrottled` | 分别持有 store、limiter、hook、锁或 async 生命周期 |
+| **[Keep]** sync / async `BaseThrottled.__init__` docstring | 文档生成依赖完整内容，禁止删减或调整换行 |
+| **[Delete]** `BaseThrottledMixin` | 避免把 store、limiter、hook 与生命周期压进跨端泛型 |
+| **[No]** `BaseThrottledConfig` | 避免混合校验、公共变量和生命周期 |
+| **[Delete]** `_make_limiter()` 跨端 `cast` | 本端 registry 与 store 已能确定 limiter 类型 |
+| **[Delete]** `types.StoreP` 默认 store 类型 | 默认 store 只属于本端入口，构造签名使用本端 `BaseStore` |
 
 ## 0x04 验收与验证
 
 ### a. 外部契约
 
-只列方案对外可观测的契约，内部 invariant 见 `0x02.b`。
+只列方案对外可观测的契约，内部不变量见 `0x02.b`。
 
 | 维度 | 契约 |
 | --- | --- |
-| 用户类型流 | 同步 `_get_store() -> BaseStore` 与异步 `_get_store() -> asyncio.store.BaseStore` 都能返回 `MemoryStore` 或 `RedisStore`。 |
-| `Throttled` 组合 | `Throttled(store=_get_store())` 与 async `Throttled(store=...)` 在 mypy strict 下通过。 |
-| 异常透出 | 持有 `_backend` 的内建 `Store` / `AtomicAction` 仍统一抛 `StoreUnavailableError`，公共基类不隐式要求 `_backend`。 |
+| 用户类型流 | `_get_store() -> BaseStore` 可返回 `MemoryStore` 或 `RedisStore`。 |
+| async 用户类型流 | async `_get_store() -> BaseStore` 可返回 async `MemoryStore` 或 async `RedisStore`。 |
+| `Throttled` 组合 | `Throttled(store=_get_store())` 在 mypy strict 下通过。 |
+| async 组合 | `throttled.asyncio.Throttled(store=...)` 在 mypy strict 下通过。 |
+| 异常透出 | 内建 Store 与 action 仍统一包装 backend 异常。 |
+| 文档生成 | sync / async `BaseThrottled.__init__` docstring 保持完整。 |
 
 ### b. 类型验收用例
 
-类型验收文件放在 `typing_checks/` 这类非 `tests.*` 包下，避开 `pyproject.toml` 中对 `tests.*` 放宽的 mypy strict 配置。
+类型验收文件放在 `typing_checks/` 下。
+
+该目录不属于 `tests.*` 包，能避开测试目录的 mypy 放宽配置。
 
 同步用例：
 
@@ -699,13 +955,13 @@ classDiagram
 from throttled import BaseStore, MemoryStore, RedisStore, Throttled
 
 
-def get_store(use_redis: bool) -> BaseStore:
+def _get_store(use_redis: bool) -> BaseStore:
     if use_redis:
         return RedisStore(server="redis://127.0.0.1:6379/0")
     return MemoryStore()
 
 
-throttled = Throttled(store=get_store(False))
+_throttled = Throttled(store=_get_store(False))
 ```
 
 异步用例：
@@ -715,32 +971,34 @@ throttled = Throttled(store=get_store(False))
 from throttled.asyncio import BaseStore, MemoryStore, RedisStore, Throttled
 
 
-def get_store(use_redis: bool) -> BaseStore:
+def _get_store(use_redis: bool) -> BaseStore:
     if use_redis:
         return RedisStore(server="redis://127.0.0.1:6379/0")
     return MemoryStore()
 
 
-throttled = Throttled(store=get_store(False))
+_throttled = Throttled(store=_get_store(False))
 ```
 
 ### c. 回归口径
 
-- `uv run --no-sync mypy throttled typing_checks` 通过。
-- 项目既有测试入口与文档示例通过。
+验证方案成立需覆盖 `4` 类入口：
 
-## 0x05 实施进展
+1. `mypy strict` 覆盖 `throttled` 与 `typing_checks`。
+2. ruff check 覆盖源码、类型验收和相关测试。
+3. ruff format check 覆盖同一组文件。
+4. pytest 覆盖完整 `tests/` 回归。
 
-| 时间 | 对应设计片段 | 关键进展 | 关键验证 |
-| --- | --- | --- | --- |
-| `2026-05-13 01:00` | `0x03.b`、`0x04.a` | [1] `BaseStoreMixin` 已从 sync / async store 导出和继承链移除<br />[2] Store 共享层拆为 `StoreSpec` 与 `StoreValidationLogic`，只保留 identity / 包装声明和 timeout 校验<br />[3] sync / async `BaseStore` 保持 `__init__(server, options)` 入参，并通过 `_BACKEND_CLASS` 构造 `_backend: BaseStoreBackend`<br />[4] 具体 `MemoryStore` / `RedisStore` 只声明类属性，不再覆写无副作用 `__init__` | `mypy`、`ruff`、store / rate_limiter 重点回归与完整 `tests/` 回归通过 |
-| `2026-05-11` | `0x03.a`、`0x03.c` | [1] `BaseStoreBackend.get_client()` 已从公共基类移除，backend 公共边界只保留通用配置与异常族<br />[2] `BaseAtomicActionMixin` 与单点 `*AtomicActionCoreMixin` 已完全移除，backend 绑定直接落在具体 `AtomicAction`<br />[3] `AtomicAction` 层级最终收敛为仅保留有复用价值的 `*AtomActionSpec` / `*ActionLogic`，memory backend 绑定也改为 sync / async 分端实现 | `mypy` 与相关回归测试通过 |
-| `2026-05-11 00:10` | `0x03.b`、`0x04.a` | [1] `types.SyncStoreP` / `types.AsyncStoreP` 已从源码移除，公共 store 边界收敛为 sync / async 各自的 `BaseStore`<br />[2] 不可用场景测试替身改为基于真实 `BaseStore` 的本地 stub，避免继续依赖已删除的公共 store 协议 | `mypy` 与 store-unavailable 场景测试通过 |
-| `2026-05-10 23:40` | `0x03.a` 至 `0x04.c` | [1] `BaseStore` / `throttled.asyncio.BaseStore` 已回到零泛型公共边界，`make_atomic()` 下沉到具体 `Store`<br />[2] `RateLimiter` / `Throttled` 主链不再依赖跨端 store 协议与类型变量驱动<br />[3] 新增显式类型验收用例，确认 `_get_store() -> BaseStore` 与 `Throttled(store=...)` 的用户写法可通过 | `mypy strict` 与主链回归测试通过 |
-| `2026-05-10 22:30` | `0x01` 至 `0x04` | [1] 推倒旧的 `BaseStore` 局部止血方案，改为自底向上重画 sync / async 分界<br />[2] 明确 `StoreBackend` / `Store` / `AtomicAction` / `RateLimiter` / `Throttled` 的分层职责与目标结构<br />[3] 确认 `BackendBoundStore`、`BackendBoundAtomicAction`、公共 `*P` 协议与跨端 `TypeVar` 不进入目标结构 | 方案与源码边界完成对齐校对 |
-| `2026-05-06` | `0x01` 至 `0x04` | 旧方案以 `BaseStore + BackendBoundStore[_BackendT]` 为核心，后续被判定为局部止血，不能覆盖 `RateLimiter` / `AtomicAction` 的复用边界问题 | 已完成外部设计参照与问题复现 |
+推荐命令：
 
-## 0x06 参考
+```bash
+uv run --no-sync mypy throttled typing_checks
+uv run --no-sync ruff check throttled typing_checks tests/test_throttled.py tests/asyncio/test_throttled.py
+uv run --no-sync ruff format --check throttled typing_checks tests/test_throttled.py tests/asyncio/test_throttled.py
+uv run --no-sync pytest -n auto tests/ -q
+```
+
+## 0x05 参考
 
 - [mypy strict 模式合规改造方案](../2026-04-06-mypy-strict-compliance/PLAN.md)
 - [优化存储不可用时的异常处理方案](../2026-05-03-store-unavailable-error-handling/PLAN.md)
@@ -751,7 +1009,7 @@ throttled = Throttled(store=get_store(False))
 - [openai-python `OpenAI` / `AsyncOpenAI` 源码](https://github.com/openai/openai-python/blob/main/src/openai/_client.py)
 - [openai-python `BaseClient` 源码](https://github.com/openai/openai-python/blob/main/src/openai/_base_client.py)
 
-## 0x07 版本锚点
+## 0x06 版本锚点
 
-- 建议分支：`refactor/260510_sync_async_boundary`
+- 分支：`refactor/260511_mypy_strict_typing_new`
 - PR：待创建。
