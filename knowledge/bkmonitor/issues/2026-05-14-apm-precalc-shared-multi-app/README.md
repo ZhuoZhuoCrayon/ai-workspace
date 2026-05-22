@@ -3,7 +3,7 @@ title: APM 预计算适配共享数据源
 tags: [apm, pre-calculate, shared-datasource, multi-app, bmw]
 description: 让单 BMW 预计算任务感知共享 data_id 下的多个应用，不破坏现有任务模型与持久化键
 created: 2026-05-14
-updated: 2026-05-15
+updated: 2026-05-22
 ---
 
 # APM 预计算适配共享数据源

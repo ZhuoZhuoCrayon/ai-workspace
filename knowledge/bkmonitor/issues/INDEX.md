@@ -3,7 +3,7 @@
 
 | 文件                                                                                                     | 标签                                                        | 摘要                                                      | 更新日期       |
 |------|------|------|---------|
-| [APM 预计算适配共享数据源](./2026-05-14-apm-precalc-shared-multi-app/README.md) | `apm` `pre-calculate` `shared-datasource` `multi-app` `bmw` | 让单 BMW 预计算任务感知共享 data_id 下的多个应用，不破坏现有任务模型与持久化键 | 2026-05-15 |
+| [APM 预计算适配共享数据源](./2026-05-14-apm-precalc-shared-multi-app/README.md) | `apm` `pre-calculate` `shared-datasource` `multi-app` `bmw` | 让单 BMW 预计算任务感知共享 data_id 下的多个应用，不破坏现有任务模型与持久化键 | 2026-05-22 |
 | [APM 支持跨应用共享数据源](./2026-03-03-apm-shared-datasource/README.md)                                         | `apm` `datasource` `es` `shared-storage`                  | 支持多 APM 应用复用同一数据源，压缩 ES 索引数量，降低数据链路资源消耗                 | 2026-05-14 |
 | [APM Span 内置指标支持声明式引用](./2026-05-07-apm-span-builtin-metric-declarative-reference/README.md) | `apm` `span` `metric-group` `trace` `unify-query` `declarative` | 将 Trace 概览图的 Span 指标查询从手工参数拼接收敛为可复用的声明式指标算子 | 2026-05-07 |
 | [优化 APM 日志关联列表关系查询长耗时](./2026-05-06-apm-log-relation-list-uq-latency/README.md) | `apm` `log-relation` `relation-query` `unify-query` `latency` | 通过 `EntitySet.get_workloads(service_name)` 前置短路无 workload 服务，收敛 APM 日志关联列表长耗时 | 2026-05-08 |

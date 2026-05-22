@@ -4,7 +4,7 @@ tags: [apm, pre-calculate, shared-datasource, multi-app, bmw, architecture]
 issue: knowledge/bkmonitor/issues/2026-05-14-apm-precalc-shared-multi-app/README.md
 description: 方案 4「单任务多应用窗口」。在 KafkaNotifier 与 DistributiveWindow 之间插入 Dispatcher，按 AppKey 派生 M 份 appBundle，Proxy 的 prometheus handler 升级为 map
 created: 2026-05-14
-updated: 2026-05-15
+updated: 2026-05-22
 ---
 
 # APM 预计算适配共享数据源 —— 实施方案
@@ -88,7 +88,11 @@ graph TB
 - 共享池规模上限由 SaaS 侧控制：BMW 侧不再考虑 `M` 的上限。
 - `Processor.traceEsQueryLimiter` 维度：每 `Processor` 独立，与共享池大小线性。
 - 持久化键不变：子窗口 `sync.Map`、布隆过滤器、预计算结果表 ES `_id` 全部保留裸 `trace_id`。
-- 配置变更感知粒度不变：`apps[]` 变化复用 `watchConsulConfigUpdate` 整 `RunInstance` 重启路径。
+- 配置变更感知粒度不变：`is_shared` 与 `apps[]` 变化复用 `watchConsulConfigUpdate` 整 `RunInstance` 重启路径。
+- 共享 App 集合是启动期快照。
+- 应用上下文载体：`BaseInfo` 统一承载业务、应用、租户与 token，`AppKey` 由 `BaseInfo.AppKey()` 按业务 / 应用字段派生。
+- 构造入口：`startWindowHandler`、`NewProxyInstance` 只在任务启动时按 `ListBaseInfos(dataId)` 构造运行时组件。
+- 运行期边界：旧 `RunInstance` 内不做单 App 热增删。
 
 ## 0x02 架构设计
 
@@ -230,35 +234,47 @@ flowchart LR
 | 文件 · 位置 | 改动 |
 | --- | --- |
 | `pre_calculate/dispatcher.go` 新增 | 新增 `dispatcher` 类型与 `Run` 方法 |
-| `pre_calculate/builder.go` · `RunInstance` 结构体 | 字段 `windowHandler window.Operation` → `windowHandlers map[core.AppKey]*appBundle` |
-| `pre_calculate/builder.go` · `RunInstance.startWindowHandler` | 遍历 `MetadataCenter.ListAppKeys(dataId)` 装配 `M` 份 `appBundle`，起 `1` 个 `Dispatcher` |
-| `pre_calculate/builder.go` · `RunInstance.startRecordSemaphoreAcquired` | 字段改名连带适配：`GetWindowsLength` / `RecordTraceAndSpanCountMetric` 遍历 `windowHandlers` 累加，反压水位维度保持 `dataId` 不变 |
+| `pre_calculate/builder.go` · `RunInstance` 结构体 | 字段 `windowHandler window.Operation` → `appBundles []*appBundle` |
+| `pre_calculate/builder.go` · `RunInstance.startWindowHandler` | 遍历 `MetadataCenter.ListBaseInfos(dataId)` 装配 `M` 份 `appBundle`，起 `1` 个 `Dispatcher` |
+| `pre_calculate/builder.go` · `RunInstance.startRecordSemaphoreAcquired` | 字段改名连带适配：`GetWindowsLength` 遍历 `appBundles` 求和，`RecordTraceAndSpanCountMetric` 遍历 `appBundles` 逐个触发，反压水位维度保持 `dataId` 不变 |
 
 其余模块保持现状。
 
-**`AppKey` 类型、`dispatcher` 与 `appBundle` 定义**
+**`BaseInfo`、`AppKey`、`dispatcher` 与 `appBundle` 定义**
 
-`AppKey` 是 `(BkBizId, AppName)` 二元组，被多包共享。为避免 `storage → window` 反向依赖，类型定义放在 `core` 包：
+`BaseInfo` 是应用上下文唯一载体，包含业务、应用、租户与 token。
+
+`AppKey` 是 `(BkBizId, AppName)` 二元组，只用于运行期路由与 map key。当前实现由 `BaseInfo.AppKey()` 方法按 `BkBizId` 与 `AppName` 派生：
 
 ```go
-// pre_calculate/core/app_key.go 新增
+// pre_calculate/core/meta.go
 type AppKey struct {
     BkBizId string
     AppName string
 }
 
+type BaseInfo struct {
+    BkTenantId string
+    BkBizId    string
+    BkBizName  string
+    AppId      string
+    AppName    string
+    Token      string
+}
+
+func (b BaseInfo) AppKey() AppKey
+
 // pre_calculate/dispatcher.go 新增
 type dispatcher struct {
-    dataId   string
-    bundles  map[core.AppKey]*appBundle
-    baseInfo core.BaseInfo               // 独占场景非零 · 共享场景零值
-    errChan  chan<- error
+    dataId  string
+    routes  map[core.AppKey]chan []window.StandardSpan
+    errChan chan<- error
 }
 
 // pre_calculate/builder.go 新增
 type appBundle struct {
-    appKey    core.AppKey                    // 应用维度键
-    spanChan  chan []window.StandardSpan     // Dispatcher → DistributiveWindow 入口
+    appKey    core.AppKey
+    spanChan  <-chan []window.StandardSpan
     operation window.Operation               // 内含 DistributiveWindow
     processor window.Processor               // 应用维度 Processor，持有 MetricProcessor 引用
 }
@@ -269,26 +285,64 @@ type appBundle struct {
 ```go
 // 伪代码，省略错误处理与日志
 mc := core.GetMetadataCenter()
-apps := mc.ListAppKeys(p.startInfo.DataId)                // 共享 M>=1 · 独占 M=1
-baseInfo := mc.GetBaseInfo(p.startInfo.DataId)            // 独占非零 · 共享零值（Dispatcher 兜底用）
+apps := mc.ListBaseInfos(p.startInfo.DataId)              // 共享 M>=1 · 独占 M=1
+isShared := mc.IsShared(p.startInfo.DataId)
 
-bundles := make(map[core.AppKey]*appBundle, len(apps))
-for _, appKey := range apps {
-    spanChan := make(chan []window.StandardSpan, perBundleBuffer)
+bundles := make([]*appBundle, 0, len(apps))
+dispatchRoutes := make(map[core.AppKey]chan []window.StandardSpan, len(apps))
+for _, appBaseInfo := range apps {
+    var spanChan <-chan []window.StandardSpan
+    if isShared {
+        dispatchChan := make(chan []window.StandardSpan, config.NotifierChanBufferSize)
+        spanChan = dispatchChan
+        dispatchRoutes[appBaseInfo.AppKey()] = dispatchChan
+    } else {
+        spanChan = messageChan
+    }
     proc := window.NewProcessor(
-        p.ctx, p.startInfo.DataId, appKey, p.proxy, p.config.processorConfig...,
+        p.ctx, p.startInfo.DataId, appBaseInfo, p.proxy, p.config.processorConfig...,
     )
     op := window.Operation{Operator: window.NewDistributiveWindow(
         p.startInfo.DataId, p.ctx, proc, saveReqChan, p.config.distributiveWindowConfig...,
     )}
     op.Run(spanChan, p.errorReceiveChan, p.config.runtimeConfig...)
-    bundles[appKey] = &appBundle{
-        appKey: appKey, spanChan: spanChan, operation: op, processor: proc,
-    }
+    bundles = append(bundles, &appBundle{
+        appKey: appBaseInfo.AppKey(), spanChan: spanChan, operation: op, processor: proc,
+    })
 }
-p.windowHandlers = bundles
-go newDispatcher(p.ctx, p.startInfo.DataId, bundles, baseInfo, p.errorReceiveChan).Run(messageChan)
+p.appBundles = bundles
+if isShared {
+    go newDispatcher(p.ctx, p.startInfo.DataId, dispatchRoutes, p.errorReceiveChan).Run(messageChan)
+}
 ```
+
+**运行期共享 App 变更边界**
+
+边界结论：`startWindowHandler` 只在 `RunInstance.launch` 阶段执行 `1` 次。
+
+生效路径：共享数据源生命周期内的 App 增删，不在 `dispatcher.routes` 或 `appBundles` 内热更新。
+
+统一入口：`watchConsulConfigUpdate` 检测 `DataIdInfo` 差异后触发整任务 reload，`is_shared` 与 `Apps` 会一起参与比较。
+
+变更生效链路：
+
+```mermaid
+flowchart LR
+    A["SaaS 更新 Consul is_shared / apps[]"] --> B["watchConsulConfigUpdate<br/>CheckUpdate(dataId)"]
+    B --> C{"DataIdInfo 有差异?"}
+    C -- "是" --> D["发送 reload for config update"]
+    D --> E["Daemon Maintainer<br/>cancel 旧 RunInstance"]
+    E --> F["StartByDataId 重新 AddDataId"]
+    F --> G["startStorageBackend / startWindowHandler<br/>重建 handler 快照"]
+```
+
+过渡期语义：
+
+- 新增 App：reload 前 `dispatcher.routes` 不含该 `AppKey`，对应 Span 被丢弃。
+- 移除 App：reload 前旧 `appBundle` 与 Prometheus handler 仍存在，语义保持最终一致，由任务重启清理。
+- 变更窗口：最长由 SaaS 刷 Consul 周期、`watchConsulConfigUpdate` 周期与 daemon retry 间隔共同决定。
+- 收敛要求：如需更短收敛时间，优先由 SaaS 发布 daemon reload 信号。
+- 禁止形态：不在 `startWindowHandler` 内实现局部热更新。
 
 **`Dispatcher.Run` 内循环**
 
@@ -301,26 +355,18 @@ for {
         for ak := range buckets { buckets[ak] = buckets[ak][:0] }
         for _, span := range batch {
             ak := core.AppKey{BkBizId: span.BkBizId, AppName: span.AppName}
-            // 上游异常 Span 顶层缺字段 · 用 baseInfo 兜底
-            // 独占场景 baseInfo 非零生效，共享场景 baseInfo 零值自动失效（必丢弃）
-            if (ak.BkBizId == "" || ak.AppName == "") && d.baseInfo.BkBizId != "" {
-                ak = core.AppKey{BkBizId: d.baseInfo.BkBizId, AppName: d.baseInfo.AppName}
+            if spanChan := d.routes[ak]; spanChan != nil {
+                buckets[spanChan] = append(buckets[spanChan], span)
             }
-            if _, ok := d.bundles[ak]; !ok {
-                // AppKey 空或不在 apps[] · 丢弃 + 异常指标
-                metrics.AddApmPreCalcDispatcherDropTotal(d.dataId, ak)
-                continue
-            }
-            buckets[ak] = append(buckets[ak], span)
         }
-        for ak, slice := range buckets {
+        for spanChan, slice := range buckets {
             if len(slice) == 0 { continue }
             out := make([]window.StandardSpan, len(slice))
             copy(out, slice)
-            d.bundles[ak].spanChan <- out // 阻塞即反压
+            spanChan <- out // 阻塞即反压
         }
     case <-ctx.Done():
-        for _, b := range d.bundles { close(b.spanChan) }
+        for _, spanChan := range d.routes { close(spanChan) }
         return
     }
 }
@@ -360,9 +406,8 @@ flowchart TB
 
 | 变更点 | 目标 |
 | --- | --- |
-| **[Field]** `Processor.appKey` | 新增 · 构造期注入本应用 AppKey，承载「`Processor` 实例与 AppKey 绑定」不变量 |
-| **[Field]** `Processor.dataIdBaseInfo` / `baseInfo` | 类型与字段名保持，取值来源切换为 `MetadataCenter.GetAppInfo(dataId, appKey).BaseInfo`，自动让 Cache key 与索引名带上正确应用维度 |
-| **[Method]** `NewProcessor` | 入参追加 `appKey`，构造期向 `newMetricProcessor` 透传 |
+| **[Field]** `Processor.baseInfo` | 取值来源切换为构造期注入的 `BaseInfo`，自动让 Cache key 与索引名带上正确应用维度 |
+| **[Method]** `NewProcessor` | 入参追加 `baseInfo`，构造期向 `newMetricProcessor` 透传 |
 
 `Processor.sendStorageRequests` 出 `Cache` / `BloomFilter` / `SaveEs` 三类 `SaveRequest`，本方案不增 `SaveRequest` 字段，无需改动。
 
@@ -374,10 +419,9 @@ flowchart TB
 
 | 变更点 | 目标 |
 | --- | --- |
-| **[Field]** `MetricProcessor.appKey` | 新增 · 构造期注入，作为出 `PrometheusStorageData` 时携带的路由键 |
-| **[Field]** `MetricProcessor.bkBizId` / `appName` | 取值来源由 `GetBaseInfo(dataId)` 切换为 `GetAppInfo(dataId, appKey)` |
-| **[Method]** `newMetricProcessor` | 入参追加 `appKey` 参数 |
-| **[Method]** `MetricProcessor.sendToSave` | 出 `SaveRequest` 时把 `m.appKey` 填入 `PrometheusStorageData.AppKey`，`SaveRequest` 自身无变化 |
+| **[Field]** `MetricProcessor.baseInfo` | 新增 · 构造期注入应用上下文，替代零散的 `bkBizId` / `appName` / `appId` / `appKey` 字段 |
+| **[Method]** `newMetricProcessor` | 入参追加 `baseInfo` 参数 |
+| **[Method]** `MetricProcessor.sendToSave` | 出 `SaveRequest` 时把 `m.baseInfo.AppKey` 填入 `PrometheusStorageData.AppKey`，`SaveRequest` 自身无变化 |
 
 **DistributiveWindow / distributiveSubWindow**
 
@@ -395,18 +439,21 @@ flowchart TB
 | --- | --- |
 | **[Field]** `PrometheusStorageData.AppKey` | 新增 `core.AppKey` · `MetricProcessor.sendToSave` 写入时填充，下游路由依据 |
 | **[Field]** `Proxy.prometheusMetricsHandler` | 类型由 `*MetricDimensionsHandler` 升级为 `map[core.AppKey]*MetricDimensionsHandler` |
-| **[Method]** `NewProxyInstance` | 按 `MetadataCenter.ListAppKeys(dataId)` 循环构造 `M` 个 `MetricDimensionsHandler`，独占场景退化为单元素 map |
+| **[Method]** `NewProxyInstance` | 按 `MetadataCenter.ListBaseInfos(dataId)` 循环构造 `M` 个 `MetricDimensionsHandler`，独占场景退化为单元素 map |
+| **[Method]** `NewMetricDimensionHandler` | 入参切换为 `BaseInfo`，构造期从 `BaseInfo.Token` 创建 Prometheus writer |
 | **[Method]** `Proxy.ReceiveSaveRequest` | `case Prometheus` 分支按 `item.AppKey` 选 `MetricDimensionsHandler`，`SaveEs` / `Cache` / `BloomFilter` 分支不变 |
 | **[Method]** `Proxy` 关闭流程 | `<-ctx.Done()` 时遍历 `prometheusMetricsHandlers` map 逐个 `Close()`，与现状单实例 `Close()` 语义一致 |
 
 ### e. Consul 协议与变更感知
 
-**Value 编排**：Consul Key 保持 `{prefix}/apm/data_id/{data_id}`，Value 按独占、共享两种模式互斥编排，由 `apps` 字段是否存在判定。
+**Value 编排**：Consul Key 保持 `{prefix}/apm/data_id/{data_id}`。
 
-| 模式 | 顶层应用字段 | `apps[]` |
-| --- | --- | --- |
-| 独占 | `bk_biz_id` / `app_name` / `token` 等单应用字段填充 | 不存在 |
-| 共享 | 顶层应用字段置空 | 存在，元素为引用同一 `data_id` 的全部应用 |
+模式判定由 `is_shared` 承载，`apps[]` 承载共享模式下的应用集合。
+
+| 模式 | `is_shared` | 顶层应用字段 | `apps[]` |
+| --- | --- | --- | --- |
+| 独占 | `false` | `bk_biz_id` / `app_name` / `token` 等单应用字段填充 | 为空或忽略 |
+| 共享 | `true` | 顶层应用字段以 primary app 为主，仅作兼容载体 | 元素为引用同一 `data_id` 的全部应用 |
 
 `apps[]` 元素契约：
 
@@ -427,16 +474,24 @@ flowchart TB
 
 | 变更点 | 目标 |
 | --- | --- |
-| **[Field]** `DataIdInfo.Apps` | 新增 `map[AppKey]AppInfo` 字段，`AppInfo` 含 `Token` 与 `BaseInfo` |
-| **[Method]** `MetadataCenter.AddDataId` | 独占模式下把 Consul 顶层 `BaseInfo` / `Token` 映射为 `Apps` map 的唯一元素 |
-| **[Method]** `MetadataCenter.GetAppInfo(dataId, appKey)` | 新增 · `appBundle` 构造期取应用上下文的统一入口，返回 `AppInfo` |
-| **[Method]** `MetadataCenter.ListAppKeys(dataId)` | 新增 · 供 `startWindowHandler` 装配 `M` 份 `appBundle`，独占场景返回单元素切片 |
-| **[Method]** `MetadataCenter.GetBaseInfo(dataId)` | 保留 · 仅供 `Dispatcher` 构造 AppKey 时兜底使用，独占非零生效、共享零值自动失效 |
+| **[Field]** `BaseInfo.Token` | 新增 · token 并入应用上下文，删除额外的 `AppInfo` 包装层 |
+| **[Method]** `BaseInfo.AppKey()` | 新增 · 由 `BkBizId` 与 `AppName` 派生运行期路由键 |
+| **[Function]** `newBaseInfo(...)` | 新增 · 统一 `BaseInfo` 构造入口，收敛业务、应用、租户与 token 字段转换 |
+| **[Field]** `DataIdInfo.Apps` | 新增 `map[AppKey]BaseInfo` 字段，key 只负责路由，value 负责应用上下文 |
+| **[Field]** `DataIdInfo.IsShared` | 新增 · 承接 Consul `is_shared`，供构造期选择 Dispatcher 或独占直连路径 |
+| **[Method]** `MetadataCenter.AddDataId` | [1] 独占模式下把 Consul 顶层 `BaseInfo` / `Token` 映射为 `Apps` map 的唯一元素<br />[2] 共享模式下由 `apps[]` 构造 `Apps` map |
+| **[Method]** `MetadataCenter.ListBaseInfos(dataId)` | 新增 · 供构造期装配 `M` 份应用上下文，独占场景返回单元素切片 |
+| **[Method]** `MetadataCenter.IsShared(dataId)` | 新增 · 供 `startWindowHandler` 判断是否需要 Dispatcher |
 
 **变更感知**：
 
-- `watchConsulConfigUpdate` → `MetadataCenter.CheckUpdate(dataId)` 通过 `cmp.Diff` 整结构比较 `DataIdInfo`，`Apps` 字段自动纳入。
-- `apps[]` 变化抛 `reload for config update`，整个 `RunInstance` 重启，`appBundle` 与 `prometheusMetricsHandler` 重新实例化。
+- `watchConsulConfigUpdate` → `MetadataCenter.CheckUpdate(dataId)` 通过 `cmp.Diff` 整结构比较 `DataIdInfo`。
+- `IsShared` 与 `Apps` 字段自动纳入差异判断。
+- `apps[]` 变化抛 `reload for config update`，daemon maintainer 取消旧 `RunInstance` 并延迟重启。
+- 新 `RunInstance` 启动时重新执行 `AddDataId`、`NewProxyInstance` 和 `startWindowHandler`。
+- 重建对象：`appBundle` 与 `prometheusMetricsHandlers` 全量重建。
+- 运行期不在旧 `RunInstance` 内局部增删 `appBundle`。
+- 目标：避免 dispatcher、窗口、processor、prometheus handler 与 goroutine 生命周期出现多处并行状态源。
 
 ### f. 持久化键策略
 
@@ -448,7 +503,7 @@ flowchart TB
 - 预计算结果表 ES `_id`
 - `Processor.listSpanFromStorage` 的 `TraceEs` 查询条件
 
-**Cache 路径例外**：`listSpanFromStorage` 的 Cache 已按 `(BkBizId, AppName, TraceId)` 三段写读，随 `dataIdBaseInfo` 切换自动启用 AppKey 维度。
+**Cache 路径例外**：`listSpanFromStorage` 的 Cache 已按 `(BkBizId, AppName, TraceId)` 三段写读，随 `baseInfo` 切换自动启用 AppKey 维度。
 
 取舍依据：
 
@@ -465,7 +520,7 @@ flowchart TB
 | --- | --- |
 | `appBundle` 内部按 AppKey 反查 Consul | 应用上下文仅通过构造期注入 |
 | `promClient` 写入期按事件覆盖 token | token 仅在 `NewMetricDimensionHandler` 构造期注入 |
-| `Dispatcher` 之外重复校验 Span 是否命中 `apps[]` | 命中失败处理收敛在 `Dispatcher` 一处 |
+| `Dispatcher` 之外重复校验 Span 是否命中应用路由 | 命中失败处理收敛在 `Dispatcher` 一处 |
 
 ## 0x04 验收与验证
 
@@ -486,11 +541,13 @@ flowchart TB
 
 **配置变更**
 
+- 共享池新增某应用后，reload 前该应用 Span 无路由而被丢弃，reload 后可路由到新 `appBundle`，并使用该应用 token 上报指标。
 - 共享池移出某应用后，下一次 `bmw_task_cron` 周期内 Consul `apps[]` 不含该应用，`watchConsulConfigUpdate` 触发 `RunInstance` 重启，重启后不再上报该应用指标。
+- 验证 `apps[]` 增删只通过整任务 reload 生效，不在旧 `RunInstance` 内残留新增或移除的运行期局部状态。
 
 **异常分支**
 
-- Span 顶层缺失 `bk_biz_id` 或 `app_name` 时，`Dispatcher` 丢弃 Span 并记录异常指标。
+- Span 顶层缺失 `bk_biz_id` 或 `app_name` 时，`Dispatcher` 不路由该 Span。
 
 **独占退化**
 
@@ -500,7 +557,10 @@ flowchart TB
 
 | 时间 | 对应设计片段 | 结论调整概要 | 改动 / 验证 |
 | --- | --- | --- | --- |
-| `2026-05-15 10:00` | `0x03.a` / `0x03.b` / `0x03.c` / `0x03.d` / `0x03.e` | 完成「单任务多应用窗口」主链路实现。<br />[1] `core.AppKey`、Consul `apps[]`、`MetadataCenter.ListAppKeys/GetAppInfo` 已落地<br />[2] `Span` / `StandardSpan` 已承载顶层 AppKey，`Dispatcher` 已接入 `KafkaNotifier` 与多 `appBundle` 之间<br />[3] `Processor` / `MetricProcessor` / `Proxy` 已按 AppKey 持有应用上下文与 Prometheus handler<br />[4] 修复向前兼容测试失败：独占应用保留单应用 fallback，指标 handler 对空 TTL 提供默认值，window fixture 同步新增维度字段 | [1] 新增 metadata 独占 / 共享解析测试与 Dispatcher 路由测试<br />[2] 修正 storage / window 既有测试对新增维度字段与 Prometheus 数据结构的断言<br />[3] `go test ./internal/apm/pre_calculate/... -timeout 60s` 通过 |
+| `2026-05-22 22:00` | `0x01.c` / `0x03.b` / `0x03.e` / `0x04` / `0x07` | PR #1327 复查后以当前实现为准更新方案：`is_shared` 作为共享判定字段，`AppKey` 保持 `BaseInfo.AppKey()` 方法派生，Dispatcher 对未命中路由的 Span 只执行丢弃。 | [1] 更新 Consul 协议、Dispatcher 伪代码、变更边界与验收口径<br />[2] 同步 `appBundles`、`routes`、`ListBaseInfos` 和 `IsShared` 等当前实现表达<br />[3] 版本锚点回填 PR #1327 与分支 |
+| `2026-05-18 17:00` | `0x01.c` / `0x03.b` / `0x03.c` / `0x03.d` / `0x03.e` | [1] 收敛应用上下文模型：`BaseInfo` 统一承载业务、应用、租户与 token<br />[2] `AppKey` 由 `BaseInfo.AppKey()` 按业务 / 应用字段派生<br />[3] `Processor`、`MetricProcessor` 与 `MetricDimensionsHandler` 构造期直接接收 `BaseInfo` | [1] 将 `AppKey` 与 `BaseInfo` 收敛到 `core/meta.go`<br />[2] `DataIdInfo.Apps` 调整为 `map[AppKey]BaseInfo`，新增 `IsShared` / `ListBaseInfos`<br />[3] `go test ./internal/apm/pre_calculate/... -timeout 60s` 通过（Go `1.23.4`） |
+| `2026-05-18 15:00` | `0x01.c` / `0x03.b` / `0x03.e` / `0x04` | 补齐共享 App 动态增删的生命周期边界：`startWindowHandler` 与 `NewProxyInstance` 只构造启动期快照，运行期 App 集合变化不做局部热更新，统一通过 `watchConsulConfigUpdate` 触发整 `RunInstance` reload 后全量重建。 | [1] 已核对 `bkmonitor-datalink` 当前实现：`startWindowHandler`、`NewProxyInstance` 均按 `ListBaseInfos(dataId)` 启动期构造<br />[2] `CheckUpdate` 会将 `DataIdInfo.Apps` 纳入 `cmp.Diff`<br />[3] daemon maintainer 收到错误后会取消旧上下文并重启任务<br />[4] 本次仅更新方案文档与索引，未改代码 |
+| `2026-05-15 10:00` | `0x03.a` / `0x03.b` / `0x03.c` / `0x03.d` / `0x03.e` | 完成「单任务多应用窗口」主链路实现。<br />[1] `core.AppKey`、Consul `is_shared` / `apps[]`、`MetadataCenter.ListBaseInfos` 已落地<br />[2] `Span` / `StandardSpan` 已承载顶层 AppKey，`Dispatcher` 已接入 `KafkaNotifier` 与多 `appBundle` 之间<br />[3] `Processor` / `MetricProcessor` / `Proxy` 已按 AppKey 持有应用上下文与 Prometheus handler<br />[4] 修复向前兼容测试失败：独占应用保留单应用 fallback，指标 handler 对空 TTL 提供默认值，window fixture 同步新增维度字段 | [1] 新增 metadata 独占 / 共享解析测试与 Dispatcher 路由测试<br />[2] 修正 storage / window 既有测试对新增维度字段与 Prometheus 数据结构的断言<br />[3] `go test ./internal/apm/pre_calculate/... -timeout 60s` 通过 |
 
 ## 0x06 参考
 
@@ -510,4 +570,5 @@ flowchart TB
 
 ## 0x07 版本锚点
 
-PR 提交后在此回填分支与 PR 链接。
+- 分支：`feat/bkm_apm/#1010158081134331820`
+- PR：[TencentBlueKing/bkmonitor-datalink#1327](https://github.com/TencentBlueKing/bkmonitor-datalink/pull/1327)
