@@ -3,7 +3,7 @@ title: APM 支持应用级别配置
 tags: [apm, service-config, log-relation, code-redefine, code-remark, app-level]
 description: 将 APM 服务关联配置与返回码备注从纯服务粒度扩展到应用级别，支持跨服务共享与全局配置
 created: 2026-03-04
-updated: 2026-05-01
+updated: 2026-05-24
 ---
 
 # APM 支持应用级别配置
@@ -91,5 +91,5 @@ updated: 2026-05-01
 
 - 实施方案：[PLAN.md](./PLAN.md)
 - 返回码备注默认值附录：[PLAN.md / 0x05 附录](./PLAN.md#0x05-附录)
-- 返回码重定义代码片段：[apm-code-redefine.md](../../snippets/apm-code-redefine.md)
+- APM SaaS 配置代码片段：[apm-saas-config.md](../../snippets/apm-saas-config.md)
 - tRPC 协议定义：[trpc.proto](https://github.com/trpc-group/trpc/blob/main/trpc/trpc.proto)

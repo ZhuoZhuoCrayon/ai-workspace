@@ -1,6 +1,6 @@
 # bkmonitor Snippets 索引
 
-> 最后更新：2026-04-10
+> 最后更新：2026-05-24
 
 ## 0x01 策略 & 告警
 
@@ -26,7 +26,7 @@
 | [APM 服务发现](./apm-service-discover.md) | `apm` `service` `discover` | APM 服务节点发现、端点发现、指标发现等代码片段 | 2026-02-09 |
 | [APM 事件索引集创建](./apm-index-set.md) | `apm` `index-set` `log-search` | 创建 APM 事件索引集的代码片段 | 2026-02-09 |
 | [APM 告警通知模板](./apm-notice-template.md) | `apm` `alert` `notice` `template` | APM 告警通知模板渲染和发送测试 | 2026-02-09 |
-| [APM 返回码重定义](./apm-code-redefine.md) | `apm` `code-redefine` `error-code` | 批量设置 APM 服务返回码重定义规则 | 2026-02-09 |
+| [APM SaaS 配置](./apm-saas-config.md) | `apm` `saas-config` `code-redefine` `log-relation` `django-shell` | 记录 APM SaaS 侧返回码重定义与服务关联日志配置脚本 | 2026-05-24 |
 
 ## 0x04 统一数据源查询
 
@@ -44,6 +44,6 @@
 
 | 文件 | 标签 | 摘要 | 更新日期 |
 |------|------|------|---------|
-| [Grafana 仪表盘导入](./grafana-dashboard.md) | `grafana` `dashboard` `import` | 批量导入 Grafana 仪表盘的代码片段 | 2026-02-09 |
+| [Grafana 仪表盘导入](./grafana-dashboard.md) | `grafana` `dashboard` `import` | 在 Django shell 中导入 Grafana 仪表盘的代码片段 | 2026-05-22 |
 | [外部版授权](./external-auth.md) | `external` `auth` `permission` | 外部版项目空间授权配置 | 2026-02-09 |
 | [Metadata 关联排查](./metadata-troubleshoot.md) | `metadata` `datasource` `result-table` | 指标无数据时的 Metadata 关联排查流程 | 2026-02-09 |

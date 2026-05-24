@@ -1,13 +1,13 @@
 # 知识库索引
 
-> 最后更新：2026-05-22
+> 最后更新：2026-05-24
 
 ## 0x01 项目知识
 
 | 项目 | 路径 | 数量 | 说明 |
 |------|------|------|------|
 | ai-workspace | [ai-workspace/](./ai-workspace/INDEX.md) | 4 篇 | AI 工作区 — 知识管理与多项目协作中枢 |
-| bkmonitor | [bkmonitor/](./bkmonitor/INDEX.md) | 35 篇 | 蓝鲸监控平台 (bk-monitor/bkmonitor) |
+| bkmonitor | [bkmonitor/](./bkmonitor/INDEX.md) | 36 篇 | 蓝鲸监控平台 (bk-monitor/bkmonitor) |
 | bkm-skills | [bkm-skills/](./bkm-skills/INDEX.md) | 6 篇 | BlueKing Monitor Skills |
 | bkmonitor_mcp | [bkmonitor_mcp/](./bkmonitor_mcp/INDEX.md) | 1 篇 | 蓝鲸监控 MCP Server |
 | bkmonitor-datalink | [bkmonitor-datalink/](./bkmonitor-datalink/INDEX.md) | 1 篇 | 蓝鲸监控数据链路 |
@@ -16,10 +16,18 @@
 
 ## 0x02 最近更新
 
+- 2026-05-24：更新
+  [APM SaaS 配置](./bkmonitor/snippets/apm-saas-config.md)
+  至 bkmonitor
+  （合并返回码重定义与服务关联日志全量同步脚本，并从 private 迁出日志关联片段）
 - 2026-05-22：更新
   [APM 预计算适配共享数据源](./bkmonitor/issues/2026-05-14-apm-precalc-shared-multi-app/README.md)
   至 bkmonitor
   （按 PR #1327 收敛 BMW 预计算共享数据源方案：以 `is_shared`、`BaseInfo.AppKey()` 和当前 Dispatcher 行为为准）
+- 2026-05-22：更新
+  [Grafana 仪表盘导入](./bkmonitor/snippets/grafana-dashboard.md)
+  至 bkmonitor
+  （补充 Django shell 批量导入 BKCI 仪表盘片段，并保留单业务快速导入示例）
 - 2026-05-18：更新
   [APM 预计算适配共享数据源](./bkmonitor/issues/2026-05-14-apm-precalc-shared-multi-app/README.md)
   至 bkmonitor
@@ -28,11 +36,3 @@
   [Store 类型抽象边界优化](./throttled-py/issues/2026-05-06-store-typing-abstraction-refactor/README.md)
   至 throttled-py
   （完成 `Throttled` sync / async 组合状态分端持有，移除 `BaseThrottledMixin` 跨端泛型，并补齐 `typing_checks` 类型验收）
-- 2026-05-15：更新
-  [APM 预计算适配共享数据源](./bkmonitor/issues/2026-05-14-apm-precalc-shared-multi-app/README.md)
-  至 bkmonitor
-  （开始实现 BMW 单任务多应用窗口主链路，已落地 AppKey、Dispatcher 与 Prometheus handler 按应用路由）
-- 2026-05-14：新增
-  [APM 预计算适配共享数据源](./bkmonitor/issues/2026-05-14-apm-precalc-shared-multi-app/README.md)
-  至 bkmonitor
-  （从 `2026-03-03-apm-shared-datasource/PLAN.md` 的 `0x02.i` 拆出独立 issue，方案改为「单任务多应用窗口」）
