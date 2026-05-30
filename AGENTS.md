@@ -53,7 +53,7 @@
 | 目标         | 路径                                                  | 说明                         |
 |------------|-----------------------------------------------------|----------------------------|
 | 文档规范       | `.agents/skills/doc-style/SKILL.md`                 | Markdown 写作、重构与润色流程        |
-| Git 规范     | `.cursor/rules/git.mdc`                             | Conventional Commits 与提交策略 |
+| Git 规范     | `.agents/skills/git-workflow/SKILL.md`              | Conventional Commits 与提交策略 |
 | PR Review  | `.agents/skills/code_review/SKILL.md`               | PR 复查流程与评论规范               |
 | Python 规范  | `.cursor/rules/python-type-annotations.mdc`         | 类型标注与风格                    |
 | Go 规范      | `.cursor/rules/go-dev.mdc`                          | Go 开发环境与 gvm               |
