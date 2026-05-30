@@ -1,13 +1,13 @@
 # 知识库索引
 
-> 最后更新：2026-05-30
+> 最后更新：2026-05-31
 
 ## 0x01 项目知识
 
 | 项目 | 路径 | 数量 | 说明 |
 |------|------|------|------|
 | ai-workspace | [ai-workspace/](./ai-workspace/INDEX.md) | 4 篇 | AI 工作区 — 知识管理与多项目协作中枢 |
-| bkmonitor | [bkmonitor/](./bkmonitor/INDEX.md) | 36 篇 | 蓝鲸监控平台 (bk-monitor/bkmonitor) |
+| bkmonitor | [bkmonitor/](./bkmonitor/INDEX.md) | 37 篇 | 蓝鲸监控平台 (bk-monitor/bkmonitor) |
 | bkm-skills | [bkm-skills/](./bkm-skills/INDEX.md) | 6 篇 | BlueKing Monitor Skills |
 | bkmonitor_mcp | [bkmonitor_mcp/](./bkmonitor_mcp/INDEX.md) | 1 篇 | 蓝鲸监控 MCP Server |
 | bkmonitor-datalink | [bkmonitor-datalink/](./bkmonitor-datalink/INDEX.md) | 1 篇 | 蓝鲸监控数据链路 |
@@ -17,6 +17,10 @@
 
 ## 0x02 最近更新
 
+- 2026-05-31：新增
+  [错误视图 tRPC 场景适配](./bkmonitor/issues/2026-05-31-apm-error-view-trpc-adaptation/README.md)
+  至 bkmonitor
+  （定义 `exception_type + exception_refer` 联动协议，确认 `$exception_refer` 可通过 scene_view 变量链路传递）
 - 2026-05-30：更新
   [Skills-First 架构演进](./ai-workspace/issues/2026-04-06-skills-first-architecture/README.md)
   至 ai-workspace
@@ -34,7 +38,3 @@
   [Grafana 仪表盘导入](./bkmonitor/snippets/grafana-dashboard.md)
   至 bkmonitor
   （补充 Django shell 批量导入 BKCI 仪表盘片段，并保留单业务快速导入示例）
-- 2026-05-18：更新
-  [APM 预计算适配共享数据源](./bkmonitor/issues/2026-05-14-apm-precalc-shared-multi-app/README.md)
-  至 bkmonitor
-  （收敛预计算应用上下文模型：`BaseInfo` 承载 token，并通过 `BaseInfo.AppKey()` 派生应用路由键）
