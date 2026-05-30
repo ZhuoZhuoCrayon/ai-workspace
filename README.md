@@ -39,13 +39,14 @@ make init
 ```bash
 make init SKILLS_IDE=cursor
 make init SKILLS_IDE=
-make init NODE_VERSION=20.18.3 PRE_COMMIT_PYENV_VERSION=3.10.4
+make init NODE_VERSION=20.18.3 UV=uv
 ```
 
 说明：
 
 - `SKILLS_IDE=cursor`：默认值，仅安装到 `Cursor`。
 - `SKILLS_IDE=`：留空时不传 `--agent`，按 `skills` CLI 默认行为执行。
+- `UV=uv`：Python 工具入口，默认读取 `pyproject.toml` 中的腾讯源配置。
 
 ## 0x03 更新 Skills
 
