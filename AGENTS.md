@@ -56,7 +56,7 @@
 | Git 规范     | `.agents/skills/git-workflow/SKILL.md`              | Conventional Commits 与提交策略 |
 | PR Review  | `.agents/skills/code_review/SKILL.md`               | PR 复查流程与评论规范               |
 | 开发环境规范     | `.agents/skills/dev-env/SKILL.md`                   | Go / Node.js / Python 环境 |
-| Python 规范  | `.cursor/rules/python-type-annotations.mdc`         | 类型标注与风格                    |
+| 代码风格规范    | `.agents/skills/code-style/SKILL.md`                | 代码风格与类型标注约束                |
 | 项目注册表      | `repos.json` + `private/repos.json`                 | 并行读取获取 `local_path`        |
 | 知识入口       | `knowledge/INDEX.md` + `private/knowledge/INDEX.md` | 并行读取后按项目下钻                 |
 | 工作区 Skills | `.agents/skills/`                                   | 通用技能                       |

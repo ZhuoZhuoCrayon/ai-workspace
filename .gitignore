@@ -17,6 +17,7 @@ private/
 !.claude/skills/code_review
 !.claude/skills/git-workflow
 !.claude/skills/dev-env
+!.claude/skills/code-style
 .DS_Store
 __pycache__/
 *.pyc

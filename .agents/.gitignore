@@ -14,3 +14,5 @@
 !skills/git-workflow/**
 !skills/dev-env/
 !skills/dev-env/**
+!skills/code-style/
+!skills/code-style/**
