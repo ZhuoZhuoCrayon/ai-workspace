@@ -4,7 +4,7 @@ tags: [ai-workspace, skills, architecture, open-source]
 issue: knowledge/ai-workspace/issues/2026-04-06-skills-first-architecture/README.md
 description: 工作区规范体系从 AGENTS.md 中心化向 Skills-First 分布式演进的实施方案
 created: 2026-04-06
-updated: 2026-05-30
+updated: 2026-05-31
 ---
 
 # Skills-First 架构演进 —— 实施方案
@@ -101,8 +101,7 @@ Skills 是 agent-agnostic 的 Markdown 工作流，是规范的通用包装格�
 - `knowledge_mgr` 不负责：独立检索算法、召回重排、长期检索优化实验。
 - `knowledge_mgr` 的 `SKILL.md` 只保留骨架级内容：触发与排除、知识对象模型、索引不变量、规则锚点。
 - 具体流程按需下沉到 `references/`，当前分层为：
-  - 检索入口：`retrieval.md`
-  - 检索规则原文：`retrieval-rules.md`
+  - 检索入口与规则原文：`retrieval.md`（含 `RULE-KNOWLEDGE-002` 优先级，原 `retrieval-rules.md` 已合并废弃）
   - 写操作入口：`operations.md`
   - 写操作规则原文：`operation-rules.md`
   - 索引维护专用：`index-maintenance.md`

@@ -24,7 +24,7 @@ description: 管理工作区 knowledge 资产的检索与全生命周期操作�
 - `持久化需求`：是否要把结果沉淀为知识对象。
 - `治理需求`：是否要维护 frontmatter、INDEX、public / private 一致性。
 
-满足任意 `2` 项即应触发 `knowledge_mgr`。满足 `3` 项及以上必须触发。
+满足任意 `2` 项即应触发 `knowledge_mgr`，满足 `3` 项及以上必须触发。
 
 ### b. 不属于本 skill 的场景
 
@@ -35,18 +35,18 @@ description: 管理工作区 knowledge 资产的检索与全生命周期操作�
 ### c. 混合场景
 
 - 主任务发生在外部系统，但同时要求将结论沉淀到 knowledge 体系，或核对 public / private 知识一致性时，`knowledge_mgr` 只负责知识资产相关部分。
-- 用户没有显式说“写文档”，不等于可以跳过 `knowledge_mgr`。只要答案依赖历史知识资产，就应先检索。
-- 模型“记得上次结论”，不等于可以跳过检索。只要答案依赖历史上下文，就要先核对 public / private 两侧知识。
+- 用户没有显式说“写文档”，不等于可以跳过 `knowledge_mgr`，只要答案依赖历史知识资产就应先检索。
+- 模型“记得上次结论”，不等于可以跳过检索，只要答案依赖历史上下文就要先核对 public / private 两侧知识。
 
 ### d. 参考文档
 
 | 场景 | 首读参考文档 | 必要时补读 | 说明 |
 |------|--------------|------------|------|
-| 检索 | [retrieval.md](references/retrieval.md) | [retrieval-rules.md](references/retrieval-rules.md) | 回答项目问题、核对历史知识、补齐前置证据 |
+| 检索 | [retrieval.md](references/retrieval.md) | — | 回答项目问题、核对历史知识、补齐前置证据 |
 | 操作 | [operations.md](references/operations.md) | [operation-rules.md](references/operation-rules.md)<br />[index-maintenance.md](references/index-maintenance.md) | 创建、更新、归档、迁移、删除与索引维护 |
 | 创建对象 | [templates.md](references/templates.md) | [operations.md](references/operations.md) | 只在创建知识对象时读取模板与创建流程 |
 
-不要一次性读取全部 `references/`；先读首读参考文档，再按需补读。
+不要一次性读取全部 `references/`，先读首读参考文档，再按需补读。
 
 ## 0x01 对象模型
 
@@ -87,7 +87,7 @@ description: 管理工作区 knowledge 资产的检索与全生命周期操作�
 
 | 规则 | 入口 | 摘要 |
 |------|------|------|
-| `RULE-KNOWLEDGE-002` | [retrieval-rules.md](references/retrieval-rules.md) | 知识检索优先级 |
+| `RULE-KNOWLEDGE-002` | [retrieval.md](references/retrieval.md) | 知识检索优先级 |
 | `RULE-ISSUE-001` | [operation-rules.md](references/operation-rules.md) | Issue 目录仅含 `README.md` 与 `PLAN.md` |
 | `RULE-ISSUE-002` | [operation-rules.md](references/operation-rules.md) | 迭代交付前主动询问 PLAN 写回 |
 | `RULE-ISSUE-003` | [operation-rules.md](references/operation-rules.md) | Issue 文档职责分离 |

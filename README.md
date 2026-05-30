@@ -11,62 +11,23 @@ AI Workspace 的目标是用“文件即协议”的方式，让人和 Agent 在
 - 规则治理：通过 `.cursor/rules/` + `pre-commit` + CI 保证文档和流程质量。
 - 能力扩展：通过 `.agents/skills/` 与 `.cursor/skills/` 统一管理技能。
 
-## 0x02 初始化项目
+## 0x02 快速开始
 
-直接执行：
+初始化工作区：
 
 ```bash
 make init
 ```
 
-默认行为：
+更多贡献流程、依赖安装、提交前检查和技能更新方式见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-- 安装 `pre-commit` hook。
-- 安装默认 skills 到 `Cursor` 对应的 `.agents/skills/`。
+## 0x03 核心入口
 
-默认 skills：
-
-- `skill-creator`
-- `mcp-builder`
-- `docx`
-- `pdf`
-- `pptx`
-- `xlsx`
-- `webapp-testing`
-
-可选参数：
-
-```bash
-make init SKILLS_IDE=cursor
-make init SKILLS_IDE=
-make init NODE_VERSION=20.18.3 UV=uv
-```
-
-说明：
-
-- `SKILLS_IDE=cursor`：默认值，仅安装到 `Cursor`。
-- `SKILLS_IDE=`：留空时不传 `--agent`，按 `skills` CLI 默认行为执行。
-- `UV=uv`：Python 工具入口，默认读取 `pyproject.toml` 中的腾讯源配置。
-
-## 0x03 更新 Skills
-
-直接执行：
-
-```bash
-make skills-update
-```
-
-只更新部分 skills：
-
-```bash
-make skills-update SKILLS="skill-creator mcp-builder"
-```
-
-如需调整目标 IDE，也可以临时覆盖：
-
-```bash
-make skills-update SKILLS_IDE=cursor
-```
+- [AGENTS.md](AGENTS.md)：Agent 导航入口。
+- `repos.json` / `private/repos.json`：项目注册表。
+- `knowledge/` / `private/knowledge/`：项目知识库。
+- `.agents/skills/`：工作区技能目录。
+- `config/lint/` 与 `scripts/`：文档检查配置和脚本。
 
 ## 0x04 License
 

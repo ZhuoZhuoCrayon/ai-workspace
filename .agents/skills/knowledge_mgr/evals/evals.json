@@ -82,11 +82,11 @@
     {
       "id": 8,
       "prompt": "现在只做 knowledge 检索，不改文档。请先说明你会先看 knowledge_mgr 的入口，再按需读取哪些 reference 文件，然后回答如何查某个项目已有的排障经验。",
-      "expected_output": "应先经 knowledge_mgr 的 SKILL 入口，再按检索场景读取 retrieval-rules 与 retrieval，并说明会到 troubleshooting 分类中查找证据。",
+      "expected_output": "应先经 knowledge_mgr 的 SKILL 入口，再按检索场景读取 retrieval.md，并说明会到 troubleshooting 分类中查找证据。",
       "files": [],
       "expectations": [
         "输出中明确先看 knowledge_mgr 的 SKILL 入口",
-        "输出中明确按需读取 retrieval-rules.md 与 retrieval.md",
+        "输出中明确按需读取 retrieval.md",
         "输出中明确排障经验优先到对应知识对象分类目录检索"
       ]
     },
