@@ -30,5 +30,13 @@
     "branch": "master",
     "local_path": "/Users/sandrincai/Project/Github/bk/bkmonitor-datalink",
     "language": "zh"
+  },
+  {
+    "name": "bkmonitor-ecosystem",
+    "description": "蓝鲸监控生态 SDK 与接入 demo（外部版）：提供「最小化」开箱即用的观测数据接入 demo，帮助用户快速入门蓝鲸观测平台功能。",
+    "git_url": "https://github.com/TencentBlueKing/bkmonitor-ecosystem.git",
+    "branch": "master",
+    "local_path": "/Users/sandrincai/Project/Github/bk/monitor/bkmonitor-ecosystem",
+    "language": "zh"
   }
 ]
