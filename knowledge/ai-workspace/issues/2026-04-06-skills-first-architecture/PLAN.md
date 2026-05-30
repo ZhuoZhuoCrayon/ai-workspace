@@ -28,7 +28,7 @@ Skills 是 agent-agnostic 的 Markdown 工作流，是规范的通用包装格�
 | `general.mdc` | 30 | 已拆分到 `AGENTS.md`、`doc-style` 与 `knowledge_mgr`，旧 rule 已删除 | 完成 |
 | `git.mdc` | 21 | 已迁移至 `git-workflow` skill，旧 rule 已删除 | 完成 |
 | `go-dev.mdc` | 15 | 已迁移至 `dev-env` skill，并扩展为 Go / Node.js / Python 开发环境规范 | 完成 |
-| `python-type-annotations.mdc` | 22 | → 融入语言开发 skill（可与同类合并） | P3 |
+| `python-type-annotations.mdc` | 22 | 已迁移至 `code-style` skill，旧 rule 已删除 | 完成 |
 
 ### b. addyosmani/agent-skills 可借鉴模式
 
@@ -85,6 +85,7 @@ Skills 是 agent-agnostic 的 Markdown 工作流，是规范的通用包装格�
 - `doc-style`：从 markdown.mdc 演进，通用文档写作规范
 - `git-workflow`：从 git.mdc 演进，区分工作区提交与 repos.json 项目提交
 - `dev-env`：从 go-dev.mdc 演进，统一 Go / Node.js / Python 开发环境，并按语言拆分 reference
+- `code-style`：从 python-type-annotations.mdc 演进，承接代码风格与类型标注偏好
 
 场景 skills（按需内置，不纳入开源输出）：
 
@@ -173,8 +174,8 @@ Skills 是 agent-agnostic 的 Markdown 工作流，是规范的通用包装格�
 
 - [x] `go-dev.mdc` → `.agents/skills/dev-env/SKILL.md`
 - [x] 删除 `.cursor/rules/go-dev.mdc`
-- [ ] `python-type-annotations.mdc` → 融入语言开发 skill 或独立类型规范 skill
-- [ ] 删除剩余语言类 `.mdc` 文件
+- [x] `python-type-annotations.mdc` → `.agents/skills/code-style/SKILL.md`
+- [x] 删除 `.cursor/rules/python-type-annotations.mdc`
 
 ### g. apps_mgr skill
 
@@ -210,6 +211,7 @@ Skills 是 agent-agnostic 的 Markdown 工作流，是规范的通用包装格�
 - `code_review` 已从 `pr-review.mdc` 迁移为 skill，并完成 `skills-mount`
 - `git-workflow` 已从 `git.mdc` 迁移为 skill，并完成场景区分与 `skills-mount`
 - `dev-env` 已从 `go-dev.mdc` 迁移为 skill，并通过 `references/` 拆分 Go / Node.js / Python 环境细节
+- `code-style` 已从 `python-type-annotations.mdc` 迁移为 skill，并保持 `SKILL.md` 路由层结构
 - `general.mdc` 已拆分完成，旧 rule 不再作为快速入口
 - 新增 skill 文件已通过 `lint-md`、`markdownlint-cli2` 与 `check_doc_style.py`
 - trigger eval / quality eval 的自动执行链依赖 `claude` CLI
@@ -223,6 +225,7 @@ Skills 是 agent-agnostic 的 Markdown 工作流，是规范的通用包装格�
 
 | 时间 | 对应设计片段 | 结论调整概要 | 改动 / 验证 |
 |------|----------------|----------------|-------------|
+| `2026-05-30 12:00` | `0x01.a`、`0x03.f`、`0x04` | [1] 将 `python-type-annotations.mdc` 迁移为 `code-style` skill，旧 Python 类型规则不再作为快速入口<br />[2] `code-style` 主文档仅保留路由层，并补充项目级 `AGENTS.md` / `CONTRIBUTING.md` 优先级<br />[3] Python 规则按类别拆到 `references/python/`，本轮仅平移 `1.13 类型提示`，不改写原规则语义 | [1] 新建 `.agents/skills/code-style/SKILL.md` 与 `references/python/`，删除 `.cursor/rules/python-type-annotations.mdc`<br />[2] 更新 `AGENTS.md` 与 skill 挂载白名单<br />[3] 执行 `make skills-mount` 并复查工作区变更 |
 | `2026-05-30 11:00` | `0x01.a`、`0x03.f`、`0x04` | [1] 将 `go-dev.mdc` 迁移为 `dev-env` skill，旧 Go-only rule 不再作为快速入口<br />[2] `dev-env` 主文档收敛为路由层，Go / Node.js / Python 细节拆入 `references/`<br />[3] Python 规则改为先执行 `uv`，仅在环境缺失类报错后询问是否创建虚拟环境 | [1] 新建 `.agents/skills/dev-env/SKILL.md` 与 `references/go.md`、`references/node.md`、`references/python.md`，删除 `.cursor/rules/go-dev.mdc`<br />[2] 更新当前 `Makefile`：`pre-commit` 改由 `uv tool run` 执行，skills 安装 / 更新继续由 `nvm use` 包裹<br />[3] 移除 skill 主文档中的合并安装命令和 Makefile 处理章节，`quick_validate`、文档检查与 `make skills-mount` 通过 |
 | `2026-05-30 00:00` | `0x01.a`、`0x03.e`、`0x04` | [1] 将 Git 提交规范正式迁移为 `git-workflow` skill，承接提交前检查、按主题拆分和 Conventional Commits 约束<br />[2] 区分默认工作区提交与用户明确要求的 repos.json 项目提交<br />[3] `.cursor/rules/` 仅保留语言开发类过渡规则，Git 入口切换到 `.agents/skills/git-workflow/SKILL.md` | [1] 新建 `.agents/skills/git-workflow/SKILL.md`，删除 `.cursor/rules/git.mdc`<br />[2] 更新 `AGENTS.md` Git 规范入口与 skill 挂载白名单<br />[3] 执行 `make skills-mount`，并通过文档检查 |
 | 2026-04-06 | `0x02.a`、`0x02.b`、`0x03.a` | [1] 确立两层架构（宪法层 + Skills 层），rules 为过渡态<br />[2] 评估 6 条现有 rules，全部规划演进时间线<br />[3] skill 分类明确：工作区治理（可输出）/ 工程实践（可输出）/ 场景 skills（按需内置） | [1] 创建 Issue + PLAN<br />[2] AGENTS.md 添加 RULE-GOVERN-001/002/003<br />[3] 更新 PLAN：rules 全部规划演进，skill 分类修正 |
