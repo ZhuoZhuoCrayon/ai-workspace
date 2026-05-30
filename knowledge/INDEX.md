@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-05-25
+> 最后更新：2026-05-30
 
 ## 0x01 项目知识
 
@@ -17,6 +17,10 @@
 
 ## 0x02 最近更新
 
+- 2026-05-30：更新
+  [Skills-First 架构演进](./ai-workspace/issues/2026-04-06-skills-first-architecture/README.md)
+  至 ai-workspace
+  （将 `git.mdc` 迁移为 `git-workflow` skill，并删除旧 Git rule 入口）
 - 2026-05-25：新增 [bkmonitor-ecosystem](./bkmonitor-ecosystem/INDEX.md) 至 public 知识库（注册 GitHub 外部版项目，并与 private 内部版同名区分）
 - 2026-05-24：更新
   [APM SaaS 配置](./bkmonitor/snippets/apm-saas-config.md)
@@ -34,7 +38,3 @@
   [APM 预计算适配共享数据源](./bkmonitor/issues/2026-05-14-apm-precalc-shared-multi-app/README.md)
   至 bkmonitor
   （收敛预计算应用上下文模型：`BaseInfo` 承载 token，并通过 `BaseInfo.AppKey()` 派生应用路由键）
-- 2026-05-17：更新
-  [Store 类型抽象边界优化](./throttled-py/issues/2026-05-06-store-typing-abstraction-refactor/README.md)
-  至 throttled-py
-  （完成 `Throttled` sync / async 组合状态分端持有，移除 `BaseThrottledMixin` 跨端泛型，并补齐 `typing_checks` 类型验收）

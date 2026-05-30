@@ -4,7 +4,7 @@ tags: [ai-workspace, skills, architecture, open-source]
 issue: knowledge/ai-workspace/issues/2026-04-06-skills-first-architecture/README.md
 description: 工作区规范体系从 AGENTS.md 中心化向 Skills-First 分布式演进的实施方案
 created: 2026-04-06
-updated: 2026-04-23
+updated: 2026-05-30
 ---
 
 # Skills-First 架构演进 —— 实施方案
@@ -26,7 +26,7 @@ Skills 是 agent-agnostic 的 Markdown 工作流，是规范的通用包装格�
 | `pr-review.mdc` | 100 | → `code_review` skill | P0 |
 | `markdown.mdc` | 88 | → `doc-style` skill（文档写作规范） | P1 |
 | `general.mdc` | 30 | 已拆分到 `AGENTS.md`、`doc-style` 与 `knowledge_mgr`，旧 rule 已删除 | 完成 |
-| `git.mdc` | 21 | → `git_workflow` skill | P2 |
+| `git.mdc` | 21 | 已迁移至 `git-workflow` skill，旧 rule 已删除 | 完成 |
 | `go-dev.mdc` | 15 | → 融入语言开发 skill（可与同类合并） | P3 |
 | `python-type-annotations.mdc` | 22 | → 融入语言开发 skill（可与同类合并） | P3 |
 
@@ -72,7 +72,7 @@ Skills 是 agent-agnostic 的 Markdown 工作流，是规范的通用包装格�
 | 类别 | 定位 | 示例 | 开源属性 |
 |------|------|------|---------|
 | 工作区治理 | 知识/项目/应用管理 | knowledge_mgr, project_mgr, apps_mgr | 可输出（需参数化） |
-| 工程实践 | 开发/测试/发布流程 | code_review, doc-style, git_workflow | 可输出 |
+| 工程实践 | 开发/测试/发布流程 | code_review, doc-style, git-workflow | 可输出 |
 | 场景 skills | 按需内置的工具/平台集成 | docx, xlsx, pptx, pdf, iwiki-doc, bk-ci-helper, bk-rpc-inspection, mcp-builder | 按需内置，不对外 |
 
 ### c. 开源输出策略
@@ -83,7 +83,7 @@ Skills 是 agent-agnostic 的 Markdown 工作流，是规范的通用包装格�
 - `project_mgr`：抽象注册表格式，不绑定 repos.json schema
 - `code_review`：从 pr-review.mdc 演进，通用化 PR review 流程
 - `doc-style`：从 markdown.mdc 演进，通用文档写作规范
-- `git_workflow`：从 git.mdc 演进，Git 工作流规范
+- `git-workflow`：从 git.mdc 演进，区分工作区提交与 repos.json 项目提交
 
 场景 skills（按需内置，不纳入开源输出）：
 
@@ -164,7 +164,7 @@ Skills 是 agent-agnostic 的 Markdown 工作流，是规范的通用包装格�
 
 ### e. 通用规范与 Git 规范演进为 skills（P2）
 
-- [ ] `git.mdc` → `.agents/skills/git_workflow/SKILL.md`
+- [x] `git.mdc` → `.agents/skills/git-workflow/SKILL.md`
 - [x] `general.mdc` → 拆分融入 `AGENTS.md`、`doc-style` 与 `knowledge_mgr`
 - [x] 删除 `.cursor/rules/general.mdc`
 
@@ -205,6 +205,7 @@ Skills 是 agent-agnostic 的 Markdown 工作流，是规范的通用包装格�
 - `PLAN.md` 写回遵循“主干实时更新 + 进展表格化”，不绑定固定章节编号
 - `doc-style` 已通过 `quick_validate`
 - `code_review` 已从 `pr-review.mdc` 迁移为 skill，并完成 `skills-mount`
+- `git-workflow` 已从 `git.mdc` 迁移为 skill，并完成场景区分与 `skills-mount`
 - `general.mdc` 已拆分完成，旧 rule 不再作为快速入口
 - 新增 skill 文件已通过 `lint-md`、`markdownlint-cli2` 与 `check_doc_style.py`
 - trigger eval / quality eval 的自动执行链依赖 `claude` CLI
@@ -218,6 +219,7 @@ Skills 是 agent-agnostic 的 Markdown 工作流，是规范的通用包装格�
 
 | 时间 | 对应设计片段 | 结论调整概要 | 改动 / 验证 |
 |------|----------------|----------------|-------------|
+| `2026-05-30 00:00` | `0x01.a`、`0x03.e`、`0x04` | [1] 将 Git 提交规范正式迁移为 `git-workflow` skill，承接提交前检查、按主题拆分和 Conventional Commits 约束<br />[2] 区分默认工作区提交与用户明确要求的 repos.json 项目提交<br />[3] `.cursor/rules/` 仅保留语言开发类过渡规则，Git 入口切换到 `.agents/skills/git-workflow/SKILL.md` | [1] 新建 `.agents/skills/git-workflow/SKILL.md`，删除 `.cursor/rules/git.mdc`<br />[2] 更新 `AGENTS.md` Git 规范入口与 skill 挂载白名单<br />[3] 执行 `make skills-mount`，并通过文档检查 |
 | 2026-04-06 | `0x02.a`、`0x02.b`、`0x03.a` | [1] 确立两层架构（宪法层 + Skills 层），rules 为过渡态<br />[2] 评估 6 条现有 rules，全部规划演进时间线<br />[3] skill 分类明确：工作区治理（可输出）/ 工程实践（可输出）/ 场景 skills（按需内置） | [1] 创建 Issue + PLAN<br />[2] AGENTS.md 添加 RULE-GOVERN-001/002/003<br />[3] 更新 PLAN：rules 全部规划演进，skill 分类修正 |
 | 2026-04-08 | `0x02.d`、`0x04` | [1] 明确当前阶段不新建 `knowledge_search`，先将主动知识检索收敛到 `knowledge_mgr`<br />[2] 补充拆分触发条件与契约边界，避免 `knowledge_mgr` 膨胀为大杂烩<br />[3] 将“默认主动使用 knowledge_mgr”纳入验收与回归要求<br />[4] 通过轻量评测发现 iWiki 场景仍可能被过度吸入 `knowledge_mgr`，因此将竞争排除升级为短路规则 | [1] 设计 `knowledge_mgr` 触发判定、检索契约与兼容声明<br />[2] 建立首批 `6` 条回归用例，并将通过标准改为离散阈值<br />[3] 补跑 `3` 组 with-skill / baseline 评测，并修正 iWiki 场景的默认不触发语义 |
 | 2026-04-08 | `0x02.d`、`0x02.e`、`0x03.b`、`0x04` | [1] `knowledge_mgr` 收敛为骨架入口 + `references/` 分层，默认读取负担明显下降<br />[2] `AGENTS.md` 回到纯导航，只指向 `knowledge_mgr` 的规则锚点，避免重复维护规则摘要<br />[3] `PLAN` 写回规则改为“方案主干实时更新 + 进展表格化”，不再绑定固定章节号<br />[4] 知识对象统一抽象与索引维护拆分到位，为后续新增对象类型保留扩展路径 | [1] 将 `SKILL.md` 收敛到触发、对象模型、索引不变量、规则锚点四类骨架内容<br />[2] 新增 `index-maintenance.md`，并将模板迁移到 `references/templates.md`<br />[3] 更新 `operation-rules.md`、`templates.md` 与 `evals.json`，把写回语义改成“更新受影响的方案主干片段 + 记录实施进展”<br />[4] 更新 `AGENTS.md`、`general.mdc`、`markdown.mdc`，并通过 `markdownlint-cli2`、`check-doc-style`、`lint-md` 与 JSON 校验 |
