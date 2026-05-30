@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-05-24
+> 最后更新：2026-05-25
 
 ## 0x01 项目知识
 
@@ -11,11 +11,13 @@
 | bkm-skills | [bkm-skills/](./bkm-skills/INDEX.md) | 6 篇 | BlueKing Monitor Skills |
 | bkmonitor_mcp | [bkmonitor_mcp/](./bkmonitor_mcp/INDEX.md) | 1 篇 | 蓝鲸监控 MCP Server |
 | bkmonitor-datalink | [bkmonitor-datalink/](./bkmonitor-datalink/INDEX.md) | 1 篇 | 蓝鲸监控数据链路 |
+| bkmonitor-ecosystem | [bkmonitor-ecosystem/](./bkmonitor-ecosystem/INDEX.md) | 0 篇 | 蓝鲸监控生态 SDK 与接入 demo（外部版） |
 | throttled-py | [throttled-py/](./throttled-py/INDEX.md) | 7 篇 | High-performance Python rate limiting library |
 | 通用知识 | [_shared/](./_shared/INDEX.md) | 1 篇 | 跨项目通用知识 |
 
 ## 0x02 最近更新
 
+- 2026-05-25：新增 [bkmonitor-ecosystem](./bkmonitor-ecosystem/INDEX.md) 至 public 知识库（注册 GitHub 外部版项目，并与 private 内部版同名区分）
 - 2026-05-24：更新
   [APM SaaS 配置](./bkmonitor/snippets/apm-saas-config.md)
   至 bkmonitor
