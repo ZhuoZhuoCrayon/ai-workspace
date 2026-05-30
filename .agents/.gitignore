@@ -12,3 +12,5 @@
 !skills/code_review/**
 !skills/git-workflow/
 !skills/git-workflow/**
+!skills/dev-env/
+!skills/dev-env/**

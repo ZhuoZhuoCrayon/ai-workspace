@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dev Env"
+  short_description: "规范 gvm、nvm、uv 与项目虚拟环境"
+  default_prompt: "Use $dev-env to prepare this project development environment."

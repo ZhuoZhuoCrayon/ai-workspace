@@ -1,8 +1,10 @@
 SHELL := /bin/zsh
 
 NVM_DIR ?= $(HOME)/.nvm
+NVM_SCRIPT ?= $(NVM_DIR)/nvm.sh
 NODE_VERSION ?= 20.18.3
-PRE_COMMIT_PYENV_VERSION ?= 3.10.4
+UV ?= uv
+PRE_COMMIT ?= $(UV) tool run --from pre-commit pre-commit
 SKILLS_SOURCE ?= https://github.com/anthropics/skills
 SKILLS_IDE ?= cursor
 SKILLS_DIR ?= .agents/skills
@@ -27,16 +29,18 @@ help:
 		"  SKILLS_DIR=$(SKILLS_DIR)       # 当前默认 skills 目录" \
 		"  SKILLS_MOUNT_TARGETS=$(SKILLS_MOUNT_TARGETS) # 默认挂载目标目录" \
 		"  SKILLS_MOUNT_BLACKLIST=$(SKILLS_MOUNT_BLACKLIST) # 可选，跳过指定 skill（空格分隔）" \
+		"  UV=$(UV)                       # Python 工具统一通过 uv 运行" \
+		"  PRE_COMMIT=$(PRE_COMMIT)       # pre-commit 运行入口" \
 		"  SKILLS=$(SKILLS)"
 
 init: init-pre-commit init-skills
 
 init-pre-commit:
-	@PYENV_VERSION=$(PRE_COMMIT_PYENV_VERSION) pre-commit install -f
+	@$(PRE_COMMIT) install -f
 	@echo "Installed git hook: .git/hooks/pre-commit"
 
 init-skills:
-	@source "$(NVM_DIR)/nvm.sh" && nvm use $(NODE_VERSION) >/dev/null && \
+	@source "$(NVM_SCRIPT)" && nvm use $(NODE_VERSION) >/dev/null && \
 	for skill in $(SKILLS); do \
 		echo "Installing $$skill"; \
 		npx skills add $(SKILLS_SOURCE) --skill "$$skill" $(SKILLS_AGENT_ARGS) --yes; \
@@ -45,7 +49,7 @@ init-skills:
 verify: verify-pre-commit verify-skills
 
 verify-pre-commit:
-	@PYENV_VERSION=$(PRE_COMMIT_PYENV_VERSION) pre-commit --version
+	@$(PRE_COMMIT) --version
 	@test -f .git/hooks/pre-commit && echo "Verified git hook: .git/hooks/pre-commit"
 
 verify-skills:
@@ -53,7 +57,7 @@ verify-skills:
 	@ls $(SKILLS_DIR)
 
 skills-update:
-	@source "$(NVM_DIR)/nvm.sh" && nvm use $(NODE_VERSION) >/dev/null && \
+	@source "$(NVM_SCRIPT)" && nvm use $(NODE_VERSION) >/dev/null && \
 	for skill in $(SKILLS); do \
 		echo "Updating $$skill"; \
 		npx skills add $(SKILLS_SOURCE) --skill "$$skill" $(SKILLS_AGENT_ARGS) --yes; \

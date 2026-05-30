@@ -2,7 +2,7 @@
 
 本文件定义检索、操作与知识采信的硬约束。
 
-细节与编码风格见 `.cursor/rules/` 各专题文件，以及 `.agents/skills/` 下对应场景的 skill。
+细节与编码风格见 `.agents/skills/` 下对应场景的 skill，以及仍处于过渡期的 `.cursor/rules/` 专题文件。
 
 ## 0x01 强制规则
 
@@ -55,8 +55,8 @@
 | 文档规范       | `.agents/skills/doc-style/SKILL.md`                 | Markdown 写作、重构与润色流程        |
 | Git 规范     | `.agents/skills/git-workflow/SKILL.md`              | Conventional Commits 与提交策略 |
 | PR Review  | `.agents/skills/code_review/SKILL.md`               | PR 复查流程与评论规范               |
+| 开发环境规范     | `.agents/skills/dev-env/SKILL.md`                   | Go / Node.js / Python 环境 |
 | Python 规范  | `.cursor/rules/python-type-annotations.mdc`         | 类型标注与风格                    |
-| Go 规范      | `.cursor/rules/go-dev.mdc`                          | Go 开发环境与 gvm               |
 | 项目注册表      | `repos.json` + `private/repos.json`                 | 并行读取获取 `local_path`        |
 | 知识入口       | `knowledge/INDEX.md` + `private/knowledge/INDEX.md` | 并行读取后按项目下钻                 |
 | 工作区 Skills | `.agents/skills/`                                   | 通用技能                       |
