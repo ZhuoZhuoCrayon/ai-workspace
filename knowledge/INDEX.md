@@ -20,7 +20,7 @@
 - 2026-05-30：更新
   [Skills-First 架构演进](./ai-workspace/issues/2026-04-06-skills-first-architecture/README.md)
   至 ai-workspace
-  （将 `git.mdc` 迁移为 `git-workflow` skill，并删除旧 Git rule 入口）
+  （将 `git.mdc` 迁移为 `git-workflow` skill，并将 `go-dev.mdc` 迁移为 `dev-env` skill）
 - 2026-05-25：新增 [bkmonitor-ecosystem](./bkmonitor-ecosystem/INDEX.md) 至 public 知识库（注册 GitHub 外部版项目，并与 private 内部版同名区分）
 - 2026-05-24：更新
   [APM SaaS 配置](./bkmonitor/snippets/apm-saas-config.md)
