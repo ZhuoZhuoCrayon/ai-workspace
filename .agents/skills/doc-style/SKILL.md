@@ -1,18 +1,20 @@
 ---
 name: doc-style
-description: 结构化编写、重构、润色和验收 Markdown / MDC 文档。只要用户要创建、编辑、润色、改写、评审或整理任何 `.md` / `.mdc` 文件，或提到 issue / plan / troubleshooting / snippet、规则文档、PR review 评论、GitHub 评论、零散草稿结构化，就应使用这个 skill。
+description: >
+  结构化编写、重构、润色和验收 Markdown / MDC 文档。
+  只要用户要创建、编辑、润色、改写、评审或整理任何 `.md` / `.mdc` 文件，
+  或需要整理规则文档、普通说明文档、PR review 评论、GitHub 评论、零散草稿，就应使用这个 skill。
 ---
 
 # Doc Style
 
 ## 0x01 定位
 
-`doc-style` 负责 Markdown / MDC 文档的结构设计、表达压缩、对象适配与交付前润色。
+`doc-style` 负责 Markdown / MDC 文档的结构设计、表达压缩与交付前润色。
 
 适用范围：
 
 - 文件范围：所有 `.md` / `.mdc` 文档编辑、重构、润色与验收。
-- 知识文档类型：issue、plan、troubleshooting、snippet。
 - 其他文档类型：规则文档、普通说明文档。
 - 短交付：PR review 评论、GitHub 评论、零散草稿的结构化压缩。
 
@@ -25,37 +27,24 @@ description: 结构化编写、重构、润色和验收 Markdown / MDC 文档。
 
 【CRITICAL（必须执行，不可协商）】无论文档类型是什么，都必须先读 `references/common/` 下全部 `5` 个文件：
 
-- `references/common/title.md`
-- `references/common/text.md`
-- `references/common/paragraph.md`
-- `references/common/number.md`
-- `references/common/marks.md`
+- [Title](references/common/title.md)
+- [Text](references/common/text.md)
+- [Paragraph](references/common/paragraph.md)
+- [Number](references/common/number.md)
+- [Marks](references/common/marks.md)
 
-## 0x03 类型识别与专项规则
+## 0x03 写作流程
 
-先识别文档类型再读取对应专项规则。
-
-通用 Markdown / MDC 与 PR review / GitHub 评论默认只用 `common/`。
-
-| 文档类型 | 识别线索 | 专项规则 |
-| --- | --- | --- |
-| issue | 需求定义、issue README、目标 / 范围 / 非目标 / 验收 | `issue-readme-writing.md` |
-| plan | `PLAN.md`、方案、计划、架构设计、开发方案、调研结论、开发落点、风险与进展 | `plan-writing.md` |
-| troubleshooting | 问题排查、故障复盘、根因链路 | `troubleshooting-writing.md` |
-| snippet | 代码片段、命令片段、协议片段 | `snippet-writing.md` |
-
-## 0x04 写作流程
-
-1. **判定类型**：识别文档类型与目标读者，明确要读取的专项规则。
-2. **读取规范**：先读 `common/` 全部 `5` 个文件，再读专项规则。
+1. **判定目标**：明确文档目标读者、交付形态和读者需要拿到的结论。
+2. **读取规范**：先读 `common/` 全部 `5` 个文件。
 3. **完成初稿**：按规范写作。
-4. **润色与自检**：见 `0x05`。
+4. **润色与自检**：见 `0x04`。
 
-## 0x05 润色与自检
+## 0x04 润色与自检
 
 完成初稿后执行润色闭环：
 
-1. **规范回扫**：用 `common/` 与对应专项规则逐节核对，违例就地修复。
+1. **规范回扫**：用 `common/` 规则逐节核对，违例就地修复。
 2. **闭卷通读**：从目标读者视角通读初稿，确认读者不需要追问「结构长什么样」「字段在哪一层」「下一步做什么」。
 3. **长句拆分回看**：拆长句后回到 `paragraph.md` 的载体选择规则，确认不是源码硬换行或连续孤立短段。
 4. **主观清单**：按下表列出 `5` 张主观审稿清单。

@@ -1,10 +1,10 @@
 ---
 name: iwiki-sync
-title: iwiki_sync — AI 工作区与 iWiki 双向同步
+title: iwiki-sync — AI 工作区与 iWiki 双向同步
 description: 同步 AI 工作区文档到 iWiki、从 iWiki 回写本地、做日常增量对齐时使用。只要用户提到“同步到 iWiki”“从 iWiki 拉取”“双向更新”“补齐映射”“重传文档”“个人空间目录对齐”，都应立即使用本 Skill。
 ---
 
-# iwiki_sync — AI 工作区与 iWiki 双向同步
+# iwiki-sync — AI 工作区与 iWiki 双向同步
 
 目标：让 `knowledge/` 与 iWiki 个人空间保持可持续、可回溯、可增量的双向同步。
 

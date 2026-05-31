@@ -1,5 +1,5 @@
 ---
-name: code_review
+name: code-review
 description: 执行代码审查、PR review、复查、处理未解决 review threads、发 review 评论、request changes 或 approve 前必须使用。适用于检查 GitHub PR diff、本地变更、相关源码、测试覆盖、项目规范和既有评论，并输出对话草稿，或在明确授权后发布 inline / conversation review 评论。
 ---
 
@@ -7,7 +7,7 @@ description: 执行代码审查、PR review、复查、处理未解决 review th
 
 ## 0x01 定位
 
-`code_review` 负责审查 PR 或代码变更的正确性、兼容性、可维护性与发布风险。
+`code-review` 负责审查 PR 或代码变更的正确性、兼容性、可维护性与发布风险。
 
 默认只在对话中输出 review 草稿，不发布到 PR。
 

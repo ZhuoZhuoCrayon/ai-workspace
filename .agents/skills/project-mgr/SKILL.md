@@ -1,10 +1,10 @@
 ---
 name: project-mgr
-title: project_mgr — 项目管理
+title: project-mgr — 项目管理
 description: 通过 repos.json 注册和管理工作区中的项目。当用户想要接入项目、移除项目、询问项目设置规范，或消息中提到已注册项目名并需要定位 local_path 时使用。
 ---
 
-# project_mgr — 项目管理
+# project-mgr — 项目管理
 
 管理工作区中项目的添加、删除和定位，默认 visibility 为 `public`。
 

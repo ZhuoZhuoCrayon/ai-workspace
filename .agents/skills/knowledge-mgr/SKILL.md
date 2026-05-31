@@ -7,7 +7,7 @@ description: >
   外部资料调研、纯代码实现 & 调试 & 测试等无需落地知识对象的行为不属于本 skill 场景。
 ---
 
-# knowledge_mgr — 知识管理
+# knowledge-mgr — 知识管理
 
 管理工作区知识对象的检索与全生命周期操作。
 
@@ -52,6 +52,8 @@ public / private 分域维护，不跨域合并计数与索引。
 
 ### b. 知识对象规范
 
+#### Frontmatter 规范
+
 知识对象必须包含 frontmatter，字段信息如下：
 
 | 字段          | 必填 | 适用对象    | 说明                  |
@@ -64,13 +66,18 @@ public / private 分域维护，不跨域合并计数与索引。
 | created     | 是  | 全部      | 创建日期，`YYYY-MM-DD`   |
 | updated     | 是  | 全部      | 最后更新日期，`YYYY-MM-DD` |
 
+#### 内容规范
 
-命名规则：
+【CRITICAL（必须执行，不可协商）】确认知识对象分类，读取对应规范。
+* 禁止全量阅读所有分类的规范，必须先确认分类再读对应规范，避免信息过载与混淆。
+* 只在编辑、创建或评审知识对象时才需要阅读规范，单纯检索、引用、索引操作不需要阅读规范。
 
-- 仅使用小写字母、数字与短横线，禁止空格与下划线。
-- 中文标题需转写为英文短语或稳定拼音，确保可读且稳定。
-- 避免无意义缩写，优先表达问题域或功能点。
-
+| 知识对象分类          | 内容规范                                                             |
+|-----------------|------------------------------------------------------------------|
+| issue           | [Issue Writing](references/issue-writing.md)                     |
+| plan            | [Plan Writing](references/plan-writing.md)                       |
+| snippet         | [Snippet Writing](references/snippet-writing.md)                 |
+| troubleshooting | [Troubleshooting Writing](references/troubleshooting-writing.md) |
 
 ## 0x02 场景与操作指南
 
@@ -93,7 +100,6 @@ public / private 分域维护，不跨域合并计数与索引。
 2）指南：
 * [Operations Guide](references/operations.md)
 * [Index Maintenance Guide](references/index-maintenance.md)
-
 
 ### c. 创建知识对象
 
