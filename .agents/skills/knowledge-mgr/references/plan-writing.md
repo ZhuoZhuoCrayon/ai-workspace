@@ -411,7 +411,7 @@ SHARED_DS_REGISTRY = {
 | **[Method]**  `set_from_shared`                    | 由子类覆写，从共享链路信息字典提取各自字段并赋值。                                                                                        |
 | **[Method]** `reset_link_info`                     | 重置当前数据源链路信息为未创建状态，用于迁入 / 迁出后复用原有创建流程。                                                                            |
 | **[Method]** `is_shared`                           | 是否共享，通过 `shared_datasource_id` 判断。                                                                               |
-| **[Method]** `start / stop`                        | 共享模式下不执行结果表启停，但每次应用启停需调整共享池占用计数。<br />应用层需保证 `start_trace()` / `stop_trace()` 幂等，避免重复占用或重复释放。<br />独占模式保持原有启停行为。 |
+| **[Method]** `start / stop`                        | [a] 共享模式下不执行结果表启停，但每次应用启停需调整共享池占用计数。<br />[b] 应用层需保证 `start_trace()` / `stop_trace()` 幂等，避免重复占用或重复释放。<br />[c] 独占模式保持原有启停行为。 |
 
 * *[1] 共享场景：global_mode = true。*
 * *[2] 共享 DataID 单一业务空间管理：业务 ID（bk_biz_id）从环境变量（`SHARED_DATASOURCE_PRIVILEGED_BK_BIZ_ID`, default=2）获取。*
@@ -423,9 +423,9 @@ SHARED_DS_REGISTRY = {
 
 | 入口                          | 入参状态                         | 取值来源                                                            | 语义                                                                                                                                                                             |
 |-----------------------------|------------------------------|-----------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `CreateApplicationResource` | 不传 `shared_datasource_types` | `SharedDatasourceRuleFactory.list_shared_datasource_types(...)` | [1] 计算本次创建需要共享的数据源类型。<br />[2] 创建阶段仅生成初始目标状态，不产生迁移语义。                                                                                                                          |
-| `ApplyDatasourceResource`   | 不传 `shared_datasource_types` | 查询各数据源配置的 `is_shared` 状态后构造                                     | [1] 以数据库当前状态作为本次 apply 的目标状态。<br />[2] 当前状态与目标状态一致，不触发迁入 / 迁出。                                                                                                                 |
-| `ApplyDatasourceResource`   | 传入 `shared_datasource_types` | 请求体 `shared_datasource_types`                                   | [1] 请求值作为本次 apply 的目标状态。<br />[2] `["trace"] -> []` 表示 Trace 从共享迁出。<br />[3] `[] -> ["trace"]` 表示 Trace 从独占迁入共享。<br />[4] `[] -> []` 或 `["trace"] -> ["trace"]` 表示状态未变化，不触发迁移。 |
+| `CreateApplicationResource` | 不传 `shared_datasource_types` | `SharedDatasourceRuleFactory.list_shared_datasource_types(...)` | [a] 计算本次创建需要共享的数据源类型。<br />[b] 创建阶段仅生成初始目标状态，不产生迁移语义。                                                                                                                          |
+| `ApplyDatasourceResource`   | 不传 `shared_datasource_types` | 查询各数据源配置的 `is_shared` 状态后构造                                     | [a] 以数据库当前状态作为本次 apply 的目标状态。<br />[b] 当前状态与目标状态一致，不触发迁入 / 迁出。                                                                                                                 |
+| `ApplyDatasourceResource`   | 传入 `shared_datasource_types` | 请求体 `shared_datasource_types`                                   | [a] 请求值作为本次 apply 的目标状态。<br />[b] `["trace"] -> []` 表示 Trace 从共享迁出。<br />[c] `[] -> ["trace"]` 表示 Trace 从独占迁入共享。<br />[d] `[] -> []` 或 `["trace"] -> ["trace"]` 表示状态未变化，不触发迁移。 |
 
 \`\`\`mermaid
 flowchart TD
