@@ -6,7 +6,7 @@ on:
       - "**/*.md"
       - "**/*.mdc"
       - "scripts/check_doc_style.py"
-      - "config/lint/**"
+      - "scripts/config/lint/**"
       - ".pre-commit-config.yaml"
       - ".github/workflows/docs-style-check.yml"
   push:
@@ -14,7 +14,7 @@ on:
       - "**/*.md"
       - "**/*.mdc"
       - "scripts/check_doc_style.py"
-      - "config/lint/**"
+      - "scripts/config/lint/**"
       - ".pre-commit-config.yaml"
       - ".github/workflows/docs-style-check.yml"
   workflow_dispatch:

@@ -3,7 +3,7 @@ title: 文档规范检查工具替代调研
 tags: [ai-workspace, docs, tooling, lint]
 description: 调研成熟文档检查工具是否可替代 scripts/check_doc_style.py
 created: 2026-04-04
-updated: 2026-04-04
+updated: 2026-06-01
 ---
 
 # 文档规范检查工具替代调研
@@ -12,7 +12,10 @@ updated: 2026-04-04
 
 ### a. Why
 
-当前工作区通过 `scripts/check_doc_style.py` 维护 Markdown / MDC 文档规范。该脚本以自研规则为主，维护成本和扩展成本会随规则数量上升。
+当前工作区通过 `scripts/check_doc_style.py` 维护 Markdown / MDC 文档规范。
+
+- 现状：脚本以自研规则为主。
+- 问题：维护成本和扩展成本会随规则数量上升。
 
 需要评估是否存在成熟工具可直接替代或部分替代现有脚本，以降低维护负担并提升规则生态兼容性。
 

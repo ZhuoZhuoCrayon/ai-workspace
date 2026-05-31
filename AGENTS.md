@@ -17,5 +17,5 @@
 | 了解项目 | `README.md` |
 | 初始化、依赖与提交检查 | `CONTRIBUTING.md` |
 | 读取任务规则 | `.agents/skills/` |
-| 查看检查配置 | `config/lint/` |
+| 查看检查配置 | `scripts/config/lint/` |
 | 查看辅助脚本 | `scripts/` |

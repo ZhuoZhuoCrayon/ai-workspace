@@ -27,7 +27,7 @@ make init
 - `repos.json` / `private/repos.json`：项目注册表。
 - `knowledge/` / `private/knowledge/`：项目知识库。
 - `.agents/skills/`：工作区技能目录。
-- `config/lint/` 与 `scripts/`：文档检查配置和脚本。
+- `scripts/config/lint/` 与 `scripts/`：文档检查配置和脚本。
 
 ## 0x04 License
 

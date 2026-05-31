@@ -15,7 +15,7 @@
 |------|------|------|---------|
 | [Skills-First 架构演进](./issues/2026-04-06-skills-first-architecture/README.md) | `ai-workspace` `skills` `architecture` `open-source` | 将工作区规范体系从 AGENTS.md 中心化模式演进为 Skills-First 分布式模式，并面向开源社区输出方法论 | 2026-05-30 |
 | [AI 工作区知识资产可视化页面](./issues/2026-04-04-knowledge-visualization-site/README.md) | `ai-workspace` `docs` `visualization` `github-pages` `search` | 通过 GitHub Pages 为 AI 工作区提供知识资产可视化与检索页面 | 2026-04-04 |
-| [文档规范检查工具替代调研](./issues/2026-04-04-doc-style-tooling-research/README.md) | `ai-workspace` `docs` `tooling` `lint` | 调研成熟文档检查工具是否可替代 scripts/check_doc_style.py | 2026-04-04 |
+| [文档规范检查工具替代调研](./issues/2026-04-04-doc-style-tooling-research/README.md) | `ai-workspace` `docs` `tooling` `lint` | 调研成熟文档检查工具是否可替代 scripts/check_doc_style.py | 2026-06-01 |
 
 ## 0x03 已归档 Issues
 

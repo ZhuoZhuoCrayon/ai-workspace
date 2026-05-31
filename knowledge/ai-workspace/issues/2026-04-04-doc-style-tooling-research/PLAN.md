@@ -4,7 +4,7 @@ tags: [ai-workspace, docs, tooling, lint]
 issue: knowledge/ai-workspace/issues/2026-04-04-doc-style-tooling-research/README.md
 description: 基于 lint-md 的替代方案调研与 PoC 执行记录
 created: 2026-04-04
-updated: 2026-04-04
+updated: 2026-06-01
 ---
 
 # 文档规范检查工具替代调研 —— 实施方案
@@ -38,7 +38,10 @@ updated: 2026-04-04
 
 ### a. 结论
 
-`lint-md` 是目前最贴近 [document-style-guide](https://github.com/ruanyf/document-style-guide) 的现成检查工具，可替代一大块中文文案规范，但仍无法单工具 100% 覆盖当前脚本。
+`lint-md` 是目前最贴近 [document-style-guide](https://github.com/ruanyf/document-style-guide) 的现成检查工具。
+
+- 可替代一大块中文文案规范。
+- 仍无法单工具 100% 覆盖当前脚本。
 
 ### b. 建议
 
@@ -82,9 +85,9 @@ npx --yes @lint-md/cli "knowledge/**/*.md"
 
 ## 0x07 已执行改造
 
-- 新增并集中管理配置文件到 `config/lint/`：
-  - `config/lint/lint-md.json`（关闭 `no-space-in-inline-code`，避免误报阻塞）
-  - `config/lint/markdownlint-cli2.jsonc`（启用 MD001/MD040/MD047，关闭其余默认规则）
+- 新增并集中管理配置文件到 `scripts/config/lint/`：
+  - `scripts/config/lint/lint-md.json`（关闭 `no-space-in-inline-code`，避免误报阻塞）
+  - `scripts/config/lint/markdownlint-cli2.jsonc`（启用 MD001/MD040/MD047，关闭其余默认规则）
 - 更新 `.pre-commit-config.yaml`：
   - 新增 `lint-md` Hook：`npx --yes @lint-md/cli`
   - 新增 `markdownlint-cli2` Hook：`npx --yes markdownlint-cli2`
@@ -109,5 +112,6 @@ npx --yes @lint-md/cli "knowledge/**/*.md"
 - markdownlint 规则文档（含 MD001 / MD040 / MD047）：https://github.com/DavidAnson/markdownlint
 - markdownlint-cli2（CLI、配置与 pre-commit 示例）：https://github.com/DavidAnson/markdownlint-cli2
 
----
-*制定日期：2026-04-04*
+## 0x09 制定日期
+
+2026-04-04

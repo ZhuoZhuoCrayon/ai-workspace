@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-05-31
+> 最后更新：2026-06-01
 
 ## 0x01 项目知识
 
@@ -17,6 +17,10 @@
 
 ## 0x02 最近更新
 
+- 2026-06-01：更新
+  [文档规范检查工具替代调研](./ai-workspace/issues/2026-04-04-doc-style-tooling-research/README.md)
+  至 ai-workspace
+  （完成文档检查配置目录平移，统一入口为 `scripts/config/lint/`）
 - 2026-05-31：新增
   [错误视图 tRPC 场景适配](./bkmonitor/issues/2026-05-31-apm-error-view-trpc-adaptation/README.md)
   至 bkmonitor
