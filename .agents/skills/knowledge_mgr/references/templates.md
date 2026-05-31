@@ -1,12 +1,4 @@
----
-title: 知识对象模板
-tags: [template, documentation]
-description: 知识对象（issue、plan、snippet、troubleshooting）的标准文档模板
-created: 2026-02-09
-updated: 2026-05-08
----
-
-# 知识对象模板
+# Templates Guide
 
 只在创建知识对象时阅读本文件。
 
