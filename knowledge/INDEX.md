@@ -30,11 +30,3 @@
   [APM SaaS 配置](./bkmonitor/snippets/apm-saas-config.md)
   至 bkmonitor
   （合并返回码重定义与服务关联日志全量同步脚本，并从 private 迁出日志关联片段）
-- 2026-05-22：更新
-  [APM 预计算适配共享数据源](./bkmonitor/issues/2026-05-14-apm-precalc-shared-multi-app/README.md)
-  至 bkmonitor
-  （按 PR #1327 收敛 BMW 预计算共享数据源方案：以 `is_shared`、`BaseInfo.AppKey()` 和当前 Dispatcher 行为为准）
-- 2026-05-22：更新
-  [Grafana 仪表盘导入](./bkmonitor/snippets/grafana-dashboard.md)
-  至 bkmonitor
-  （补充 Django shell 批量导入 BKCI 仪表盘片段，并保留单业务快速导入示例）
