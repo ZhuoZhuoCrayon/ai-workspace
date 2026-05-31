@@ -70,6 +70,13 @@ skills-mount:
 	blacklist='$(strip $(SKILLS_MOUNT_BLACKLIST))'; \
 	for target in "$${targets[@]}"; do \
 		mkdir -p "$$target/skills"; \
+		find "$$target/skills" -maxdepth 1 -type l | while read -r link; do \
+			link_target="$$(readlink "$$link")"; \
+			if [[ "$$link_target" == "$$workspace_root/$(SKILLS_DIR)"/* ]] && [ ! -e "$$link_target" ]; then \
+				rm -f "$$link"; \
+				echo "Removed stale mount $$link"; \
+			fi; \
+		done; \
 	done; \
 	for skill_dir in $(SKILLS_DIR)/*; do \
 		[ -d "$$skill_dir" ] || continue; \

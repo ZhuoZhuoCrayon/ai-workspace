@@ -2,12 +2,12 @@
 !.gitignore
 !skills/
 /skills/*
-!skills/knowledge_mgr
-!skills/project_mgr
-!skills/iwiki_sync
+!skills/knowledge-mgr
+!skills/project-mgr
+!skills/iwiki-sync
 !skills/work-schedule
 !skills/doc-style
-!skills/code_review
+!skills/code-review
 !skills/git-workflow
 !skills/dev-env
 !skills/code-style

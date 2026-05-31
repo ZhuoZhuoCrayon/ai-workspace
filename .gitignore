@@ -9,12 +9,12 @@ private/
 .claude/*
 !.claude/skills/
 .claude/skills/*
-!.claude/skills/knowledge_mgr
-!.claude/skills/project_mgr
-!.claude/skills/iwiki_sync
+!.claude/skills/knowledge-mgr
+!.claude/skills/project-mgr
+!.claude/skills/iwiki-sync
 !.claude/skills/work-schedule
 !.claude/skills/doc-style
-!.claude/skills/code_review
+!.claude/skills/code-review
 !.claude/skills/git-workflow
 !.claude/skills/dev-env
 !.claude/skills/code-style
