@@ -18,13 +18,13 @@
 ## 0x02 最近更新
 
 - 2026-06-01：更新
+  [错误视图 tRPC 场景适配](./bkmonitor/issues/2026-05-31-apm-error-view-trpc-adaptation/README.md)
+  至 bkmonitor
+  （精简为特殊 `exception` event 与 `exception_refer` 联动方案，并补齐 PLAN 模板章节）
+- 2026-06-01：更新
   [文档规范检查工具替代调研](./ai-workspace/issues/2026-04-04-doc-style-tooling-research/README.md)
   至 ai-workspace
   （完成文档检查配置目录平移，统一入口为 `scripts/config/lint/`）
-- 2026-05-31：新增
-  [错误视图 tRPC 场景适配](./bkmonitor/issues/2026-05-31-apm-error-view-trpc-adaptation/README.md)
-  至 bkmonitor
-  （定义 `exception_type + exception_refer` 联动协议，确认 `$exception_refer` 可通过 scene_view 变量链路传递）
 - 2026-05-30：更新
   [Skills-First 架构演进](./ai-workspace/issues/2026-04-06-skills-first-architecture/README.md)
   至 ai-workspace

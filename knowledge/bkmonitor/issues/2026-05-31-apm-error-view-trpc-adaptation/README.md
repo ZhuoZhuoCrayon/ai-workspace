@@ -3,7 +3,7 @@ title: 错误视图 tRPC 场景适配
 tags: [apm, error-view, trpc, rpc, exception-type, scene-view]
 description: 让 APM 错误视图在 tRPC/RPC 返回码错误中统一构造异常语义，并支持任务列表、趋势、详情和饼图联动
 created: 2026-05-31
-updated: 2026-05-31
+updated: 2026-06-01
 ---
 
 # 错误视图 tRPC 场景适配

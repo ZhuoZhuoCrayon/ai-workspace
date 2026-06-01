@@ -3,7 +3,7 @@
 
 | 文件                                                                                                     | 标签                                                        | 摘要                                                      | 更新日期       |
 |------|------|------|---------|
-| [错误视图 tRPC 场景适配](./2026-05-31-apm-error-view-trpc-adaptation/README.md) | `apm` `error-view` `trpc` `rpc` `exception-type` `scene-view` | 让 APM 错误视图在 tRPC/RPC 返回码错误中统一构造异常语义，并支持任务列表、趋势、详情和饼图联动 | 2026-05-31 |
+| [错误视图 tRPC 场景适配](./2026-05-31-apm-error-view-trpc-adaptation/README.md) | `apm` `error-view` `trpc` `rpc` `exception-type` `scene-view` | 让 APM 错误视图在 tRPC/RPC 返回码错误中统一构造异常语义，并支持任务列表、趋势、详情和饼图联动 | 2026-06-01 |
 | [APM 预计算适配共享数据源](./2026-05-14-apm-precalc-shared-multi-app/README.md) | `apm` `pre-calculate` `shared-datasource` `multi-app` `bmw` | 让单 BMW 预计算任务感知共享 data_id 下的多个应用，不破坏现有任务模型与持久化键 | 2026-05-22 |
 | [APM 支持跨应用共享数据源](./2026-03-03-apm-shared-datasource/README.md)                                         | `apm` `datasource` `es` `shared-storage`                  | 支持多 APM 应用复用同一数据源，压缩 ES 索引数量，降低数据链路资源消耗                 | 2026-05-14 |
 | [APM Span 内置指标支持声明式引用](./2026-05-07-apm-span-builtin-metric-declarative-reference/README.md) | `apm` `span` `metric-group` `trace` `unify-query` `declarative` | 将 Trace 概览图的 Span 指标查询从手工参数拼接收敛为可复用的声明式指标算子 | 2026-05-07 |
