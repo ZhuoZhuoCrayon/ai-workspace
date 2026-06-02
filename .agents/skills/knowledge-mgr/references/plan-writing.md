@@ -19,6 +19,7 @@
 * 约束结构：说明代码应按什么边界、入口和差异表达方式组织，提前排除冗余实现形态。
 * 以终为始：以最终交付的架构设计、开发方案为核心，其他内容都围绕它们展开，禁止为了写而写、为了像样板而写。
 * 架构师视角：注重架构设计、协议与开发方案的准确、直击本质表达，禁止实现流水账式的过程记录，禁止直接堆叠细节性的代码变更。
+* 始终保持简洁、高信息密度、逻辑清晰，禁止冗长、啰嗦、结构混乱的表达方式。
 
 ### b. 保持实时性
 
@@ -63,15 +64,15 @@
 * 它必须说明系统如何重新组织，而不是说明要改哪些功能。
 * 若这句话只能写成“新增 X”“支持 Y”“改造 Z”，说明方案还没有进入架构层。
 
-3）找到复杂度来源，确认核心收敛点：
+3）**【CRITICAL（必须执行，不可协商）】** 找到复杂度来源，确认核心收敛点：
 * 收敛点形态：它可能是一个对象模型、一个协议关系、一个核心工作流或它们的组合。
 * 明确混乱来源：不停留表象，寻找核心矛盾（语义混用 / 边界泄漏 / 规则重复 / 职责错位 / 生命周期不清等）。
 * 一句话说明收敛点：当前差异从哪里来，应由哪个对象或协议承载，最终在哪个稳定入口收敛，复杂度来源必须能解释为什么局部补丁不够。
 * 注重回归：若说不清差异归属，就没有进入架构设计，需要回到第一步，继续阅读代码和相关知识对象，直到找到核心收敛点。
 
-4）**【CRITICAL（必须执行，不可协商）】** 围绕核心收敛点的调研能力：
+4）围绕核心收敛点的调研能力：
 * 项目调研：当前项目是否已具备或正在具备核心收敛点所需的对象模型、协议关系或核心工作流。
-* 业界调研：
+* 必要时进行业界调研：
   * 是否有业界通用的设计模式、开源项目或最佳实践能提供参考，是否有前车之鉴的失败案例需要规避。
   * 禁止凭空假象，需要回归代码、文档、社区资源进行调研，找到具体的模式、项目或案例进行分析。
 
@@ -102,6 +103,87 @@
 
 * 专注核心架构、协议关系、核心工作流和关键边界的设计与说明。
 * 禁止涉及过于具体开发落点、接口改造、迁移步骤或实现结构约束。
+
+ **【CRITICAL（必须执行，不可协商）】** 如何区分架构设计与开发方案：
+
+#### 架构设计
+
+关注核心收敛点的设计与说明，注重关键、必要的协议，确保对开发方案由设计指导：
+
+```mermaid
+flowchart LR
+    A["SpanHandler"] --> B["get_exception_events"]
+    A --> C["build_exception_params"]
+
+    B --> D["ErrorListResource"]
+    B --> E["QueryExceptionDetailEventResource"]
+    B --> F["QueryExceptionEndpointResource"]
+
+    C --> G["QueryExceptionDetailEventResource"]
+    C --> H["QueryExceptionTypeGraphResource"]
+    C --> F
+
+    D --> I["scene_view fields"]
+    I --> J["$exception_type + $exception_refer"]
+    J --> E
+    J --> F
+    J --> H
+```
+
+1）`SpanHandler` 统一声明条件参数构造函数：
+
+```text
+build_exception_params(
+    exception_type: str, exception_refer: str | None, operator_key: str = "op",
+) -> list[dict[str, Any]]
+```
+
+2）`exception_type` 过滤机制
+
+`QueryExceptionDetailEventResource` & `QueryExceptionEndpointResource`：
+* 使用 `build_exception_params` 进行前置过滤。 
+* 由于同一 Span 内可能存在多个异常事件，现有的后置事件匹配仍然保留。
+
+* `QueryExceptionTypeGraphResource`：按相同映射构造 UnifyQuery 条件。
+
+#### 开发方案
+
+开发方案更关注代码落点，即架构设计中提及的核心对象、协议的优雅实现指导。
+
+| 变更点                                                                                    | 目标                                        |
+|----------------------------------------------------------------------------------------|-------------------------------------------|
+| **[Keep]** `process_rpc_span(span)`                                                    | 保留 PR #10784 已合入能力，继续把返回码 Span 补成逻辑异常事件。  |
+| **[Add]** `get_exception_events(span)` *[1]*                                           | 返回标准逻辑异常事件，空列表由 resource 保持 `unknown` 兼容。 |
+| **[Add]** `build_exception_params(exception_type, exception_refer, operator_key="op")` | 输出查询条件参数，供详情、趋势和调用链 URL 复用。               |
+
+* *[1] 返回标准协议*：`get_exception_events(span)` 返回字段如下：
+
+| 字段                  | 类型       | 来源字段                                                                                                                           | 说明                        |
+|---------------------|----------|--------------------------------------------------------------------------------------------------------------------------------|---------------------------|
+| `exception_type`    | `string` | [a] tRPC 场景：`attributes.rpc.error_code` > `attributes.trpc.status_code`<br />[b] 标准场景：`events.attributes.exception.type`       | 页面展示、分组和过滤值。              |
+| `exception_refer`   | `string` | [a] tRPC 场景：命中字段名 `rpc.error_code` > `trpc.status_code`<br />[b] 标准场景：`events.attributes.exception.type`                       | `exception_type` 的来源字段标识。 |
+| `exception_alias`   | `string` | [a] tRPC 场景：逻辑事件 `exception.alias`<br />[b] 标准场景：`exception.alias` > `exception_type`                                          | 详情标题展示值。                  |
+| `exception_message` | `string` | [a] tRPC 场景：`attributes.rpc.error_message` > `attributes.trpc.status_msg`<br />[b] 标准场景：`exception.message` > `status.message` | 详情副标题候选。                  |
+| `timestamp`         | `number` | [a] tRPC 场景：`span.start_time`<br />[b] 标准场景：`event.timestamp`                                                                  | 详情排序时间。                   |
+| `stacktrace`        | `string` | [a] tRPC 场景：空值<br />[b] 标准场景：`exception.stacktrace`                                                                            | 返回码逻辑事件不构造堆栈。             |
+
+条件参数映射：
+
+```text
+空 exception_type
+  -> []
+
+exception_type = unknown 且 exception_refer 为空
+  -> []
+
+exception_refer 为空或 events.attributes.exception.type
+  -> events.name = exception
+  -> events.attributes.exception.type = $exception_type
+
+exception_refer 不为空
+  -> attributes.${exception_refer} = $exception_type
+```
+
 
 ### c. Good case
 
@@ -244,7 +326,6 @@ flowchart LR
 * 开发方案必须能回答三件事：「在哪声明」「谁来调用」「在哪收敛」。
 * 写清上层通过哪个入口拿到这个能力，下层通过哪个协议接收上下文，中间在哪里转换。
 * 保持严谨：禁止未仔细阅读代码和分析，想当然说「建议统一输出下面的内部结构」，列举出来的字段或接口不在代码里，或者说了个接口名但没说明它在哪个类、文件或模块里。
-
 
 5）处理兼容与迁移：如果涉及旧协议、旧数据、旧入口或灰度路径，写清兼容策略、迁移方式和废弃边界。
 
@@ -504,7 +585,6 @@ if obj.is_shared != options.get("is_shared", False):
 
 ## 0x06 实施进展
 
-
 ### a. 原则
 
 1）时间：统一使用 `YYYY-MM-DD HH:00` 格式，精确到小时，条目按时间倒序。
@@ -546,9 +626,21 @@ Good：
 
 2）版本锚点
 
+一个方案会拆分为 1～N 个 PR：
+
 - `分支` 使用当前实际分支名，占位统一写作 `<branch_name>`。
 - `PR` 必须写成 Markdown 链接，不使用纯编号或裸 URL。
 - `状态`：进行中 - 🔄 / 已完成 - ✅，在代码、方案 Review 过程中持续获取和更新。
+
+样例：
+
+| 状态 | 分支                                                      | 里程碑                   | PR                                                                                            |
+|----|---------------------------------------------------------|-----------------------|-----------------------------------------------------------------------------------------------|
+| ✅  | `feat/trpc_error_display_info_opt/#1010158081134636736` | 里程碑 1：错误详情返回码信息展示     | [TencentBlueKing/bk-monitor #10784](https://github.com/TencentBlueKing/bk-monitor/pull/10784) |
+| 🔄 | `<branch_name>`                                         | 里程碑 2：错误视图返回码联动适配     | 待创建                                                                                           |
+| 🔄 | `<branch_name>`                                         | 里程碑 3：错误详情支持展示返回码备注信息 | 待创建                                                                                           |
+
+**【CRITICAL（必须执行，不可协商）】** 状态同步：在代码 Review、记录实施进展等契机，及时记录未记录的 PR，通过 `gh` CLI 更新 PR 状态。
 
 
 ## 0x08 自检
