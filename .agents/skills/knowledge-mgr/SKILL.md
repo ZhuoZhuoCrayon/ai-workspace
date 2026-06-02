@@ -28,10 +28,9 @@ description: >
 
 
 知识对象脱敏隔离（`visibility`）：
-* 【默认】`public`（公开）：所有知识对象都存放在 `knowledge/` 下，公开可见。
-* private（私有）：涉及个人隐私或敏感信息的知识对象存放在 `private/knowledge/` 下，不通过 Git 同步。
-
-public / private 分域维护，不跨域合并计数与索引。
+* 【默认】【公开】`public`：所有知识对象都存放在 `knowledge/` 下，公开可见。
+* 【私有】`private`：涉及个人隐私或敏感信息的知识对象存放在 `private/knowledge/` 下，不通过 Git 同步。
+* public / private 分域维护，不跨域合并计数与索引。
 
 
 ## 0x02 对象模型
@@ -48,7 +47,6 @@ public / private 分域维护，不跨域合并计数与索引。
 | troubleshooting | `troubleshooting/<title>.md`          | 单文件            | 排障经验类知识对象     |
 
 * *[1] issue 是目录级逻辑单元，`README.md + PLAN.md = 1` 个知识对象，plan 不单独入索引，仅由 issue 条目代表整个 issue 目录。*
-
 
 ### b. 知识对象规范
 
@@ -68,16 +66,16 @@ public / private 分域维护，不跨域合并计数与索引。
 
 #### 内容规范
 
-【CRITICAL（必须执行，不可协商）】确认知识对象分类，读取对应规范。
+**【CRITICAL（必须执行，不可协商）】** 确认知识对象分类，读取对应规范。
 * 禁止全量阅读所有分类的规范，必须先确认分类再读对应规范，避免信息过载与混淆。
 * 只在编辑、创建或评审知识对象时才需要阅读规范，单纯检索、引用、索引操作不需要阅读规范。
 
-| 知识对象分类          | 内容规范                                                             |
-|-----------------|------------------------------------------------------------------|
-| issue           | [Issue Writing](references/issue-writing.md)                     |
-| plan            | [Plan Writing](references/plan-writing.md)                       |
-| snippet         | [Snippet Writing](references/snippet-writing.md)                 |
-| troubleshooting | [Troubleshooting Writing](references/troubleshooting-writing.md) |
+| 知识对象分类          | 内容规范                                                             | 样例                                  |
+|-----------------|------------------------------------------------------------------|-------------------------------------|
+| issue           | [Issue Writing](references/issue-writing.md)                     |                                     |
+| plan            | [Plan Writing](references/plan-writing.md)                       | [方案样例](references/plan-example.md) |
+| snippet         | [Snippet Writing](references/snippet-writing.md)                 |                                     |
+| troubleshooting | [Troubleshooting Writing](references/troubleshooting-writing.md) |                                     |
 
 ## 0x02 场景与操作指南
 

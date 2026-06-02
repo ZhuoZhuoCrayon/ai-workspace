@@ -9,8 +9,6 @@ updated: 2026-06-02
 
 # 错误视图 tRPC 场景适配 —— 实施方案
 
-> 基于 [README.md](./README.md) 制定。
-
 ## 0x01 调研与约束
 
 ### a. 结构判断
@@ -32,12 +30,12 @@ tRPC/RPC 返回码错误没有真实 `exception` 事件，错误值来自 `attri
 1. `scene_view` 根据 `options.selector_panel.targets[].fields` 映射生成 `viewOptions.filters`。
 2. 下游 panel 通过 `VariablesService.transformVariables` 替换 `$exception_type`、`$endpoint` 等变量。
 
-| 页面区域 | 后端入口                                 | 当前职责                                      | 改造后职责                                         |
-|------|--------------------------------------|-------------------------------------------|-----------------------------------------------|
+| 页面区域          | 后端入口                                 | 当前职责                                      | 改造后职责                                         |
+|---------------|--------------------------------------|-------------------------------------------|-----------------------------------------------|
 | 错误列表 selector | `apm_metric.errorList`               | 输出 `service`、`endpoint`、`exception_type`。 | 输出 `exception_type` 与 `exception_refer`。      |
-| 趋势   | `apm_meta.queryExceptionTypeGraph`   | 按 `events.attributes.exception.type` 过滤。  | 按 `exception_refer` 构造时间序列查询条件。               |
-| 详情   | `apm_meta.queryExceptionDetailEvent` | 详情链路已能补返回码事件。                             | 按 `exception_type + exception_refer` 精确过滤详情行。 |
-| 饼图   | `apm_meta.queryExceptionEndpoint`    | 查后按异常类型聚合。                                | 前置收窄后按逻辑异常事件聚合。                               |
+| 趋势            | `apm_meta.queryExceptionTypeGraph`   | 按 `events.attributes.exception.type` 过滤。  | 按 `exception_refer` 构造时间序列查询条件。               |
+| 详情            | `apm_meta.queryExceptionDetailEvent` | 详情链路已能补返回码事件。                             | 按 `exception_type + exception_refer` 精确过滤详情行。 |
+| 饼图            | `apm_meta.queryExceptionEndpoint`    | 查后按异常类型聚合。                                | 前置收窄后按逻辑异常事件聚合。                               |
 
 ### c. 后端瓶颈
 
@@ -193,21 +191,16 @@ exception_refer 不为空
 
 ### c. 下游资源
 
-下游资源新增 `exception_refer` 请求参数。
+下游资源按 `exception_refer` 切换异常来源字段。
 
-`query_span` 类接口先用 `build_exception_params` 前置收窄候选 Span，资源输出再用 `get_exception_events` 做事件级匹配。
+| 资源 *[1]*                            | 改造方式                      | 边界                                                |
+|-------------------------------------|---------------------------|---------------------------------------------------|
+| `QueryExceptionDetailEventResource` | *[2]*                     | 移除 `_skip_exception_type_filter` 绕过逻辑。            |
+| `QueryExceptionEndpointResource`    | *[2]*                     | 避免同一 Span 内其他异常事件混入。                              |
+| `QueryExceptionTypeGraphResource`   | 复用同一字段映射生成 `q.filter` 条件。 | 不直接传 `filter_params`，保持 `graph_unify_query` 返回结构。 |
 
-| 资源 | 改造方式 | 边界 |
-| --- | --- | --- |
-| `QueryExceptionDetailEventResource` | `query_span` 前追加 `SpanHandler.build_exception_params`。 | 保留详情行事件级匹配，移除 `_skip_exception_type_filter` 绕过逻辑。 |
-| `QueryExceptionEndpointResource` | `query_span` 前追加 `SpanHandler.build_exception_params`。 | 保留聚合前事件级匹配，避免同一 Span 内其他异常事件混入。 |
-| `QueryExceptionTypeGraphResource` | 复用同一字段映射生成 `q.filter` 条件。 | 不直接传 `filter_params`，保持 `graph_unify_query` 返回结构。 |
-
-兼容策略：
-
-- 请求不传 `exception_refer` 时按真实异常路径处理。
-- 概览态不传 `exception_type` 时不追加异常类型条件。
-- `unknown` 继续表示无真实异常事件且无返回码逻辑事件的错误 Span。
+* *[1] 三个资源统一新增可选请求参数 `exception_refer`，由 `scene_view` 选中态 `panels[].targets[].data` 传入。*
+* *[2] `query_span` 前追加 `SpanHandler.build_exception_params`，并且统一使用 `get_exception_events` 标准化事件。*
 
 ### d. `scene_view` 配置
 
@@ -238,33 +231,15 @@ exception_refer 不为空
 
 ## 0x04 验收与验证
 
-### a. 验收矩阵
-
-| 场景 | 操作 | 预期 |
-| --- | --- | --- |
-| 应用错误页概览态 | 不选中错误列表行。 | 趋势、详情和饼图保持原有全量错误口径。 |
-| 应用错误页真实异常 | 选中真实异常行。 | 请求携带 `exception_refer = events.attributes.exception.type`，下游只展示该真实异常类型。 |
-| 应用错误页 tRPC 返回码 | 选中 tRPC 返回码行。 | 请求携带 `exception_refer = trpc.status_code`，下游只展示该返回码错误。 |
-| 应用错误页 RPC 返回码 | 选中 RPC 返回码行。 | 请求携带 `exception_refer = rpc.error_code`，下游只展示该返回码错误。 |
-| 服务错误页 | 在 service 与 component 两类服务错误视图重复上述场景。 | 三个同构页面联动行为一致。 |
-| 饼图联动 | 选中返回码错误行。 | `QueryExceptionEndpointResource` 前置收窄后，聚合结果只统计该返回码来源。 |
-| 调用链跳转 | 从返回码错误行点击调用链。 | Trace 检索 `where` 使用返回码字段，而不是 `events.attributes.exception.type`。 |
-
-### b. 测试建议
-
-优先补充后端单元测试，覆盖协议函数和资源行为：
-
-| 测试对象 | 建议用例 | 断言重点 |
-| --- | --- | --- |
-| `SpanHandler.get_exception_events` | `test_get_exception_events_prioritize_real_exception` | 真实异常存在时不生成返回码逻辑事件。 |
-| `SpanHandler.get_exception_events` | `test_get_exception_events_build_rpc_code_event` | RPC 返回码输出 `exception_type` 与 `exception.refer`。 |
-| `SpanHandler.get_exception_events` | `test_get_exception_events_build_trpc_code_event` | tRPC 返回码输出 `exception_type` 与 `exception.refer`。 |
-| `SpanHandler.build_exception_params` | `test_build_exception_params_for_real_exception` | 真实异常追加 `events.name` 与异常类型条件。 |
-| `SpanHandler.build_exception_params` | `test_build_exception_params_for_rpc_and_trpc_code` | 返回码条件映射到 `attributes.*` 字段。 |
-| `ErrorListResource` | `test_error_list_emit_exception_refer_without_changing_group_key` | 列表输出 `exception_refer`，分组 key 不新增来源字段。 |
-| `QueryExceptionDetailEventResource` | `test_exception_detail_prefilter_and_match_by_exception_refer` | 查询前收窄 Span，详情行仍按逻辑异常事件匹配。 |
-| `QueryExceptionEndpointResource` | `test_exception_endpoint_prefilter_and_match_by_exception_refer` | 查询前收窄 Span，饼图聚合仍按逻辑异常事件匹配。 |
-| `QueryExceptionTypeGraphResource` | `test_exception_type_graph_filter_by_exception_refer` | UnifyQuery 条件按来源字段切换。 |
+| 场景             | 操作                                    | 预期                                                                      |
+|----------------|---------------------------------------|-------------------------------------------------------------------------|
+| 应用错误页概览态       | 不选中错误列表行。                             | 趋势、详情和饼图保持原有全量错误口径。                                                     |
+| 应用错误页真实异常      | 选中真实异常行。                              | 请求携带 `exception_refer = events.attributes.exception.type`，下游只展示该真实异常类型。 |
+| 应用错误页 tRPC 返回码 | 选中 tRPC 返回码行。                         | 请求携带 `exception_refer = trpc.status_code`，下游只展示该返回码错误。                  |
+| 应用错误页 RPC 返回码  | 选中 RPC 返回码行。                          | 请求携带 `exception_refer = rpc.error_code`，下游只展示该返回码错误。                    |
+| 服务错误页          | 在 service 与 component 两类服务错误视图重复上述场景。 | 三个同构页面联动行为一致。                                                           |
+| 饼图联动           | 选中返回码错误行。                             | `QueryExceptionEndpointResource` 前置收窄后，聚合结果只统计该返回码来源。                   |
+| 调用链跳转          | 从返回码错误行点击调用链。                         | Trace 检索 `where` 使用返回码字段，而不是 `events.attributes.exception.type`。        |
 
 配置验证：
 
@@ -303,7 +278,7 @@ exception_refer 不为空
 
 ### b. 版本锚点
 
-| 状态 | 分支 | 里程碑 | PR |
-| --- | --- | --- | --- |
-| ✅ | `feat/trpc_error_display_info_opt/#1010158081134636736` | 里程碑 1：错误详情返回码信息展示 | [#10784](https://github.com/TencentBlueKing/bk-monitor/pull/10784) |
-| 🔄 | `<branch_name>` | 里程碑 2：错误视图返回码联动适配 | 待创建 |
+| 状态 | 分支                                                      | 里程碑               | PR                                                                 |
+|----|---------------------------------------------------------|-------------------|--------------------------------------------------------------------|
+| ✅  | `feat/trpc_error_display_info_opt/#1010158081134636736` | 里程碑 1：错误详情返回码信息展示 | [#10784](https://github.com/TencentBlueKing/bk-monitor/pull/10784) |
+| 🔄 | `<branch_name>`                                         | 里程碑 2：错误视图返回码联动适配 | 待创建                                                                |
