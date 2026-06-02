@@ -30,12 +30,12 @@ tRPC/RPC 返回码错误没有真实 `exception` 事件，错误值来自 `attri
 1. `scene_view` 根据任务列表 `target` 的 `fields` 映射生成 `viewOptions.filters`。
 2. 下游 panel 通过 `VariablesService.transformVariables` 替换 `$exception_type`、`$endpoint` 等变量。
 
-| 页面区域 | 后端入口 | 当前职责 | 改造后职责 |
-| --- | --- | --- | --- |
-| 任务列表 | `apm_metric.errorList` | 输出 `service`、`endpoint`、`exception_type`。 | 输出 `exception_type` 与 `exception_refer`。 |
-| 趋势 | `apm_meta.queryExceptionTypeGraph` | 按 `events.attributes.exception.type` 过滤。 | 按 `exception_refer` 构造时间序列查询条件。 |
-| 详情 | `apm_meta.queryExceptionDetailEvent` | 详情链路已能补返回码事件。 | 按 `exception_type + exception_refer` 精确过滤详情行。 |
-| 饼图 | `apm_meta.queryExceptionEndpoint` | 查后按异常类型聚合。 | 前置收窄后按逻辑异常事件聚合。 |
+| 页面区域 | 后端入口                                 | 当前职责                                      | 改造后职责                                         |
+|------|--------------------------------------|-------------------------------------------|-----------------------------------------------|
+| 任务列表 | `apm_metric.errorList`               | 输出 `service`、`endpoint`、`exception_type`。 | 输出 `exception_type` 与 `exception_refer`。      |
+| 趋势   | `apm_meta.queryExceptionTypeGraph`   | 按 `events.attributes.exception.type` 过滤。  | 按 `exception_refer` 构造时间序列查询条件。               |
+| 详情   | `apm_meta.queryExceptionDetailEvent` | 详情链路已能补返回码事件。                             | 按 `exception_type + exception_refer` 精确过滤详情行。 |
+| 饼图   | `apm_meta.queryExceptionEndpoint`    | 查后按异常类型聚合。                                | 前置收窄后按逻辑异常事件聚合。                               |
 
 ### c. 后端瓶颈
 
@@ -46,13 +46,6 @@ PR [#10784](https://github.com/TencentBlueKing/bk-monitor/pull/10784) 已合入�
 当前瓶颈在联动层：任务列表、趋势和饼图仍以 `events.attributes.exception.type` 作为唯一异常来源。
 
 瓶颈表现：`scene_view` 只传递 `$exception_type`，下游无法判断来源字段。
-
-### d. 本轮边界
-
-- 不改 Span 存储结构，不要求采集端补真实异常事件。
-- `exception_type` 继续表示展示、分组和过滤值。
-- `exception_refer` 只表示 `exception_type` 的来源字段。
-- 真实 `exception` 事件优先于返回码字段。
 
 ## 0x02 架构设计
 
@@ -81,33 +74,10 @@ flowchart TD
 
 核心字段：
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `exception_type` | `string` | 是 | 页面展示、分组和过滤值，例如 `TimeoutError`、`101`、`unknown`。 |
-| `exception_refer` | `string` | 否 | `exception_type` 的来源字段，允许值为 `events.attributes.exception.type`、`rpc.error_code`、`trpc.status_code`。 |
-
-展示标题、消息和堆栈信息属于资源输出层，不放在架构协议中重复定义。
-
-### b. 条件参数协议
-
-`SpanHandler` 统一声明条件参数构造函数：
-
-```text
-build_exception_params(
-    exception_type: str,
-    exception_refer: str | None,
-    operator_key: str = "op",
-) -> list[dict[str, Any]]
-```
-
-函数只把联动协议转换为查询条件参数，供 `query_span.filter_params` 和调用链 `where` 复用。
-
-`query_span` 场景可用该参数前置收窄候选 Span，最终输出仍由逻辑异常事件做事件级匹配。
-
-约束：
-
-- `exception_refer` 必须走白名单映射，禁止把请求值直接拼成任意字段路径。
-- 返回码路径只匹配同一返回码值，不借 `_skip_exception_type_filter` 绕过过滤。
+| 字段                | 类型       | 必填 | 说明                                                                                                       |
+|-------------------|----------|----|----------------------------------------------------------------------------------------------------------|
+| `exception_type`  | `string` | 是  | 页面展示、分组和过滤值，例如 `TimeoutError`、`101`、`unknown`。                                                           |
+| `exception_refer` | `string` | 否  | [a] tRPC 场景：命中字段名 `rpc.error_code` > `trpc.status_code`<br />[b] 标准场景：`events.attributes.exception.type` |
 
 ### c. 职责边界
 
@@ -131,14 +101,22 @@ flowchart LR
     J --> H
 ```
 
-职责说明：
+#### `SpanHandler` 统一声明条件参数构造函数
 
-- `SpanHandler`：收口逻辑异常事件读取和条件参数构造。
-- `ErrorListResource`：生产联动上下文，分组 key 仍保持 `service + endpoint + exception_type`。
-- `QueryExceptionDetailEventResource`：可用 `build_exception_params` 前置缩小 Span 查询范围，并在事件层精确匹配。
-- `QueryExceptionTypeGraphResource`：按相同映射构造 UnifyQuery 条件。
-- `QueryExceptionEndpointResource`：可用 `build_exception_params` 前置缩小 Span 查询范围，再按逻辑异常事件聚合。
-- `scene_view` 配置：只传递联动上下文，不承载业务判断。
+```text
+build_exception_params(
+    exception_type: str, exception_refer: str | None, operator_key: str = "op",
+) -> list[dict[str, Any]]
+```
+
+#### `exception_type` 过滤机制
+
+`QueryExceptionDetailEventResource` & `QueryExceptionEndpointResource`：
+* 使用 `build_exception_params` 进行前置过滤。 
+* 由于同一 Span 内可能存在多个异常事件，现有的后置事件匹配仍然保留。
+
+* `QueryExceptionTypeGraphResource`：按相同映射构造 UnifyQuery 条件。
+
 
 ## 0x03 开发方案
 
@@ -146,25 +124,23 @@ flowchart LR
 
 承接「逻辑异常协议」和「条件参数协议」，在 `<源码>` bk-monitor `bkmonitor/packages/apm_web/handlers/span_handler.py` 收口公共能力。
 
-| 变更点 | 目标 |
-| --- | --- |
-| **[Keep]** `process_rpc_span(span)` | 保留 PR #10784 已合入能力，继续把返回码 Span 补成逻辑异常事件。 |
-| **[Add]** `get_exception_events(span)` *[1]* | 返回标准逻辑异常事件，空列表由 resource 保持 `unknown` 兼容。 |
-| **[Add]** `build_exception_params(exception_type, exception_refer, operator_key="op")` | 输出查询条件参数，供详情、趋势和调用链 URL 复用。 |
+| 变更点                                                                                    | 目标                                        |
+|----------------------------------------------------------------------------------------|-------------------------------------------|
+| **[Keep]** `process_rpc_span(span)`                                                    | 保留 PR #10784 已合入能力，继续把返回码 Span 补成逻辑异常事件。  |
+| **[Add]** `get_exception_events(span)` *[1]*                                           | 返回标准逻辑异常事件，空列表由 resource 保持 `unknown` 兼容。 |
+| **[Add]** `build_exception_params(exception_type, exception_refer, operator_key="op")` | 输出查询条件参数，供详情、趋势和调用链 URL 复用。               |
 
-*[1] 返回标准协议*：`get_exception_events(span)` 对真实异常事件和返回码逻辑事件输出同构字段。
+* *[1] 返回标准协议*：`get_exception_events(span)` 对真实异常事件和返回码逻辑事件输出同构字段。*
 
-| 字段 | 类型 | 来源字段 | 说明 |
-| --- | --- | --- | --- |
-| `exception_type` | `string` | 真实异常类型、`attributes.rpc.error_code` 或 `attributes.trpc.status_code` | 页面展示、分组和过滤值。 |
-| `exception_refer` | `string` | `events.attributes.exception.type` 或逻辑事件 `exception.refer` | 来源字段标识，返回码取值为 `rpc.error_code` 或 `trpc.status_code`。 |
-| `exception_alias` | `string` | `exception.alias` 或 `exception_type` | 详情标题展示值。 |
-| `exception_message` | `string` | `exception.message`、`attributes.rpc.error_message`、`attributes.trpc.status_msg` 或 `status.message` | 详情副标题候选。 |
-| `timestamp` | `number` | `event.timestamp` 或 `span.start_time` | 详情排序时间。 |
-| `stacktrace` | `string` | `exception.stacktrace` | 返回码逻辑事件为空。 |
-| `has_stack` | `bool` | `exception.stacktrace` 是否存在 | 列表堆栈状态判断。 |
-
-字段补齐原则：调用方若使用 `query_span.fields` 投影，必须补齐上表「来源字段」列所需字段。
+| 字段                  | 类型       | 来源字段                                                                                                                           | 说明                        |
+|---------------------|----------|--------------------------------------------------------------------------------------------------------------------------------|---------------------------|
+| `exception_type`    | `string` | [a] tRPC 场景：`attributes.rpc.error_code` > `attributes.trpc.status_code`<br />[b] 标准场景：`events.attributes.exception.type`       | 页面展示、分组和过滤值。              |
+| `exception_refer`   | `string` | [a] tRPC 场景：命中字段名 `rpc.error_code` > `trpc.status_code`<br />[b] 标准场景：`events.attributes.exception.type`                       | `exception_type` 的来源字段标识。 |
+| `exception_alias`   | `string` | [a] tRPC 场景：逻辑事件 `exception.alias`<br />[b] 标准场景：`exception.alias` > `exception_type`                                          | 详情标题展示值。                  |
+| `exception_message` | `string` | [a] tRPC 场景：`attributes.rpc.error_message` > `attributes.trpc.status_msg`<br />[b] 标准场景：`exception.message` > `status.message` | 详情副标题候选。                  |
+| `timestamp`         | `number` | [a] tRPC 场景：`span.start_time`<br />[b] 标准场景：`event.timestamp`                                                                  | 详情排序时间。                   |
+| `stacktrace`        | `string` | [a] tRPC 场景：空值<br />[b] 标准场景：`exception.stacktrace`                                                                            | 返回码逻辑事件不构造堆栈。             |
+| `has_stack`         | `bool`   | [a] tRPC 场景：`false`<br />[b] 标准场景：`exception.stacktrace` 是否存在                                                                  | 列表堆栈状态判断。                 |
 
 条件参数映射：
 
@@ -179,11 +155,8 @@ exception_refer 为空或 events.attributes.exception.type
   -> events.name = exception
   -> events.attributes.exception.type = $exception_type
 
-exception_refer = rpc.error_code
-  -> attributes.rpc.error_code = $exception_type
-
-exception_refer = trpc.status_code
-  -> attributes.trpc.status_code = $exception_type
+exception_refer 不为空
+  -> attributes.${exception_refer} = $exception_type
 ```
 
 `operator_key` 用于兼容两类调用方：`query_span.filter_params` 使用 `op`，调用链 URL 的 `where` 使用 `operator`。
@@ -192,14 +165,17 @@ exception_refer = trpc.status_code
 
 `ErrorListResource` 是 `scene_view` 联动上下文的生产者，落点在 `<源码>` bk-monitor `bkmonitor/packages/apm_web/metric/resources.py`。
 
-| 位置 | 变更 | 目标 |
-| --- | --- | --- |
-| `list_error_event_spans` *[2]* | 保持候选 Span 查询入口，只扩展 `query_span.fields`。 | 不负责分类，确保 `parse_errors` 能按标准协议读取事件。 |
-| `parse_errors` | 使用 `SpanHandler.get_exception_events(span)`。 | 统一真实异常、返回码和 `unknown` 处理。 |
-| `combine_errors` | 输出 `exception_refer`。 | 给 `scene_view` 下游 panel 提供来源字段。 |
-| `get_pagination_data` | 调用 `SpanHandler.build_exception_params(exception_type, exception_refer, operator_key="operator")` 拼接调用链 `where`。 | 调用链跳转与当前选中错误来源一致。 |
+| 位置                             | 变更                                                                                                               | 目标                                  |
+|--------------------------------|------------------------------------------------------------------------------------------------------------------|-------------------------------------|
+| `list_error_event_spans` *[1]* | 保持候选 Span 查询入口，只扩展 `query_span.fields`。                                                                          | 不负责分类，确保 `parse_errors` 能按标准协议读取事件。 |
+| `parse_errors`                 | 使用 `SpanHandler.get_exception_events(span)`。                                                                     | 统一真实异常、返回码和 `unknown` 处理。           |
+| `combine_errors`               | 输出 `exception_refer`。                                                                                            | 给 `scene_view` 下游 panel 提供来源字段。     |
+| `get_pagination_data`          | 调用 `SpanHandler.build_exception_params(exception_type, exception_refer, operator_key="operator")` 拼接调用链 `where`。 | 调用链跳转与当前选中错误来源一致。                   |
 
-*[2] 字段投影在现有 `service`、`span_name`、`trace_id`、`events.name`、`events.attributes.exception.type` 基础上，补齐标准协议所需来源字段。*
+* [1] `list_error_event_spans` 新增列表消费字段：
+    * 返回码相关：`attributes.rpc.error_code`、`attributes.rpc.error_message`
+    * 返回码相关：`attributes.trpc.status_code`、`attributes.trpc.status_msg`
+    * 其他：`status.message`、`start_time`、`events.attributes.exception.stacktrace`
 
 调用链 `where` 拼接规则：
 
