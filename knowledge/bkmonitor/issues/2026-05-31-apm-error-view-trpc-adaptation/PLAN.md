@@ -1,8 +1,8 @@
 ---
 title: 错误视图 tRPC 场景适配 —— 实施方案
-tags: [apm, error-view, trpc, rpc, exception-type, scene-view]
+tags: [apm, error-view, trpc, rpc, exception-type, scene-view, code-remark]
 issue: ./README.md
-description: 通过逻辑异常协议拆分异常展示值与过滤来源，让错误视图按真实异常或返回码字段完成一致联动
+description: 通过逻辑异常协议拆分异常展示值与过滤来源，让错误视图按真实异常或返回码字段完成一致联动，并在错误详情补全返回码备注
 created: 2026-05-31
 updated: 2026-06-02
 ---
@@ -47,6 +47,7 @@ PR [#10784](https://github.com/TencentBlueKing/bk-monitor/pull/10784) 已合入�
 
 瓶颈表现：`scene_view` 只传递 `$exception_type`，下游无法判断来源字段。
 
+
 ## 0x02 架构设计
 
 ### a. 逻辑异常协议
@@ -79,12 +80,13 @@ flowchart TD
 | `exception_type`  | `string` | 是  | 页面展示、分组和过滤值，例如 `TimeoutError`、`101`、`unknown`。                                                           |
 | `exception_refer` | `string` | 否  | [a] tRPC 场景：命中字段名 `rpc.error_code` > `trpc.status_code`<br />[b] 标准场景：`events.attributes.exception.type` |
 
-### c. 职责边界
+### b. 职责边界
 
 ```mermaid
 flowchart LR
     A["SpanHandler"] --> B["get_exception_events"]
     A --> C["build_exception_params"]
+    K["CodeRemarkHandler"] --> L["build_service_code_remark_config"]
 
     B --> D["ErrorListResource"]
     B --> E["QueryExceptionDetailEventResource"]
@@ -93,6 +95,7 @@ flowchart LR
     C --> G["QueryExceptionDetailEventResource"]
     C --> H["QueryExceptionTypeGraphResource"]
     C --> F
+    L --> E
 
     D --> I["scene_view fields"]
     I --> J["$exception_type + $exception_refer"]
@@ -108,6 +111,30 @@ build_exception_params(
     exception_type: str, exception_refer: str | None, operator_key: str = "op",
 ) -> list[dict[str, Any]]
 ```
+
+#### `CodeRemarkHandler` 统一声明服务视角备注协议
+
+```text
+build_service_code_remark_config(
+    remark_configs: list[dict[str, Any]],
+    service_name: str,
+    kind: str,
+) -> dict[str, str]
+```
+
+协议语义：
+
+- 复用 `GetCodeRemarksResource` 服务视角结果。
+- `service_config[code]` 表示当前服务和调用方向下的返回码备注。
+- 命中备注时标题展示为 `返回码 - code（remark）`，未命中时保持 `返回码 - code`。
+
+调用方向映射：
+
+| Span `kind`                             | 返回码备注 `kind` |
+|-----------------------------------------|--------------|
+| `SPAN_KIND_CLIENT`、`SPAN_KIND_PRODUCER` | `caller`     |
+| `SPAN_KIND_SERVER`、`SPAN_KIND_CONSUMER` | `callee`     |
+| 其他或空值                                   | 不匹配返回码备注。    |
 
 #### `exception_type` 过滤机制
 
@@ -130,7 +157,7 @@ build_exception_params(
 | **[Add]** `get_exception_events(span)` *[1]*                                           | 返回标准逻辑异常事件，空列表由 resource 保持 `unknown` 兼容。 |
 | **[Add]** `build_exception_params(exception_type, exception_refer, operator_key="op")` | 输出查询条件参数，供详情、趋势和调用链 URL 复用。               |
 
-* *[1] 返回标准协议*：`get_exception_events(span)` 对真实异常事件和返回码逻辑事件输出同构字段。*
+* *[1] 返回标准协议：`get_exception_events(span)` 对真实异常事件和返回码逻辑事件输出同构字段。*
 
 | 字段                  | 类型       | 来源字段                                                                                                                           | 说明                        |
 |---------------------|----------|--------------------------------------------------------------------------------------------------------------------------------|---------------------------|
@@ -161,7 +188,19 @@ exception_refer 不为空
 
 `operator_key` 用于兼容两类调用方：`query_span.filter_params` 使用 `op`，调用链 URL 的 `where` 使用 `operator`。
 
-### b. `ErrorListResource`
+### b. CodeRemarkHandler
+
+承接「返回码备注补全协议」，在 `<源码待新增>` bk-monitor `bkmonitor/packages/apm_web/handlers/config_handler/code.py` 抽象服务视角备注生成函数。
+
+| 变更点                                                                  | 目标                                                                                 |
+|----------------------------------------------------------------------|------------------------------------------------------------------------------------|
+| **[Add]** `CodeRemarkHandler.build_service_code_remark_config` *[1]* | 把 `GetCodeRemarksResource.perform_request` 中服务视角 `{code: remark}` 生成逻辑抽成公共函数。*[2]* |
+| **[Keep]** `GetCodeRemarksResource.perform_request`                  | 保留应用查询、应用视角返回和服务视角分支结构，避免把 resource 主流程整体搬到 handler。                               |
+
+* *[1] 参数：`<remark_configs: list[dict[str, Any]]>, service_name: str, kind: str>`*
+* *[2] `service_config: dict[str, str] = ... ~ return service_config` 代码段平移至 `build_service_code_remark_config`。*
+
+### c. `ErrorListResource`
 
 `ErrorListResource` 是 `scene_view` 联动上下文的生产者，落点在 `<源码>` bk-monitor `bkmonitor/packages/apm_web/metric/resources.py`。
 
@@ -189,20 +228,40 @@ exception_refer 不为空
   SpanHandler.build_exception_params(exception_type, exception_refer, operator_key="operator")
 ```
 
-### c. 下游资源
+### d. 下游资源
 
 下游资源按 `exception_refer` 切换异常来源字段。
 
-| 资源 *[1]*                            | 改造方式                      | 边界                                                |
-|-------------------------------------|---------------------------|---------------------------------------------------|
-| `QueryExceptionDetailEventResource` | *[2]*                     | 移除 `_skip_exception_type_filter` 绕过逻辑。            |
-| `QueryExceptionEndpointResource`    | *[2]*                     | 避免同一 Span 内其他异常事件混入。                              |
-| `QueryExceptionTypeGraphResource`   | 复用同一字段映射生成 `q.filter` 条件。 | 不直接传 `filter_params`，保持 `graph_unify_query` 返回结构。 |
+| 资源 *[1]*                            | 改造方式                      | 边界                                                 |
+|-------------------------------------|---------------------------|----------------------------------------------------|
+| `QueryExceptionDetailEventResource` | *[2]*，并按 *[3]* 补全返回码标题备注。 | 移除 `_skip_exception_type_filter` 绕过逻辑，备注补全只影响详情标题。 |
+| `QueryExceptionEndpointResource`    | *[2]*                     | 避免同一 Span 内其他异常事件混入。                               |
+| `QueryExceptionTypeGraphResource`   | 复用同一字段映射生成 `q.filter` 条件。 | 不直接传 `filter_params`，保持 `graph_unify_query` 返回结构。  |
 
 * *[1] 三个资源统一新增可选请求参数 `exception_refer`，由 `scene_view` 选中态 `panels[].targets[].data` 传入。*
 * *[2] `query_span` 前追加 `SpanHandler.build_exception_params`，并且统一使用 `get_exception_events` 标准化事件。*
+* *[3] 返回码备注补全只加在详情事件结果组装阶段，位于标准异常事件生成后、详情项标题写入前。*
 
-### d. `scene_view` 配置
+返回码备注缓存机制：
+
+伪代码只描述请求级缓存：`return_code_contexts` 表示已完成返回码事件筛选和空值校验的上下文，标题写入按前文职责边界处理。
+
+```text
+remark_configs = get_code_remark_configs_once()
+service_code_remark_map = {}
+
+for ctx in return_code_contexts:
+    cache_key = (ctx.service_name, ctx.kind)
+    if cache_key not in service_code_remark_map:
+        service_code_remark_map[cache_key] = CodeRemarkHandler.build_service_code_remark_config(
+            remark_configs, ctx.service_name, ctx.kind
+        )
+
+    service_config = service_code_remark_map[cache_key]
+    remark = service_config.get(ctx.code) or service_config.get(f"err_{ctx.code}")
+```
+
+### e. `scene_view` 配置
 
 三个错误视图配置都需要传递 `$exception_refer`。
 
@@ -240,20 +299,26 @@ exception_refer 不为空
 | 服务错误页          | 在 service 与 component 两类服务错误视图重复上述场景。 | 三个同构页面联动行为一致。                                                           |
 | 饼图联动           | 选中返回码错误行。                             | `QueryExceptionEndpointResource` 前置收窄后，聚合结果只统计该返回码来源。                   |
 | 调用链跳转          | 从返回码错误行点击调用链。                         | Trace 检索 `where` 使用返回码字段，而不是 `events.attributes.exception.type`。        |
+| 错误详情内置备注       | 查看命中内置返回码的 tRPC/RPC 错误详情。             | 标题展示 `返回码 - xxxx（内置备注）`。                                                |
+| 错误详情全局备注       | 配置全局返回码备注后查看同返回码错误详情。                 | `service_config` 返回全局备注，标题不再使用内置默认备注。                                   |
+| 错误详情服务备注覆盖     | 同一返回码同时存在全局规则与当前服务规则。                 | 当前服务详情标题展示服务备注，其他服务仍使用全局备注或内置备注。                                        |
+| 错误详情无备注        | 返回码未命中用户规则或内置规则。                      | 标题保持 `返回码 - xxxx`，真实异常详情标题不受影响。                                         |
 
 配置验证：
 
 - 校验三个 `scene_view` JSON 文件可以正常加载。
 - 校验三个 `options.selector_panel.targets[].fields` 都包含 `exception_refer`。
 - 校验三个错误视图下游 `panels` 都传递 `exception_refer`。
+- 校验 `CodeRemarkHandler.build_service_code_remark_config` 输出与 `GetCodeRemarksResource` 服务视角返回一致。
 
 ## 0x05 实施进展
 
-| 时间 | 结论性进展 |
-| --- | --- |
-| `2026-06-02 01:12` | [a] 将公共条件函数统一命名为 `build_exception_params`，并把具体条件映射下沉到开发方案。<br />[b] 确认 `QueryExceptionDetailEventResource` 与 `QueryExceptionEndpointResource` 可在 `query_span` 前置收窄，但仍需保留事件级匹配。 |
+| 时间                 | 结论性进展                                                                                                                                                                                           |
+|--------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `2026-06-02 16:00` | [a] 里程碑 3 收敛为错误详情标题备注补全，不扩展错误列表、趋势和饼图展示面。<br />[b] 备注能力改为抽象 `service_config` 生成函数，错误详情通过 `service_code_remark_map` 复用服务视角 `{code: remark}` 结果。                                                  |
+| `2026-06-02 01:12` | [a] 将公共条件函数统一命名为 `build_exception_params`，并把具体条件映射下沉到开发方案。<br />[b] 确认 `QueryExceptionDetailEventResource` 与 `QueryExceptionEndpointResource` 可在 `query_span` 前置收窄，但仍需保留事件级匹配。                  |
 | `2026-06-01 21:00` | [a] 回归 `SpanHandler`、`ErrorListResource`、三个下游 resource 和 `scene_view` 配置后，方案收敛为 `SpanHandler` 统一异常事件读取与条件参数构造。<br />[b] 修正 `QueryExceptionEndpointResource` 为后置聚合边界，确认 PR #10784 已合入，新 PR 分支待定。 |
-| `2026-05-31 00:00` | [a] 确认前端变量链路支持 `$exception_refer`。<br />[b] 初版联动协议收敛为 `exception_type + exception_refer`，并记录应用错误页与服务错误页配置落点。 |
+| `2026-05-31 00:00` | [a] 确认前端变量链路支持 `$exception_refer`。<br />[b] 初版联动协议收敛为 `exception_type + exception_refer`，并记录应用错误页与服务错误页配置落点。                                                                                    |
 
 ## 0x06 参考 & 版本锚点
 
@@ -263,14 +328,20 @@ exception_refer 不为空
 - `<源码>` [span_handler.py][src-span-handler]
 - `<源码>` [metric/resources.py][src-metric-resources]
 - `<源码>` [meta/resources.py][src-meta-resources]
+- `<源码>` [service/resources.py][src-service-resources]
+- `<源码>` [service/serializers.py][src-service-serializers]
+- `<源码待新增>` bkmonitor/packages/apm_web/handlers/config_handler/code.py
 - `<源码>` [constants/apm.py][src-constants-apm]
 - `<源码>` [apm_application-error.json][src-app-error]
 - `<源码>` [apm_service-service-default-error.json][src-service-error]
 - `<源码>` [apm_service-component-default-error.json][src-component-error]
+- 关联方案：[APM 支持应用级别配置](../2026-03-04-apm-app-level-config/PLAN.md)
 
 [src-span-handler]: https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/apm_web/handlers/span_handler.py
 [src-metric-resources]: https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/apm_web/metric/resources.py
 [src-meta-resources]: https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/apm_web/meta/resources.py
+[src-service-resources]: https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/apm_web/service/resources.py
+[src-service-serializers]: https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/apm_web/service/serializers.py
 [src-constants-apm]: https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/constants/apm.py
 [src-app-error]: https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/monitor_web/scene_view/builtin/view_configs/apm_application-error.json
 [src-service-error]: https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/monitor_web/scene_view/builtin/view_configs/apm_service-service-default-error.json
@@ -282,4 +353,4 @@ exception_refer 不为空
 |----|---------------------------------------------------------|---------------------------|--------------------------------------------------------------------|
 | ✅  | `feat/trpc_error_display_info_opt/#1010158081134636736` | 里程碑 1：tRPC 场景错误详情展示返回码信息  | [#10784](https://github.com/TencentBlueKing/bk-monitor/pull/10784) |
 | 🔄 | `<branch_name>`                                         | 里程碑 2：APM 错误视图返回码联动适配     | 待创建                                                                |
-| 🔄 | `<branch_name>`                                         | 里程碑 2：APM 错误详情支持展示返回码备注信息 | 待创建                                                                |
+| 🔄 | `<branch_name>`                                         | 里程碑 3：APM 错误详情支持展示返回码备注信息 | 待创建                                                                |

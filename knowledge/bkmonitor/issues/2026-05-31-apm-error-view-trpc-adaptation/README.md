@@ -1,9 +1,9 @@
 ---
 title: 错误视图 tRPC 场景适配
-tags: [apm, error-view, trpc, rpc, exception-type, scene-view]
-description: 让 APM 错误视图在 tRPC/RPC 返回码错误中统一构造异常语义，并支持任务列表、趋势、详情和饼图联动
+tags: [apm, error-view, trpc, rpc, exception-type, scene-view, code-remark]
+description: 让 APM 错误视图在 tRPC/RPC 返回码错误中统一构造异常语义，并支持联动过滤与错误详情返回码备注展示
 created: 2026-05-31
-updated: 2026-06-01
+updated: 2026-06-02
 ---
 
 # 错误视图 tRPC 场景适配
@@ -22,7 +22,7 @@ tRPC/RPC 返回码错误的 Span 满足 `status.code = 2`，但通常没有记�
 
 PR [#10784](https://github.com/TencentBlueKing/bk-monitor/pull/10784) 已在错误详情链路中构造特殊 Event，用于展示返回码标题与详情信息。
 
-当前改动只覆盖错误详情。
+当前改动只覆盖错误详情的返回码基础标题。
 
 任务列表、趋势和饼图仍沿用 `exception_type` 的默认事件过滤语义，无法按返回码来源字段完成联动。
 
@@ -31,6 +31,7 @@ PR [#10784](https://github.com/TencentBlueKing/bk-monitor/pull/10784) 已在错�
 - 让 tRPC/RPC 返回码错误在错误视图中具备稳定的逻辑异常语义。
 - 通过 `exception_refer` 表达 `exception_type` 的来源字段，支持前后端选择正确过滤条件。
 - 让任务列表、趋势、详情和饼图在真实异常与返回码错误之间保持一致联动。
+- 在错误详情标题中使用返回码备注丰富展示，降低 `exception.type = unknown` 带来的业务理解成本。
 - 复用现有 `scene_view` 变量替换能力，不新增前端专项联动机制。
 
 ## 0x03 需求范围
@@ -40,19 +41,20 @@ PR [#10784](https://github.com/TencentBlueKing/bk-monitor/pull/10784) 已在错�
 - tRPC/RPC 返回码来源为 `trpc.status_code` 或 `rpc.error_code`。
 - `scene_view` 配置把 `exception_refer` 从任务列表行映射到下游 panel 请求。
 - 趋势、详情和饼图根据 `exception_refer` 选择过滤条件。
+- 错误详情使用返回码备注把 `返回码 - xxxx` 展示为 `返回码 - xxxx（备注）`。
 
 ## 0x04 非目标
 
 - 本期不改变 Span 原始存储结构，不要求采集端补充真实异常事件。
 - 本期不重构 APM 错误页面布局。
-- 本期不扩展 tRPC/RPC 返回码备注、重定义和策略模板能力。
+- 本期不扩展返回码备注写入、返回码重定义和策略模板能力。
 - 本期不引入新的前端状态管理机制。
 
 ## 0x05 方法论
 
 - 先定义逻辑异常协议：`exception_type` 表示展示与分组值，`exception_refer` 表示过滤来源。
 - 再把协议贯穿任务列表、趋势、详情和饼图，避免只在单个接口补 case-by-case 逻辑。
-- 最后用 `scene_view` 配置验证 `$exception_refer` 能否随行选择进入下游 panel 请求。
+- 最后用返回码备注规则补全错误详情标题，备注查询与规则匹配细节统一沉淀到 `PLAN.md`。
 
 ## 0x06 验收标准
 
@@ -61,6 +63,8 @@ PR [#10784](https://github.com/TencentBlueKing/bk-monitor/pull/10784) 已在错�
 - 选中真实异常行时，趋势、详情和饼图继续按 `events.name = exception` 与 `events.attributes.exception.type` 过滤。
 - 选中 tRPC/RPC 返回码错误行时，趋势、详情和饼图按返回码字段过滤，且不混入同接口下其他异常类型。
 - `apm_application-error.json` 与 `apm_service-service-default-error.json` 能通过 `$exception_refer` 传递联动上下文。
+- tRPC/RPC 返回码错误详情在命中备注时展示 `返回码 - xxxx（备注）`。
+- 未命中备注时继续展示 `返回码 - xxxx`，不影响真实异常详情。
 - 回归验证覆盖应用错误页与服务错误页的概览态、选中真实异常态和选中返回码错误态。
 
 ## 0x07 参考
@@ -72,3 +76,4 @@ PR [#10784](https://github.com/TencentBlueKing/bk-monitor/pull/10784) 已在错�
 - `<源码>` bk-monitor/bkmonitor/packages/apm_web/handlers/span_handler.py
 - `<源码>` bk-monitor/bkmonitor/packages/apm_web/meta/resources.py
 - `<源码>` bk-monitor/bkmonitor/packages/apm_web/metric/resources.py
+- `<源码>` bk-monitor/bkmonitor/packages/apm_web/service/resources.py

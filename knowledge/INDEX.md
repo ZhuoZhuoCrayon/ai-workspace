@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-06-01
+> 最后更新：2026-06-02
 
 ## 0x01 项目知识
 
@@ -17,10 +17,10 @@
 
 ## 0x02 最近更新
 
-- 2026-06-01：更新
+- 2026-06-02：更新
   [错误视图 tRPC 场景适配](./bkmonitor/issues/2026-05-31-apm-error-view-trpc-adaptation/README.md)
   至 bkmonitor
-  （精简为特殊 `exception` event 与 `exception_refer` 联动方案，并补齐 PLAN 模板章节）
+  （补齐里程碑 3：错误详情通过返回码备注规则展示 `返回码 - xxxx（备注）`）
 - 2026-06-01：更新
   [文档规范检查工具替代调研](./ai-workspace/issues/2026-04-04-doc-style-tooling-research/README.md)
   至 ai-workspace
