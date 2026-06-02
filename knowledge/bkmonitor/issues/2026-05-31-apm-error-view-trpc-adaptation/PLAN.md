@@ -25,14 +25,16 @@ tRPC/RPC 返回码错误没有真实 `exception` 事件，错误值来自 `attri
 
 ### b. 页面联动链路
 
-错误页面的联动源是左侧任务列表。用户选中一行后的传递路径：
+错误页面的联动源是左侧错误列表 selector，对应后端入口 `apm_metric.errorList`。
 
-1. `scene_view` 根据任务列表 `target` 的 `fields` 映射生成 `viewOptions.filters`。
+用户选中一行后的传递路径：
+
+1. `scene_view` 根据 `options.selector_panel.targets[].fields` 映射生成 `viewOptions.filters`。
 2. 下游 panel 通过 `VariablesService.transformVariables` 替换 `$exception_type`、`$endpoint` 等变量。
 
 | 页面区域 | 后端入口                                 | 当前职责                                      | 改造后职责                                         |
 |------|--------------------------------------|-------------------------------------------|-----------------------------------------------|
-| 任务列表 | `apm_metric.errorList`               | 输出 `service`、`endpoint`、`exception_type`。 | 输出 `exception_type` 与 `exception_refer`。      |
+| 错误列表 selector | `apm_metric.errorList`               | 输出 `service`、`endpoint`、`exception_type`。 | 输出 `exception_type` 与 `exception_refer`。      |
 | 趋势   | `apm_meta.queryExceptionTypeGraph`   | 按 `events.attributes.exception.type` 过滤。  | 按 `exception_refer` 构造时间序列查询条件。               |
 | 详情   | `apm_meta.queryExceptionDetailEvent` | 详情链路已能补返回码事件。                             | 按 `exception_type + exception_refer` 精确过滤详情行。 |
 | 饼图   | `apm_meta.queryExceptionEndpoint`    | 查后按异常类型聚合。                                | 前置收窄后按逻辑异常事件聚合。                               |
@@ -43,7 +45,7 @@ PR [#10784](https://github.com/TencentBlueKing/bk-monitor/pull/10784) 已合入�
 
 它已在 `SpanHandler.process_rpc_span` 中为错误详情补充返回码逻辑事件。
 
-当前瓶颈在联动层：任务列表、趋势和饼图仍以 `events.attributes.exception.type` 作为唯一异常来源。
+当前瓶颈在联动层：错误列表 selector、趋势和饼图仍以 `events.attributes.exception.type` 作为唯一异常来源。
 
 瓶颈表现：`scene_view` 只传递 `$exception_type`，下游无法判断来源字段。
 
@@ -217,30 +219,22 @@ exception_refer 不为空
 - `apm_service-service-default-error.json`
 - `apm_service-component-default-error.json`
 
-任务列表 `fields` 增加：
+错误列表 selector 位于 `options.selector_panel.targets[]`。
+
+在现有 `fields` 上只新增一项映射：
 
 ```json
-"fields": {
-  "endpoint": "endpoint",
-  "app_name": "app_name",
-  "exception_type": "exception_type",
-  "exception_refer": "exception_refer",
-  "message": "message",
-  "service_name": "service"
-}
+"exception_refer": "exception_refer"
 ```
 
-下游 `panels` 的三个接口请求增加：
+`fields` 是选中行上下文字段映射：选中错误列表行后，把行数据里的 `exception_refer` 传给下游 `$exception_refer` 使用。
+
+下游选中态 `panels[].targets[].data` 的三个接口请求增加：
 
 ```json
 "exception_refer": "$exception_refer"
 ```
 
-配置边界：
-
-- 只改选中任务列表后的 `panels` 请求，`overview_panels` 不需要 `$exception_refer`。
-- 保留现有 `$exception_type`，不把返回码字段路径塞进 `filter_params`。
-- 服务实例变量和组件实例变量保持原状。
 
 ## 0x04 验收与验证
 
@@ -248,7 +242,7 @@ exception_refer 不为空
 
 | 场景 | 操作 | 预期 |
 | --- | --- | --- |
-| 应用错误页概览态 | 不选中任务列表行。 | 趋势、详情和饼图保持原有全量错误口径。 |
+| 应用错误页概览态 | 不选中错误列表行。 | 趋势、详情和饼图保持原有全量错误口径。 |
 | 应用错误页真实异常 | 选中真实异常行。 | 请求携带 `exception_refer = events.attributes.exception.type`，下游只展示该真实异常类型。 |
 | 应用错误页 tRPC 返回码 | 选中 tRPC 返回码行。 | 请求携带 `exception_refer = trpc.status_code`，下游只展示该返回码错误。 |
 | 应用错误页 RPC 返回码 | 选中 RPC 返回码行。 | 请求携带 `exception_refer = rpc.error_code`，下游只展示该返回码错误。 |
@@ -275,7 +269,7 @@ exception_refer 不为空
 配置验证：
 
 - 校验三个 `scene_view` JSON 文件可以正常加载。
-- 校验三个 selector panel 的 `fields` 都包含 `exception_refer`。
+- 校验三个 `options.selector_panel.targets[].fields` 都包含 `exception_refer`。
 - 校验三个错误视图下游 `panels` 都传递 `exception_refer`。
 
 ## 0x05 实施进展
