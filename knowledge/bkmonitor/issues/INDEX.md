@@ -3,6 +3,7 @@
 
 | 文件                                                                                                     | 标签                                                        | 摘要                                                      | 更新日期       |
 |------|------|------|---------|
+| [主机场景容器事件关联准确性提升](./2026-06-03-alert-host-k8s-event-relation-accuracy/README.md) | `alert` `k8s-event` `host-target` `k8s-node` `scene-view` `unify-query` | 让主机与 K8S-NODE 告警按节点维度关联容器事件，避免跨节点 workload 事件混入并降低关联查询成本 | 2026-06-03 |
 | [错误视图 tRPC 场景适配](./2026-05-31-apm-error-view-trpc-adaptation/README.md) | `apm` `error-view` `trpc` `rpc` `exception-type` `scene-view` `code-remark` | 让 APM 错误视图在 tRPC/RPC 返回码错误中统一构造异常语义，并支持联动过滤与错误详情返回码备注展示 | 2026-06-02 |
 | [APM 预计算适配共享数据源](./2026-05-14-apm-precalc-shared-multi-app/README.md) | `apm` `pre-calculate` `shared-datasource` `multi-app` `bmw` | 让单 BMW 预计算任务感知共享 data_id 下的多个应用，不破坏现有任务模型与持久化键 | 2026-05-22 |
 | [APM 支持跨应用共享数据源](./2026-03-03-apm-shared-datasource/README.md)                                         | `apm` `datasource` `es` `shared-storage`                  | 支持多 APM 应用复用同一数据源，压缩 ES 索引数量，降低数据链路资源消耗                 | 2026-05-14 |
