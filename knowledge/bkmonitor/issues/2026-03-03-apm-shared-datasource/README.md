@@ -66,6 +66,5 @@ updated: 2026-05-14
 
 ## 0x03 参考
 
-- 实施方案：[PLAN.md](./PLAN.md)
 - 关联子 issue：[APM 预计算适配共享数据源](../2026-05-14-apm-precalc-shared-multi-app/README.md)
 - 涉及模块：数据源模型、应用资源接口、Trace 查询处理层、采集端
