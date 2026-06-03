@@ -136,3 +136,35 @@ updated: <YYYY-MM-DD>
 | 🔄 | `<branch_name>` | 里程碑 2（自定义） | [ #<number> ](<pr_url>) |
 
 ```
+
+## 0x05 Article（文章）模板
+
+```markdown
+articles/<YYYY-MM-DD-title>/
+├── README.md
+└── images/
+
+README.md
+---
+title: <标题>
+tags: [<标签1>, <标签2>]
+description: <一句话总结>
+created: <YYYY-MM-DD>
+updated: <YYYY-MM-DD>
+---
+
+# <标题>
+
+## 0x01 概览
+
+## 0x02 核心内容
+
+## 0x03 参考
+```
+
+说明：
+
+- `article` 使用目录结构。
+- 正文固定放在 `README.md`。
+- 图片、截图和其他文章内资源统一放在 `images/`。
+- 索引链接指向目录下的 `README.md`。

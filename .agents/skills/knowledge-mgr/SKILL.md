@@ -1,7 +1,7 @@
 ---
 name: knowledge-mgr
 description: >
-  管理工作区知识对象的检索与全生命周期操作，路径涉及 `knowledge/`，知识对象包括 issue（需求）、plan（方案 / 计划）、snippet（代码片段）和 troubleshooting（排障经验）。
+  管理工作区知识对象的检索与全生命周期操作，路径涉及 `knowledge/`，知识对象包括 issue（需求）、plan（方案 / 计划）、snippet（代码片段）、article（文章）和 troubleshooting（排障经验）。
   当用户询问事项进展、最近做了什么、周报 / 日报 / 总结素材，或者问题依赖历史结论、过往决策时，应优先使用本 skill。
   当用户要求将结论沉淀到知识对象体系，或者要求检索、创建、修改、归档、迁移知识对象时，应使用本 skill 执行相关操作。
   外部资料调研、纯代码实现 & 调试 & 测试等无需落地知识对象的行为不属于本 skill 场景。
@@ -13,7 +13,7 @@ description: >
 
 ## 0x00 术语介绍
 
-知识对象：issue、plan、snippet、troubleshooting 的统称。
+知识对象：issue、plan、snippet、article、troubleshooting 的统称。
 
 
 ## 0x01 索引模型
@@ -44,9 +44,11 @@ description: >
 | issue           | `issues/<YYYY-MM-DD-title>/README.md` | issue 目录 *[1]* | 需求定义入口        |
 | plan            | `issues/<YYYY-MM-DD-title>/PLAN.md`   | 隶属 issue 目录    | 方案、调研、进展与验收记录 |
 | snippet         | `snippets/<title>.md`                 | 单文件            | 代码片段类知识对象     |
+| article         | `articles/<YYYY-MM-DD-title>/README.md` | article 目录 *[2]* | 主题文章与信息归档      |
 | troubleshooting | `troubleshooting/<title>.md`          | 单文件            | 排障经验类知识对象     |
 
 * *[1] issue 是目录级逻辑单元，`README.md + PLAN.md = 1` 个知识对象，plan 不单独入索引，仅由 issue 条目代表整个 issue 目录。*
+* *[2] article 是目录级逻辑单元，正文放在 `README.md`，配图等资源放在同目录的 `images/` 下。*
 
 ### b. 知识对象规范
 
@@ -75,6 +77,7 @@ description: >
 | issue           | [Issue Writing](references/issue-writing.md)                     |                                     |
 | plan            | [Plan Writing](references/plan-writing.md)                       | [方案样例](references/plan-example.md) |
 | snippet         | [Snippet Writing](references/snippet-writing.md)                 |                                     |
+| article         | [Article Writing](references/article-writing.md)                 |                                     |
 | troubleshooting | [Troubleshooting Writing](references/troubleshooting-writing.md) |                                     |
 
 ## 0x02 场景与操作指南
