@@ -26,13 +26,19 @@
 | [日志 UnifyQuery 环境变量白名单与 query_string 增强](./issues/2026-03-05-log-uq-env-whitelist-and-query-string/README.md) | `log` `unify-query` `data-source` `query-string` `config` | 已实现 | 2026-03-05 |
 | [日志数据源切换 unify-query](./issues/2026-02-10-log-ds-to-unify-query/README.md) | `log` `unify-query` `data-source` | 对账中 | 2026-02-10 |
 
-### b. Troubleshooting
+### b. Articles
+
+| 分类 | 路径 | 数量 | 说明 |
+|------|------|------|------|
+| 主题文章 | [articles/](./articles/INDEX.md) | 1 篇 | 领域知识整理与主题归档 |
+
+### c. Troubleshooting
 
 | 分类 | 路径 | 数量 | 说明 |
 |------|------|------|------|
 | 排障经验 | [troubleshooting/](./troubleshooting/INDEX.md) | 5 篇 | 问题排查与修复记录 |
 
-### c. Snippets
+### d. Snippets
 
 代码片段集合，包含告警、APM、自定义上报等常用操作。
 

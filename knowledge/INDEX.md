@@ -7,7 +7,7 @@
 | 项目 | 路径 | 数量 | 说明 |
 |------|------|------|------|
 | ai-workspace | [ai-workspace/](./ai-workspace/INDEX.md) | 4 篇 | AI 工作区 — 知识管理与多项目协作中枢 |
-| bkmonitor | [bkmonitor/](./bkmonitor/INDEX.md) | 38 篇 | 蓝鲸监控平台 (bk-monitor/bkmonitor) |
+| bkmonitor | [bkmonitor/](./bkmonitor/INDEX.md) | 39 篇 | 蓝鲸监控平台 (bk-monitor/bkmonitor) |
 | bkm-skills | [bkm-skills/](./bkm-skills/INDEX.md) | 6 篇 | BlueKing Monitor Skills |
 | bkmonitor_mcp | [bkmonitor_mcp/](./bkmonitor_mcp/INDEX.md) | 1 篇 | 蓝鲸监控 MCP Server |
 | bkmonitor-datalink | [bkmonitor-datalink/](./bkmonitor-datalink/INDEX.md) | 1 篇 | 蓝鲸监控数据链路 |
@@ -17,6 +17,10 @@
 
 ## 0x02 最近更新
 
+- 2026-06-03：新增
+  [RUM 领域信息收集：核心术语、机制与规范索引](./bkmonitor/articles/2026-06-03-rum-observability-domain-primer/README.md)
+  至 bkmonitor
+  （按规范聚合整理 RUM 领域常见术语、机制解释和参考链接，作为领域建设入门资料）
 - 2026-06-03：新增
   [主机场景容器事件关联准确性提升](./bkmonitor/issues/2026-06-03-alert-host-k8s-event-relation-accuracy/README.md)
   至 bkmonitor
@@ -33,4 +37,3 @@
   [Skills-First 架构演进](./ai-workspace/issues/2026-04-06-skills-first-architecture/README.md)
   至 ai-workspace
   （将 `git.mdc` 迁移为 `git-workflow` skill，并将 `go-dev.mdc` 迁移为 `dev-env` skill）
-- 2026-05-25：新增 [bkmonitor-ecosystem](./bkmonitor-ecosystem/INDEX.md) 至 public 知识库（注册 GitHub 外部版项目，并与 private 内部版同名区分）
