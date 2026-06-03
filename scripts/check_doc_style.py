@@ -24,6 +24,7 @@ H2_NUMBERING = re.compile(r"^0x\d{2}\s+")
 H3_NUMBERING = re.compile(r"^[a-z]\.\s+")
 TABLE_SEPARATOR_PATTERN = re.compile(r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$")
 INLINE_CODE_PATTERN = re.compile(r"`[^`]*`")
+MARKDOWN_LINK_DEST_PATTERN = re.compile(r"(?<!!)(\[[^\]\n]*\]\()([^\)\n]*)(\))")
 LIST_ITEM_PATTERN = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+")
 TABLE_CELL_SPLIT_PATTERN = re.compile(r"(?<!\\)\|")
 TABLE_CELL_BREAK_PATTERN = re.compile(r"<br\s*/?>", re.IGNORECASE)
@@ -111,6 +112,10 @@ def is_url_only_line(stripped: str) -> bool:
 def is_ref_link_def_line(stripped: str) -> bool:
     """Check if line is a reference link definition: [id]: url ..."""
     return bool(re.match(r"^\[[^\]]+\]:\s*\S", stripped))
+
+
+def strip_markdown_link_destinations(line: str) -> str:
+    return MARKDOWN_LINK_DEST_PATTERN.sub(r"\1\3", line)
 
 
 def strip_inline_code(line: str) -> str:
@@ -238,9 +243,11 @@ def check_file(path: Path) -> list[Issue]:
         prose = strip_inline_code(line)
         prose_stripped = prose.strip()
         is_table = is_table_line(stripped)
+        rendered_line = strip_markdown_link_destinations(line)
         if prose_stripped:
             if (
                 len(line) > MAX_PROSE_LINE_LENGTH
+                and len(rendered_line) > MAX_PROSE_LINE_LENGTH
                 and not is_table
                 and not is_url_only_line(stripped)
                 and not is_ref_link_def_line(stripped)

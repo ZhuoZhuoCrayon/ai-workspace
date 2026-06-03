@@ -44,6 +44,4 @@ updated: 2026-03-05
 ## 0x03 参考
 
 - 前置需求：`knowledge/bkmonitor/issues/2026-02-10-log-ds-to-unify-query/`
-- 日志平台 QueryStringBuilder：[bklog query_string_builder.py][bklog-query-string-builder]
-
-[bklog-query-string-builder]: https://github.com/TencentBlueKing/bk-monitor/blob/master/bklog/apps/log_esquery/esquery/builder/query_string_builder.py#L46
+- 日志平台 QueryStringBuilder：[bklog query_string_builder.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bklog/apps/log_esquery/esquery/builder/query_string_builder.py#L46)
