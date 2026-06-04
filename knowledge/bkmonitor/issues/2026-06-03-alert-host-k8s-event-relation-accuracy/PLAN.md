@@ -128,7 +128,7 @@ if not all([related_target.get("bcs_cluster_id"), related_target.get("namespace"
 
 | 时间 | 结论性进展 |
 | --- | --- |
-| `2026-06-04 19:00` | [a] 完成 PR [#10922](https://github.com/TencentBlueKing/bk-monitor/pull/10922) Review。<br />[b] 主机节点查询仅对 `get_kubernetes_node` 调用补充异常降级。<br />[c] K8S-NODE 目标复用已有 `node` 维度，不补充通用 `target`。 |
+| `2026-06-04 19:00` | [a] 完成 PR [#10922](https://github.com/TencentBlueKing/bk-monitor/pull/10922) 二轮 Review，上一轮 `3` 条线程已修复并收口。<br />[b] 主机节点查询已对 `get_kubernetes_node` 调用补充异常降级，K8S-NODE 目标已复用标准 `node` 维度。<br />[c] 🌟 已知问题：节点详情反查会刷新采集状态并拉取节点性能数据，当前不阻塞合入，后续成为性能卡点时改为轻量只读查询。 |
 | `2026-06-03 01:00` | [a] 创建需求与方案，目标收敛为提升主机场景容器事件关联准确性。<br />[b] 回归源码后确认节点维度应映射为事件字段 `host`。<br />[c] 主机目标前置查询 K8S 节点，未命中返回 `None`。<br />[d] K8S-NODE 只新增前置分支，其余 K8S 目标保持现有逻辑。 |
 
 ## 0x06 参考 & 版本锚点

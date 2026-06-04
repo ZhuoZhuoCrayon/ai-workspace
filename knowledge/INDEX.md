@@ -20,7 +20,7 @@
 - 2026-06-04：更新
   [主机场景容器事件关联准确性提升](./bkmonitor/issues/2026-06-03-alert-host-k8s-event-relation-accuracy/README.md)
   至 bkmonitor
-  （补充 PR #10922 版本锚点并记录 Review 阶段结论）
+  （PR #10922 二轮 Review 通过，节点详情反查性能风险标记为已知问题）
 - 2026-06-04：新增
   [APM Span 详情支持 Links 反向关联展示](./bkmonitor/issues/2026-06-04-apm-span-links-reverse-relation/README.md)
   至 bkmonitor
