@@ -3,7 +3,7 @@ title: 主机场景容器事件关联准确性提升
 tags: [alert, k8s-event, host-target, k8s-node, scene-view, unify-query]
 description: 让主机与 K8S-NODE 告警按节点维度关联容器事件，避免跨节点 workload 事件混入并降低关联查询成本
 created: 2026-06-03
-updated: 2026-06-03
+updated: 2026-06-04
 ---
 
 # 主机场景容器事件关联准确性提升
