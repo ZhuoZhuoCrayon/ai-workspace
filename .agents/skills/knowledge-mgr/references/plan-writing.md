@@ -287,7 +287,7 @@ Good：
 1）参考链接样例
 
 - PR - 共享数据源生命周期改造：[TencentBlueKing/bk-monitor #10784](https://github.com/TencentBlueKing/bk-monitor/pull/10784)
-- `<源码>` [span_handler.py ErrorListResource](https://github.com/TencentBlueKing/bk-monitor/....)
+- [<源码> span_handler.py ErrorListResource](https://github.com/TencentBlueKing/bk-monitor/....)
 - [HTTPX Transports 文档](https://www.python-httpx.org/advanced/transports/)
 
 ⚠️注意：源码使用 GitURL 以便知识查阅，实际优先阅读本地代码库中的文件，提升调研效率。
