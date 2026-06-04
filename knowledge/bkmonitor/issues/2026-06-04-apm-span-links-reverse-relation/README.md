@@ -22,7 +22,7 @@ OpenTelemetry Links 的数据事实由被观测 Span 上报，当前 Span 详情
 
 ### b. 目标
 
-- 支持使用可选的 `trace_id` 和 `span_id` 组合过滤 Links。
+- 支持使用可选的 TraceID 和 SpanID 组合过滤 Links。
 - 同时返回数据上报侧 Links 和反向关联 Links。
 - 接口统一返回 OpenTelemetry Link 列表。
 
@@ -32,9 +32,9 @@ OpenTelemetry Links 的数据事实由被观测 Span 上报，当前 Span 详情
 
 新增 `ListLinkResource`，作为 Span / Trace Links 的统一查询接口。
 
-`trace_id` 和 `span_id` 是独立的可选过滤条件，调用时至少提供一个。
+TraceID 和 SpanID 是独立的可选过滤条件，调用时至少提供一个。
 
-同时传入两个字段时，正向查询使用 `trace_id AND span_id` 过滤 Span，反向查询使用 `links.trace_id AND links.span_id` 过滤 Link。
+同时传入 TraceID 和 SpanID 时，正向查询使用 Span 顶层 TraceID 与 SpanID 的 `AND` 条件，反向查询使用 Link 内 TraceID 与 SpanID 的 `AND` 条件。
 
 接口不校验 TraceID 与 SpanID 的归属关系。
 
@@ -48,17 +48,13 @@ OpenTelemetry Links 的数据事实由被观测 Span 上报，当前 Span 详情
 ### b. 约束
 
 - 本期不改变采集、清洗和存储结构，不要求上报侧补反向索引字段。
-- 反向查询必须使用 `links` nested 语义，`links.trace_id` 与 `links.span_id` 同时过滤时必须命中同一个 Link 对象。
+- 反向查询必须按 `links` 嵌套语义过滤，`links.trace_id` 与 `links.span_id` 同时过滤时必须命中同一个 Link 对象。
 - 第一版优先支持当前 APM 应用内反向查询，跨应用或共享数据源下的反向 Link 作为后续扩展。
-- 响应只返回标准 Link 字段，不增加方向、来源 Span 摘要或展示控制字段。
 
 ## 0x03 参考
 
 - 实施方案：[PLAN.md](./PLAN.md)
-- `<源码>` bk-monitor/bkmonitor/packages/apm_web/trace/resources.py
-- `<源码>` bk-monitor/bkmonitor/packages/apm_web/trace/views.py
-- `<源码>` bk-monitor/bkmonitor/apm/core/handlers/query/span_query.py
-- `<源码>` bk-monitor/bkmonitor/apm/core/handlers/query/proxy.py
-- `<源码>` bk-monitor/bkmonitor/packages/apm_web/handlers/trace_handler/base.py
-- `<源码>` bk-monitor/bkmonitor/webpack/src/monitor-api/modules/apm_trace.js
-- `<源码>` bk-monitor/bkmonitor/webpack/src/trace/pages/main/span-details.tsx
+- [<源码> bk-monitor/bkmonitor/packages/apm_web/trace/resources.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/apm_web/trace/resources.py)
+- [<源码> bk-monitor/bkmonitor/packages/apm_web/trace/views.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/apm_web/trace/views.py)
+- [<源码> bk-monitor/bkmonitor/apm/resources.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/apm/resources.py)
+- [<源码> bk-monitor/bkmonitor/api/apm_api/default.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/api/apm_api/default.py)
