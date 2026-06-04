@@ -23,19 +23,10 @@ TraceID 和 SpanID 只用于构造过滤条件，不改变 `links[]` 的上报�
 - `api.apm_api.query_span_list` 支持通过 `filters` 查询 Span 原始结果表。
 - Span 原始字段包含顶层 TraceID、SpanID、TraceState 和嵌套字段 `links[]`。
 
-### c. 已确认约束
-
-- TraceID 和 SpanID 是独立的可选过滤条件，调用时至少提供一个。
-- 同时传入 TraceID 和 SpanID 时使用 `AND` 关系。
-- 过滤条件不一致时，查询自然返回空列表。
-- 响应只包含 `attributes`、`span_id`、`trace_id` 和 `trace_state`。
-- 第一版只查询当前 APM 应用的 Trace 原始结果表。
 
 ## 0x02 架构设计
 
 ### a. 双路 Link 查询
-
-`ListLinkResource` 使用同一组 TraceID 和 SpanID 条件执行两次 `api.apm_api.query_span_list`，图中直接给出两条查询的过滤依据和结果转换。
 
 ```mermaid
 flowchart LR
@@ -68,10 +59,10 @@ flowchart LR
 
 查询与转换规则：
 
-| 查询路径 | `filters` | 结果处理 |
-| --- | --- | --- |
-| 正向 Link | `trace_id = TraceID（若提供）`<br />`span_id = SpanID（若提供）` *[1]* | 提取命中 Span 的全部 `links[]`。 |
-| 反向 Link | `links.trace_id = TraceID（若提供）`<br />`links.span_id = SpanID（若提供）` *[1]* *[2]* | 将命中的来源 Span 投影为 Link。 |
+| 查询路径    | `filters`                                                                      | 结果处理                     |
+|---------|--------------------------------------------------------------------------------|--------------------------|
+| 正向 Link | `trace_id = TraceID（若提供）`<br />`span_id = SpanID（若提供）` *[1]*                   | 提取命中 Span 的全部 `links[]`。 |
+| 反向 Link | `links.trace_id = TraceID（若提供）`<br />`links.span_id = SpanID（若提供）` *[1]* *[2]* | 将命中的来源 Span 投影为 Link。    |
 
 - *[1] 只为已提供的 ID 构造过滤条件，同时提供 TraceID 和 SpanID 时使用 `AND`。*
 - *[2] 反向查询的 TraceID 和 SpanID 条件必须命中 `links[]` 中的同一个 Link 对象。*
@@ -96,12 +87,12 @@ Content-Type: application/json
 
 请求字段与调用规则：
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `bk_biz_id` | `int` | 是 | 业务 ID，沿用 Trace 查询权限范围。 |
-| `app_name` | `string` | 是 | APM 应用名。 |
-| `trace_id` | `string` | 否 | TraceID 过滤条件。 *[1]* *[2]* *[3]* |
-| `span_id` | `string` | 否 | SpanID 过滤条件。 *[1]* *[2]* *[3]* |
+| 字段          | 类型       | 必填 | 说明                              |
+|-------------|----------|----|---------------------------------|
+| `bk_biz_id` | `int`    | 是  | 业务 ID，沿用 Trace 查询权限范围。          |
+| `app_name`  | `string` | 是  | APM 应用名。                        |
+| `trace_id`  | `string` | 否  | TraceID 过滤条件。 *[1]* *[2]* *[3]* |
+| `span_id`   | `string` | 否  | SpanID 过滤条件。 *[1]* *[2]* *[3]*  |
 
 - *[1] TraceID 和 SpanID 至少提供一个，避免无条件扫描 Trace 结果表。*
 - *[2] 同时传入 TraceID 和 SpanID 时，两者使用 `AND` 关系。*
@@ -124,12 +115,12 @@ Content-Type: application/json
 
 Link 字段：
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `<item>.attributes` | `object` | 是 | Link 属性，无属性时返回 `{}`。 |
-| `<item>.span_id` | `string` | 是 | Link 指向的 SpanID。 |
-| `<item>.trace_id` | `string` | 是 | Link 指向的 TraceID。 |
-| `<item>.trace_state` | `string` | 是 | TraceState，无值时返回空字符串。 |
+| 字段                   | 类型       | 必填 | 说明                    |
+|----------------------|----------|----|-----------------------|
+| `<item>.attributes`  | `object` | 是  | Link 属性，无属性时返回 `{}`。  |
+| `<item>.span_id`     | `string` | 是  | Link 指向的 SpanID。      |
+| `<item>.trace_id`    | `string` | 是  | Link 指向的 TraceID。     |
+| `<item>.trace_state` | `string` | 是  | TraceState，无值时返回空字符串。 |
 
 ## 0x03 开发方案
 
@@ -141,10 +132,10 @@ Link 字段：
 - `packages/apm_web/trace/views.py`
 - `packages/apm_web/trace/serializers.py`
 
-| 变更 | 目标 |
-| --- | --- |
-| **[Add]** `ListLinkResource` | 新增正向与反向 Link 统一查询入口。 |
-| **[Add]** `ListLinkRequestSerializer` | 接收可选 TraceID 和 SpanID，校验至少提供一个。 |
+| 变更                                               | 目标                                   |
+|--------------------------------------------------|--------------------------------------|
+| **[Add]** `ListLinkResource`                     | 新增正向与反向 Link 统一查询入口。                 |
+| **[Add]** `ListLinkRequestSerializer`            | 接收可选 TraceID 和 SpanID，校验至少提供一个。      |
 | **[Change]** `TraceQueryViewSet.resource_routes` | 注册 `POST list_links`，并纳入 APM 应用查看权限。 |
 
 `ListLinkResource` 负责构造两组 filters、调用 Span 列表查询、转换 Link 和合并去重。
