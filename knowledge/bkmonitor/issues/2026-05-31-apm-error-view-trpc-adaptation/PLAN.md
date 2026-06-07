@@ -4,7 +4,7 @@ tags: [apm, error-view, trpc, rpc, exception-type, scene-view, code-remark]
 issue: ./README.md
 description: 通过逻辑异常协议拆分异常展示值与过滤来源，让错误视图按真实异常或返回码字段完成一致联动，并在错误详情补全返回码备注
 created: 2026-05-31
-updated: 2026-06-02
+updated: 2026-06-07
 ---
 
 # 错误视图 tRPC 场景适配 —— 实施方案
@@ -52,25 +52,33 @@ PR [#10784](https://github.com/TencentBlueKing/bk-monitor/pull/10784) 已合入�
 
 ### a. 逻辑异常协议
 
-错误视图统一消费「逻辑异常事件」。
+错误视图统一消费「逻辑异常事件集合」。
 
-事件可以来自真实 `exception`，也可以由 `SpanHandler.process_rpc_span` 基于 RPC/tRPC 返回码构造。
+集合来源采用并集语义：真实 `exception` events 逐个保留，RPC/tRPC 返回码命中时由 `SpanHandler.process_rpc_span` 追加返回码逻辑事件。
+
+这两类来源不互斥。
+
+同一个 Span 既有真实异常事件又有 RPC/tRPC 返回码时，两个来源都应进入下游错误列表、详情和接口分布。
 
 ```mermaid
 flowchart TD
-    A["错误 Span"] --> B{"存在真实 exception 事件?"}
-    B -- "是" --> C["真实异常事件"]
-    B -- "否" --> D{"存在返回码字段?"}
-    D -- "rpc.error_code" --> E["RPC 返回码逻辑事件"]
-    D -- "trpc.status_code" --> F["tRPC 返回码逻辑事件"]
-    D -- "否" --> G["无异常事件，由 resource 保持 unknown 兼容"]
+    A["错误 Span"] --> B["真实 exception events"]
+    A --> C{"存在返回码字段?"}
 
-    C --> H["exception_type = exception.type 值"]
-    C --> I["exception_refer = events.attributes.exception.type"]
-    E --> J["exception_type = rpc.error_code 值"]
-    E --> K["exception_refer = rpc.error_code"]
-    F --> L["exception_type = trpc.status_code 值"]
-    F --> M["exception_refer = trpc.status_code"]
+    B --> D["真实异常事件"]
+    C -- "rpc.error_code" --> E["RPC 返回码逻辑事件"]
+    C -- "trpc.status_code" --> F["tRPC 返回码逻辑事件"]
+    C -- "否" --> G["不追加返回码事件"]
+
+    D --> H["逻辑异常事件集合"]
+    E --> H
+    F --> H
+    G --> H
+
+    H --> I["真实异常: exception_refer = events.attributes.exception.type"]
+    H --> J["RPC 返回码: exception_refer = rpc.error_code"]
+    H --> K["tRPC 返回码: exception_refer = trpc.status_code"]
+    H --> L["空集合由 resource 保持 unknown 兼容"]
 ```
 
 核心字段：
@@ -153,11 +161,17 @@ build_service_code_remark_config(
 
 | 变更点                                                                                    | 目标                                        |
 |----------------------------------------------------------------------------------------|-------------------------------------------|
-| **[Keep]** `process_rpc_span(span)`                                                    | 保留 PR #10784 已合入能力，继续把返回码 Span 补成逻辑异常事件。  |
+| **[Keep]** `process_rpc_span(span)`                                                    | 保留 PR #10784 已合入能力，按并集语义把返回码 Span 补成逻辑异常事件。 |
 | **[Add]** `get_exception_events(span)` *[1]*                                           | 返回标准逻辑异常事件，空列表由 resource 保持 `unknown` 兼容。 |
 | **[Add]** `build_exception_params(exception_type, exception_refer, operator_key="op")` | 输出查询条件参数，供详情、趋势和调用链 URL 复用。               |
 
 * *[1] 返回标准协议：`get_exception_events(span)` 对真实异常事件和返回码逻辑事件输出同构字段。*
+
+`process_rpc_span` 实现约束：
+
+- 不因已有真实 `exception` event 提前返回。
+- 先保留 `span[events]` 原有内容，再在命中 RPC/tRPC 返回码时追加返回码逻辑事件。
+- 返回码空值判断保留 `code is None or code == ""`，并补充注释说明不使用 `if not code`，避免数值型错误码 `0` 被误判为空。
 
 | 字段                  | 类型       | 来源字段                                                                                                                           | 说明                        |
 |---------------------|----------|--------------------------------------------------------------------------------------------------------------------------------|---------------------------|
@@ -294,6 +308,7 @@ for ctx in return_code_contexts:
 |----------------|---------------------------------------|-------------------------------------------------------------------------|
 | 应用错误页概览态       | 不选中错误列表行。                             | 趋势、详情和饼图保持原有全量错误口径。                                                     |
 | 应用错误页真实异常      | 选中真实异常行。                              | 请求携带 `exception_refer = events.attributes.exception.type`，下游只展示该真实异常类型。 |
+| 应用错误页真实异常 + 返回码 | 同一个 Span 同时包含真实 `exception` event 与 RPC/tRPC 返回码。 | 错误来源按并集进入逻辑异常事件集合，真实异常和返回码错误都能在错误列表、详情和接口分布中展示。 |
 | 应用错误页 tRPC 返回码 | 选中 tRPC 返回码行。                         | 请求携带 `exception_refer = trpc.status_code`，下游只展示该返回码错误。                  |
 | 应用错误页 RPC 返回码  | 选中 RPC 返回码行。                          | 请求携带 `exception_refer = rpc.error_code`，下游只展示该返回码错误。                    |
 | 服务错误页          | 在 service 与 component 两类服务错误视图重复上述场景。 | 三个同构页面联动行为一致。                                                           |
@@ -315,6 +330,7 @@ for ctx in return_code_contexts:
 
 | 时间                 | 结论性进展                                                                                                                                                                                           |
 |--------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `2026-06-07 23:23` | [a] 确认逻辑异常事件来源采用并集语义，已有真实 `exception` events 时仍需继续从 RPC/tRPC 返回码和报错信息提取返回码逻辑事件。<br />[b] `process_rpc_span` 不应因已有 exception event 早退。                                                    |
 | `2026-06-02 16:00` | [a] 里程碑 3 收敛为错误详情标题备注补全，不扩展错误列表、趋势和饼图展示面。<br />[b] 备注能力改为抽象 `service_config` 生成函数，错误详情通过 `service_code_remark_map` 复用服务视角 `{code: remark}` 结果。                                                  |
 | `2026-06-02 01:12` | [a] 将公共条件函数统一命名为 `build_exception_params`，并把具体条件映射下沉到开发方案。<br />[b] 确认 `QueryExceptionDetailEventResource` 与 `QueryExceptionEndpointResource` 可在 `query_span` 前置收窄，但仍需保留事件级匹配。                  |
 | `2026-06-01 21:00` | [a] 回归 `SpanHandler`、`ErrorListResource`、三个下游 resource 和 `scene_view` 配置后，方案收敛为 `SpanHandler` 统一异常事件读取与条件参数构造。<br />[b] 修正 `QueryExceptionEndpointResource` 为后置聚合边界，确认 PR #10784 已合入，新 PR 分支待定。 |
