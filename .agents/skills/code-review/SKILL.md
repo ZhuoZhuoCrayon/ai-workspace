@@ -128,6 +128,28 @@ PR review 场景开始前必须补齐 assignees，未完成前不得继续 revie
 问题：错误返回值未处理，可能导致空指针。
 ```
 
+评论内容结构：
+
+- 必须包含明确问题、影响范围和修复方向。
+- 当对话中已经确认结构代码或关键实现形态时，PR 评论必须保留这些结构信号。
+- 不要把已确认的结构方案压缩成泛化建议，导致作者无法直接落代码。
+
+Bad：
+
+```markdown
+[P1] 问题：这里应该同时展示 events 和返回码错误。
+
+建议：去掉早退，按并集逻辑处理。
+```
+
+Good：
+
+```markdown
+[P1] 问题：错误来源应该做并集展示。这里发现已有 exception event 就直接返回，会让同一个 span 中已经上报的标准 exception event 和 attributes.rpc.error_code / attributes.trpc.status_code 变成互斥关系；后续 get_exception_events() 只会看到原始 events，无法再补充返回码逻辑异常，错误列表、详情和接口分布都会漏掉这类返回码错误。
+
+建议：去掉这个早退，保留已有 events，并在存在 RPC/tRPC 错误码时额外 append 一个返回码 exception event。核心逻辑可以保持很简单：events = span.get(OtlpKey.EVENTS) or [] 后写回 span[OtlpKey.EVENTS] = events，然后沿用下面的返回码提取逻辑。这里 if code is None or code == "": 建议保留，并补一句注释说明不要写成 if not code，避免数值型错误码 0 被误判为空。
+```
+
 ### c. 评论语言
 
 | 场景 | 语言 |
@@ -143,4 +165,6 @@ PR review 场景开始前必须补齐 assignees，未完成前不得继续 revie
 - 新增问题必须以风险为主，不把风格偏好伪装成阻塞问题。
 - 每个 finding 都要有代码位置、影响说明和修复方向。
 - 没有发现问题时，明确说明未发现阻塞问题，并列出残余风险或未覆盖检查。
+- 发布到 PR 的评论必须和用户最终确认的草稿完全一致。
+- 发布前逐条比对最终草稿，禁止在发布时二次改写、压缩、补充或删减。
 - 发布到 PR 前再次确认 inline 评论、总结评论和语言选择。
