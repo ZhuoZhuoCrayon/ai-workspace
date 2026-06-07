@@ -1,13 +1,13 @@
 # 知识库索引
 
-> 最后更新：2026-06-04
+> 最后更新：2026-06-08
 
 ## 0x01 项目知识
 
 | 项目 | 路径 | 数量 | 说明 |
 |------|------|------|------|
 | ai-workspace | [ai-workspace/](./ai-workspace/INDEX.md) | 4 篇 | AI 工作区 — 知识管理与多项目协作中枢 |
-| bkmonitor | [bkmonitor/](./bkmonitor/INDEX.md) | 41 篇 | 蓝鲸监控平台 (bk-monitor/bkmonitor) |
+| bkmonitor | [bkmonitor/](./bkmonitor/INDEX.md) | 42 篇 | 蓝鲸监控平台 (bk-monitor/bkmonitor) |
 | bkm-skills | [bkm-skills/](./bkm-skills/INDEX.md) | 6 篇 | BlueKing Monitor Skills |
 | bkmonitor_mcp | [bkmonitor_mcp/](./bkmonitor_mcp/INDEX.md) | 1 篇 | 蓝鲸监控 MCP Server |
 | bkmonitor-datalink | [bkmonitor-datalink/](./bkmonitor-datalink/INDEX.md) | 1 篇 | 蓝鲸监控数据链路 |
@@ -17,6 +17,10 @@
 
 ## 0x02 最近更新
 
+- 2026-06-08：新增
+  [日志数据源切换前后保持原始日志结构一致](./bkmonitor/issues/2026-06-08-log-uq-object-structure-restore/README.md)
+  至 bkmonitor
+  （将日志 UnifyQuery 打平对象字段还原为 ES 查询时期的原始结构，保持数据源切换前后协议一致）
 - 2026-06-04：更新
   [主机场景容器事件关联准确性提升](./bkmonitor/issues/2026-06-03-alert-host-k8s-event-relation-accuracy/README.md)
   至 bkmonitor
@@ -33,7 +37,3 @@
   [RUM 领域信息收集：核心术语、机制与规范索引](./bkmonitor/articles/2026-06-03-rum-observability-domain-primer/README.md)
   至 bkmonitor
   （按规范聚合整理 RUM 领域常见术语、机制解释和参考链接，作为领域建设入门资料）
-- 2026-06-02：更新
-  [错误视图 tRPC 场景适配](./bkmonitor/issues/2026-05-31-apm-error-view-trpc-adaptation/README.md)
-  至 bkmonitor
-  （补齐里程碑 3：错误详情通过返回码备注规则展示 `返回码 - xxxx（备注）`）
