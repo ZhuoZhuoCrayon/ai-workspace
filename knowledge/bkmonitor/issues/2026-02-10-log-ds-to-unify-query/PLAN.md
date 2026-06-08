@@ -4,7 +4,7 @@ tags: [log, unify-query, data-source]
 issue: ./README.md
 description: 日志数据源切换到 unify-query 的实施方案
 created: 2026-02-10
-updated: 2026-06-08
+updated: 2026-06-09
 ---
 
 # 日志数据源切换 unify-query —— 实施方案
@@ -36,7 +36,11 @@ POD="bk-monitor-api-d76956886-84bhf"
 
 # 上云
 NAMESPACE="ieg-blueking-monitor-prod"
-POD="bk-monitor-api-69bbb544f7-zxwwt"
+POD="bk-monitor-api-5499b4ffd9-26kxj"
+
+# 出海
+NAMESPACE="blueking"
+POD="bk-monitor-api-8465d4f746-cbzvh"
 
 LOCAL_PROJECT_ROOT="/remote-dev/Project/Github/bk/monitor/bk-monitor/bkmonitor"
 kubectl cp ${LOCAL_PROJECT_ROOT}/constants/data_source.py -n ${NAMESPACE} ${POD}:/app/code/constants/data_source.py
@@ -63,7 +67,15 @@ OUTPUT="/tmp/ieod_stats.csv"
 python manage.py reconcile_log_strategy --mode stat --output ${OUTPUT}
 ```
 
-3）将生成的 CSV 从 Pod 中复制到本地：
+
+3）bksg 环境执行：
+
+```bash
+OUTPUT="/tmp/bksg_stats.csv"
+python manage.py reconcile_log_strategy --mode stat --output ${OUTPUT}
+```
+
+4）将生成的 CSV 从 Pod 中复制到本地：
 
 ```bash
 kubectl cp ${NAMESPACE}/${POD}:${OUTPUT} ${OUTPUT}
@@ -74,6 +86,7 @@ kubectl cp ${NAMESPACE}/${POD}:${OUTPUT} ${OUTPUT}
 对账前提：
 
 - ieod 环境，共 289 个业务、14416 个策略，按策略数量贪心分为 10 组。
+- bksg 环境，共 53 个业务、416 个策略，单组执行。
 - 对账时间 = `(当前 - 15 分钟, 当前)`，通过 `--start-time` / `--end-time` 传入秒级时间戳。
 
 ```bash
@@ -88,6 +101,13 @@ echo "对账时间范围: ${START_TIME} ~ ${END_TIME}"
 ```bash
 OUTPUT="/tmp/bkop_reconcile_$(date +%Y%m%d%H%M%S)_g01.csv"
 python manage.py reconcile_log_strategy --mode reconcile --output ${OUTPUT} --start-time ${START_TIME} --end-time ${END_TIME} --biz-ids 2 9 10 11 7 -50
+```
+
+**bksg**（53 个业务，416 个策略）：
+
+```bash
+OUTPUT="/tmp/bksg_reconcile_$(date +%Y%m%d%H%M%S)_g01.csv"
+python manage.py reconcile_log_strategy --mode reconcile --output ${OUTPUT} --start-time ${START_TIME} --end-time ${END_TIME} --biz-ids 2 27 22 19062 18868 31 18 18861 18970 3 18817 42 -3982 18996 19047 18925 18824 18937 19022 19010 19080 18971 -4593 -4384 -4318 -77 18917 18941 18994 18998 -4306 -96 19 43 18826 18973 19012 19029 19031 19050 -4779 -4769 -4680 -4393 4 9 25 18796 18814 18898 18901 19004 19023
 ```
 
 **第 1 组**（1 个业务，5888 个策略）—— TGlog：
