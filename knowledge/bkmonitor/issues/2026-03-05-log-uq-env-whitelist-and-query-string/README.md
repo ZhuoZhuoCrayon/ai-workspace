@@ -3,7 +3,7 @@ title: 日志 UnifyQuery 环境变量白名单与 query_string 增强
 tags: [log, unify-query, data-source, query-string, config]
 description: 为日志 UnifyQuery 灰度白名单增加环境变量配置层，并对齐日志平台 query_string 处理逻辑
 created: 2026-03-05
-updated: 2026-03-05
+updated: 2026-06-08
 ---
 
 # 日志 UnifyQuery 环境变量白名单与 query_string 增强
@@ -24,6 +24,7 @@ updated: 2026-03-05
 ### b. 目标
 
 - 环境变量 `LOG_UNIFY_QUERY_WHITE_BIZ_LIST` 支持灰度白名单，优先级高于 DB。
+- 灰度白名单支持 `-1` 作为全量灰度标识，列表中存在 `-1` 时所有业务均走 UnifyQuery。
 - `LogSearchTimeSeriesDataSource` 对齐日志平台的 `query_string` 处理。
 - 抽象 `_get_unify_query_string` 方法，允许日志数据源子类定制。
 
@@ -33,8 +34,9 @@ updated: 2026-03-05
 
 1. `config/default.py` 增加环境变量配置，命名区别于 DB 配置项。
 2. `LogSearchTimeSeriesDataSource._fetch_white_list` 增加环境变量优先级。
-3. `BaseBkMonitorLogDataSource.to_unify_query_config` 中 `self.query_string` 的处理抽象为 `_get_unify_query_string`，允许子类定制。
-4. `LogSearchTimeSeriesDataSource` 覆写 `_get_unify_query_string`，参考日志平台 QueryStringBuilder 对齐处理逻辑，简化为单个方法。
+3. `LogSearchTimeSeriesDataSource.switch_unify_query` 在原有白名单判断基础上扩展 `-1` 全量灰度标识。
+4. `BaseBkMonitorLogDataSource.to_unify_query_config` 中 `self.query_string` 的处理抽象为 `_get_unify_query_string`，允许子类定制。
+5. `LogSearchTimeSeriesDataSource` 覆写 `_get_unify_query_string`，参考日志平台 QueryStringBuilder 对齐处理逻辑，简化为单个方法。
 
 ### b. 约束
 
