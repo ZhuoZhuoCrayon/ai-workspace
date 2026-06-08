@@ -171,7 +171,7 @@ Helm values 已提前设置，代码发布后立即生效。
 | 状态 | 分支 | 里程碑 | PR |
 | --- | --- | --- | --- |
 | ✅ | `feat/event/#1010158081129076973` | 里程碑 1：日志数据源切换 UnifyQuery 与灰度白名单 | [TencentBlueKing/bk-monitor #9086](https://github.com/TencentBlueKing/bk-monitor/pull/9086) |
-| 🔄 | `feat/datasource/#1010158081135015922` | 里程碑 2：日志数据源全量灰度标识 | [TencentBlueKing/bk-monitor #10966](https://github.com/TencentBlueKing/bk-monitor/pull/10966) |
+| ✅ | `feat/datasource/#1010158081135015922` | 里程碑 2：日志数据源全量灰度标识 | [TencentBlueKing/bk-monitor #10966](https://github.com/TencentBlueKing/bk-monitor/pull/10966) |
 
 ---
 

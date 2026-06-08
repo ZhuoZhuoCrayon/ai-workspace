@@ -77,4 +77,4 @@ flowchart LR
 
 | 状态 | 分支 | 里程碑 | PR |
 | --- | --- | --- | --- |
-| 🔄 | `-` | 方案输出 | - |
+| ✅ | `feat/datasource/#1010158081134999749` | 里程碑 1：日志对象字段结构还原 | [TencentBlueKing/bk-monitor #10965](https://github.com/TencentBlueKing/bk-monitor/pull/10965) |

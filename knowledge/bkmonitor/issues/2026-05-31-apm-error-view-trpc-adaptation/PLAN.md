@@ -341,6 +341,7 @@ for ctx in return_code_contexts:
 ### a. 参考
 
 - PR：[TencentBlueKing/bk-monitor #10784](https://github.com/TencentBlueKing/bk-monitor/pull/10784)
+- PR：[TencentBlueKing/bk-monitor #10961](https://github.com/TencentBlueKing/bk-monitor/pull/10961)
 - `<源码>` [span_handler.py][src-span-handler]
 - `<源码>` [metric/resources.py][src-metric-resources]
 - `<源码>` [meta/resources.py][src-meta-resources]
@@ -368,5 +369,5 @@ for ctx in return_code_contexts:
 | 状态 | 分支                                                      | 里程碑                       | PR                                                                 |
 |----|---------------------------------------------------------|---------------------------|--------------------------------------------------------------------|
 | ✅  | `feat/trpc_error_display_info_opt/#1010158081134636736` | 里程碑 1：tRPC 场景错误详情展示返回码信息  | [#10784](https://github.com/TencentBlueKing/bk-monitor/pull/10784) |
-| 🔄 | `feat/apm_error_tab_trpc_adaptation/#1010158081134972912` | 里程碑 2：APM 错误视图返回码联动适配     | [#10961](https://github.com/TencentBlueKing/bk-monitor/pull/10961) |
+| ✅ | `feat/apm_error_tab_trpc_adaptation/#1010158081134972912` | 里程碑 2：APM 错误视图返回码联动适配     | [#10961](https://github.com/TencentBlueKing/bk-monitor/pull/10961) |
 | 🔄 | `<branch_name>`                                         | 里程碑 3：APM 错误详情支持展示返回码备注信息 | 待创建                                                                |
