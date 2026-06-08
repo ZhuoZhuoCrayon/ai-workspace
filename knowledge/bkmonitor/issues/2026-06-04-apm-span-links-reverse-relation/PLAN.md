@@ -4,7 +4,7 @@ tags: [apm, span, trace, links, relation, otlp]
 issue: ./README.md
 description: 通过 ListLinkResource 合并数据上报侧与反向关联 Links，并统一返回 OpenTelemetry Link 列表
 created: 2026-06-04
-updated: 2026-06-04
+updated: 2026-06-08
 ---
 
 # APM Span 详情支持 Links 反向关联展示 —— 实施方案
@@ -22,6 +22,15 @@ TraceID 和 SpanID 只用于构造过滤条件，不改变 `links[]` 的上报�
 - Trace Web 资源通过 `api.apm_api` 调用 APM 底层资源。
 - `api.apm_api.query_span_list` 支持通过 `filters` 查询 Span 原始结果表。
 - Span 原始字段包含顶层 TraceID、SpanID、TraceState 和嵌套字段 `links[]`。
+- `query_span_list` 后台链路为 `QuerySpanListResource -> QueryProxy.query_list(QueryMode.SPAN) -> SpanQuery.query_list`。
+- `QueryProxy.query_list()` 已对顶层 `trace_id` / `span_id` 精确查询重置时间范围，由 `BaseQuery._get_time_range()` 按应用数据保留期补全并前后填充 `5s`。
+- 旧链路 `query_span -> TraceDataSource.query_span` 强依赖 `start_time` 和 `end_time`，不作为 Links 查询入口。
+
+### c. 时间范围结论
+
+Links 反向检索复用 `query_span_list` 的精确 ID 查询语义。
+
+`links.trace_id` 和 `links.span_id` 属于 Trace / Span ID 的嵌套字段形态，应纳入 `QueryProxy.is_trace_or_span_id_query()` 的精确查询识别范围。
 
 
 ## 0x02 架构设计
@@ -61,11 +70,12 @@ flowchart LR
 
 | 查询路径    | `filters`                                                                      | 结果处理                     |
 |---------|--------------------------------------------------------------------------------|--------------------------|
-| 正向 Link | `trace_id = TraceID（若提供）`<br />`span_id = SpanID（若提供）` *[1]*                   | 提取命中 Span 的全部 `links[]`。 |
-| 反向 Link | `links.trace_id = TraceID（若提供）`<br />`links.span_id = SpanID（若提供）` *[1]* *[2]* | 将命中的来源 Span 投影为 Link。    |
+| 正向 Link | `trace_id = TraceID（若提供）`<br />`span_id = SpanID（若提供）` *[1]* *[3]*                   | 提取命中 Span 的全部 `links[]`。 |
+| 反向 Link | `links.trace_id = TraceID（若提供）`<br />`links.span_id = SpanID（若提供）` *[1]* *[2]* *[3]* | 将命中的来源 Span 投影为 Link。    |
 
 - *[1] 只为已提供的 ID 构造过滤条件，同时提供 TraceID 和 SpanID 时使用 `AND`。*
 - *[2] 反向查询的 TraceID 和 SpanID 条件必须命中 `links[]` 中的同一个 Link 对象。*
+- *[3] 两路调用 `query_span_list` 时均省略 `start_time` 和 `end_time`，由后台按应用数据保留期补全查询范围。*
 
 两路结果转换为同构 Link 后合并，去重键为 `trace_id + span_id + trace_state + normalized(attributes)`。
 
@@ -174,7 +184,20 @@ Link 字段：
 
 两次调用复用当前应用信息和数据保留期，分页上限由 `ListLinkResource` 统一控制。
 
-### c. Link 转换
+### c. 后台查询兼容
+
+改动范围：
+
+- `bkmonitor/apm/resources.py`
+- `bkmonitor/apm/core/handlers/query/proxy.py`
+
+| 变更 | 目标 |
+| --- | --- |
+| **[Change]** `QuerySerializer.start_time` | 放宽为 `required=False, allow_null=True, default=None`，允许开始时间为空。 |
+| **[Change]** `QuerySerializer.end_time` | 放宽为 `required=False, allow_null=True, default=None`，允许结束时间为空。 |
+| **[Change]** `QueryProxy.is_trace_or_span_id_query()` | 将 `links.trace_id` 和 `links.span_id` 纳入精确 ID 查询识别。 |
+
+### d. Link 转换
 
 `ListLinkResource.build_links` 类方法统一处理两路查询结果：
 
@@ -211,6 +234,7 @@ ListLinkResource.build_links(
 | 时间 | 结论性进展 |
 | --- | --- |
 | `2026-06-04 21:00` | 核心图明确双路 filters，开发方案补齐查询参数与 `build_links` 输入、映射协议。 |
+| `2026-06-08 22:20` | 确认 Links 查询复用 `query_span_list` 新链路，后台放宽共享 `QuerySerializer` 时间参数，并将 `links.trace_id` / `links.span_id` 纳入精确 ID 查询识别。 |
 
 ## 0x05 参考 & 版本锚点
 
@@ -224,4 +248,6 @@ ListLinkResource.build_links(
 
 ### b. 版本锚点
 
-待补充。
+| 状态 | 分支 | 里程碑 | PR |
+| --- | --- | --- | --- |
+| 🔄 | `<branch_name>` | 里程碑 1：Links 反向关联查询 | 待创建 |

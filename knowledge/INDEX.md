@@ -21,6 +21,10 @@
   [日志数据源切换前后保持原始日志结构一致](./bkmonitor/issues/2026-06-08-log-uq-object-structure-restore/README.md)
   至 bkmonitor
   （将日志 UnifyQuery 打平对象字段还原为 ES 查询时期的原始结构，保持数据源切换前后协议一致）
+- 2026-06-08：更新
+  [APM Span 详情支持 Links 反向关联展示](./bkmonitor/issues/2026-06-04-apm-span-links-reverse-relation/README.md)
+  至 bkmonitor
+  （确认 Links 查询不传时间范围，由 `query_span_list` 后台按保留期补全，并扩展 `links.trace_id` / `links.span_id` 精确检索）
 - 2026-06-04：更新
   [主机场景容器事件关联准确性提升](./bkmonitor/issues/2026-06-03-alert-host-k8s-event-relation-accuracy/README.md)
   至 bkmonitor
@@ -33,7 +37,3 @@
   [【告警中心】优化关联日志条件构造不准确的问题](./bkmonitor/issues/2026-06-04-alert-log-search-condition-accuracy/README.md)
   至 bkmonitor
   （将日志告警关联日志的过滤语义收敛到有效 `keyword`，避免语句模式忽略策略过滤条件）
-- 2026-06-03：新增
-  [RUM 领域信息收集：核心术语、机制与规范索引](./bkmonitor/articles/2026-06-03-rum-observability-domain-primer/README.md)
-  至 bkmonitor
-  （按规范聚合整理 RUM 领域常见术语、机制解释和参考链接，作为领域建设入门资料）

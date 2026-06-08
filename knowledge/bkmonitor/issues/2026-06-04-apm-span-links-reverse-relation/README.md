@@ -3,7 +3,7 @@ title: APM Span 详情支持 Links 反向关联展示
 tags: [apm, span, trace, links, relation, otlp]
 description: 通过 TraceID 和 SpanID 过滤正向与反向关联，并统一返回 OpenTelemetry Link 列表
 created: 2026-06-04
-updated: 2026-06-04
+updated: 2026-06-08
 ---
 
 # APM Span 详情支持 Links 反向关联展示
