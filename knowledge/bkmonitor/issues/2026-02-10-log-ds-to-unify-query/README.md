@@ -3,7 +3,7 @@ title: 日志数据源切换 unify-query
 tags: [log, unify-query, data-source]
 description: 将日志查询数据源从原有实现切换到 unify-query 统一查询层
 created: 2026-02-10
-updated: 2026-02-10
+updated: 2026-06-08
 ---
 
 # 日志数据源切换 unify-query
@@ -35,4 +35,3 @@ updated: 2026-02-10
 - 开发分支：`feat/log_ds_to_uq`
 - 主实现：commit `d802715f`
 - 对账脚本：commit `0806795b`
-

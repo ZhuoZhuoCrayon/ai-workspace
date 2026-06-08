@@ -4,7 +4,7 @@ tags: [log, unify-query, data-source]
 issue: ./README.md
 description: 日志数据源切换到 unify-query 的实施方案
 created: 2026-02-10
-updated: 2026-02-10
+updated: 2026-06-08
 ---
 
 # 日志数据源切换 unify-query —— 实施方案
@@ -30,9 +30,11 @@ updated: 2026-02-10
 ### a. 同步代码到 Pod
 
 ```bash
+# bkop
 NAMESPACE="blueking"
 POD="bk-monitor-api-d76956886-84bhf"
 
+# 上云
 NAMESPACE="ieg-blueking-monitor-prod"
 POD="bk-monitor-api-69bbb544f7-zxwwt"
 
@@ -69,8 +71,10 @@ kubectl cp ${NAMESPACE}/${POD}:${OUTPUT} ${OUTPUT}
 
 ### c. 执行对账
 
-> ieod 环境，共 289 个业务、14416 个策略，按策略数量贪心分为 10 组。
-> 对账时间 = `(当前 - 15 分钟, 当前)`，通过 `--start-time` / `--end-time` 传入秒级时间戳。
+对账前提：
+
+- ieod 环境，共 289 个业务、14416 个策略，按策略数量贪心分为 10 组。
+- 对账时间 = `(当前 - 15 分钟, 当前)`，通过 `--start-time` / `--end-time` 传入秒级时间戳。
 
 ```bash
 # 对账时间窗口：(now - 15min, now)
@@ -185,7 +189,9 @@ python manage.py reconcile_log_strategy --mode reconcile --strategy-ids 12345 12
 
 ### b. 工作目录
 
-`csv/`——所有输入 CSV、输出 Excel、脚本均在此目录下。Agent 根据下方规格自行生成处理脚本，无需依赖已有脚本。
+`csv/` 是工作目录，包含所有输入 CSV、输出 Excel 和处理脚本。
+
+Agent 根据下方规格自行生成处理脚本，无需依赖已有脚本。
 
 ### c. 处理步骤
 
@@ -235,9 +241,10 @@ python manage.py reconcile_log_strategy --mode reconcile --strategy-ids 12345 12
 - 多环境、多时间点的对账数据写入同一个 Excel。
 - 以唯一键（`{环境}-{策略 ID}`）去重：已存在的记录**不覆盖**（保留人为编辑的「处理人/优先级/进度/原因」等字段），仅追加新记录。
 - 写入前自动备份：若 `reconcile.xlsx` 已存在，先复制为 `reconcile_backup_{YYYYMMDDHHMMSS}.xlsx`。
-- 读取已有 Excel 时用 openpyxl（非 pandas），以保留超链接信息；从已有「策略」单元格还原唯一键时，用正则 `#(\d+)` 提取 strategy_id。
+- 读取已有 Excel 时用 openpyxl（非 pandas），以保留超链接信息。
+- 从已有「策略」单元格还原唯一键时，用正则 `#(\d+)` 提取 strategy_id。
 - 「策略」列写入时附带超链接（`cell.hyperlink = url`），并设置蓝色下划线字体。
-- 表头样式：加粗、白字蓝底、居中。冻结首行。列宽自适应。
+- 表格样式：表头加粗、白字蓝底、居中，冻结首行，并自动调整列宽。
 
 #### 步骤 4：检查结果（人工确认）
 
@@ -337,5 +344,4 @@ python manage.py reconcile_log_strategy --mode reconcile --strategy-ids 12345 12
 - [ ] 对账验证中
 - [ ] 对账结果分析
 
----
-*制定日期：2026-02-10*
+制定日期：2026-02-10

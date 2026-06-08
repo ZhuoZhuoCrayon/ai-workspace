@@ -18,6 +18,10 @@
 ## 0x02 最近更新
 
 - 2026-06-08：更新
+  [日志数据源切换 unify-query](./bkmonitor/issues/2026-02-10-log-ds-to-unify-query/README.md)
+  至 bkmonitor
+  （补充 Pod 同步环境备注，并整理对账方案文档格式）
+- 2026-06-08：更新
   [错误视图 tRPC 场景适配](./bkmonitor/issues/2026-05-31-apm-error-view-trpc-adaptation/README.md)
   至 bkmonitor
   （补充里程碑 3：错误列表返回码使用 `exception_alias` 展示基础别名，原错误详情返回码备注顺延为里程碑 4）
