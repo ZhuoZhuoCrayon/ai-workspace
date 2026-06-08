@@ -21,12 +21,19 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 - 先直接执行 `uv`，不预查 `.venv`。
 - 默认 `.venv` 已存在时，`uv` 会自动发现并使用。
 - `pyproject.toml` / `uv.lock` 走 `uv run` 或项目脚本。
+- 提交前检查和手动检查也必须走 `uv run`，避免绕开项目虚拟环境。
 - `requirements*.txt` 可走 `uv pip` 兼容接口。
 
 运行：
 
 ```bash
 uv run <command>
+```
+
+项目内检查示例：
+
+```bash
+uv run pre-commit run --files <file>
 ```
 
 分支：
