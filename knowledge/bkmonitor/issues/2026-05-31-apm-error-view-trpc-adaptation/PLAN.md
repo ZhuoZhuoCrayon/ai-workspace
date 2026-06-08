@@ -226,7 +226,7 @@ exception_refer 不为空
 |--------------------------------|------------------------------------------------------------------------------------------------------------------|----------------------------------------------|
 | `list_error_event_spans` *[1]* | 保持候选 Span 查询入口，只扩展 `query_span.fields`。                                                                          | 不负责分类，确保 `parse_errors` 能按标准协议读取事件。          |
 | `parse_errors`                 | 使用 `SpanHandler.get_exception_events(span)`。                                                                     | 统一真实异常、返回码和 `unknown` 处理。                    |
-| `combine_errors`               | 输出 `exception_refer` 和 `exception_alias`，并用 `endpoint + exception_alias` 生成 `message.title`。                        | 错误列表返回码行展示为 `<endpoint>: 返回码 - <code>`。      |
+| `combine_errors`               | 输出 `exception_refer` 和 `exception_alias`，并用 `message.title` 承载 `<endpoint>: <exception_alias>`。                        | 让错误列表标题复用统一展示别名。      |
 | `get_pagination_data`          | 调用 `SpanHandler.build_exception_params(exception_type, exception_refer, operator_key="operator")` 拼接调用链 `where`。 | 调用链跳转与当前选中错误来源一致，不把展示别名写入过滤条件。             |
 
 * [1] `list_error_event_spans` 新增列表消费字段：
@@ -234,12 +234,16 @@ exception_refer 不为空
     * 返回码相关：`attributes.trpc.status_code`、`attributes.trpc.status_msg`
     * 其他：`status.message`、`start_time`、`events.attributes.exception.stacktrace`
 
-错误列表标题规则：
+错误列表标题统一生成规则：
 
 ```text
-真实异常：<endpoint>: <exception_alias>
-返回码错误：<endpoint>: 返回码 - <code>
+message.title = <endpoint>: <exception_alias>
 ```
+
+示例：
+
+- 真实异常：`/trpc.xxx/Method: TimeoutError`
+- 返回码错误：`/trpc.xxx/Method: 返回码 - 111`
 
 `exception_type` 继续作为分组、过滤和调用链跳转值，`exception_alias` 只作为无备注基础展示别名。
 
