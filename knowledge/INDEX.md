@@ -17,6 +17,10 @@
 
 ## 0x02 最近更新
 
+- 2026-06-08：更新
+  [错误视图 tRPC 场景适配](./bkmonitor/issues/2026-05-31-apm-error-view-trpc-adaptation/README.md)
+  至 bkmonitor
+  （补充里程碑 3：错误列表返回码使用 `exception_alias` 展示基础别名，原错误详情返回码备注顺延为里程碑 4）
 - 2026-06-08：新增
   [日志数据源切换前后保持原始日志结构一致](./bkmonitor/issues/2026-06-08-log-uq-object-structure-restore/README.md)
   至 bkmonitor

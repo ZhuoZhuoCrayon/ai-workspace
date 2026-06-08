@@ -12,7 +12,7 @@
 | [APM Span 详情支持 Links 反向关联展示](./issues/2026-06-04-apm-span-links-reverse-relation/README.md) | `apm` `span` `trace` `links` `relation` `otlp` | 新建 | 2026-06-08 |
 | [主机场景容器事件关联准确性提升](./issues/2026-06-03-alert-host-k8s-event-relation-accuracy/README.md) | `alert` `k8s-event` `host-target` `k8s-node` `scene-view` `unify-query` | 待合入 | 2026-06-04 |
 | [【告警中心】优化关联日志条件构造不准确的问题](./issues/2026-06-04-alert-log-search-condition-accuracy/README.md) | `alert` `log` `log-relation` `query-string` `alert-drilling` `lucene` | 新建 | 2026-06-04 |
-| [错误视图 tRPC 场景适配](./issues/2026-05-31-apm-error-view-trpc-adaptation/README.md) | `apm` `error-view` `trpc` `rpc` `exception-type` `scene-view` `code-remark` | 设计中 | 2026-06-02 |
+| [错误视图 tRPC 场景适配](./issues/2026-05-31-apm-error-view-trpc-adaptation/README.md) | `apm` `error-view` `trpc` `rpc` `exception-type` `scene-view` `code-remark` | 设计中 | 2026-06-08 |
 | [APM 预计算适配共享数据源](./issues/2026-05-14-apm-precalc-shared-multi-app/README.md) | `apm` `pre-calculate` `shared-datasource` `multi-app` `bmw` | 实现中 | 2026-05-22 |
 | [APM 支持跨应用共享数据源](./issues/2026-03-03-apm-shared-datasource/README.md) | `apm` `datasource` `es` `shared-storage` | 设计中 | 2026-05-14 |
 | [APM Span 内置指标支持声明式引用](./issues/2026-05-07-apm-span-builtin-metric-declarative-reference/README.md) | `apm` `span` `metric-group` `trace` `unify-query` `declarative` | 新建 | 2026-05-07 |
