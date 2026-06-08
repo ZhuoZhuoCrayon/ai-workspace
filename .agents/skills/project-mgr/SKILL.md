@@ -1,7 +1,9 @@
 ---
 name: project-mgr
 title: project-mgr — 项目管理
-description: 通过 repos.json 注册和管理工作区中的项目。当用户想要接入项目、移除项目、询问项目设置规范，或消息中提到已注册项目名并需要定位 local_path 时使用。
+description: >
+  通过 repos.json 注册和管理工作区中的项目。
+  当用户想要接入项目、移除项目、询问项目设置规范，或消息中提到已注册项目名并需要定位 local_path 时使用。
 ---
 
 # project-mgr — 项目管理

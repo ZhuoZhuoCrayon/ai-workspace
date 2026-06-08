@@ -1,6 +1,9 @@
 ---
 name: work-schedule
-description: 需求排期录入工具——将工作事项同步到企业微信智能表格。当用户提到"加入排期"、"录入排期"、"更新排期表"、"需求排期"、"把 xxx 加到排期"等意图时触发。也适用于用户提供新周期 schema/key 要求配置新文档的场景。
+description: >
+  需求排期录入工具——将工作事项同步到企业微信智能表格。
+  当用户提到"加入排期"、"录入排期"、"更新排期表"、"需求排期"、"把 xxx 加到排期"等意图时触发。
+  也适用于用户提供新周期 schema/key 要求配置新文档的场景。
 ---
 
 # 需求排期录入 Skill
@@ -24,7 +27,8 @@ description: 需求排期录入工具——将工作事项同步到企业微信�
 SKILL_DIR=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "<SKILL.md 所在目录的绝对路径>")
 ```
 
-* 阅读本 SKILL.md 时已知其绝对路径（例如 `/workspace/.cursor/skills/work-schedule/SKILL.md`），取其父目录作为 `SKILL_DIR`，通过 `os.path.realpath` 解析 symlink 即可。
+* 阅读本 SKILL.md 时已知其绝对路径（如 `.../work-schedule/SKILL.md`），取其父目录作为 `SKILL_DIR`。
+* 通过 `os.path.realpath` 解析 symlink 得到真实目录。
 * 后续所有脚本和配置文件均使用 `${SKILL_DIR}/...` 引用，**禁止硬编码路径**。
 
 ## 0x03 配置规范
@@ -59,7 +63,7 @@ schedules:
 
 ## 0x04 字段 Schema（扩展版）
 
-> 以下为 2026H1 示例。实际以 `${SKILL_DIR}/config/schedules.yaml` 为准。
+> 以下为 2026H1 示例，实际以 `${SKILL_DIR}/config/schedules.yaml` 为准。
 
 | field_id | 列名 | 类型 | 默认值 | 字段说明 |
 |----------|------|------|--------|---------|
@@ -131,7 +135,7 @@ schedules:
 若用户仅描述事项（未确认），只能输出“待写入预览 JSON”，不能执行写入命令。
 
 1. 用户提出“加入排期”
-2. 构造记录 JSON（`项目` 必填；`月份` 可省略由脚本自动补）
+2. 构造记录 JSON（`项目` 必填，`月份` 可省略由脚本自动补）
 3. 严格区分 `需求` 和 `备注`：
    - `需求`：不包含细节的概括短语（例如：`LOL 社区版支持`）
    - `备注`：具体详情（背景、版本范围、约束、进展）

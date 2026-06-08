@@ -1,6 +1,8 @@
 ---
 name: dev-env
-description: 准备和修复 Go、Node.js、Python 本地开发环境。用于版本切换、工具链缺失、依赖环境异常、虚拟环境问题，以及编译、测试、检查命令中的环境类失败。
+description: >
+  准备和修复 Go、Node.js、Python 本地开发环境。
+  用于版本切换、工具链缺失、依赖环境异常、虚拟环境问题，以及编译、测试、检查命令中的环境类失败。
 ---
 
 # Dev Env
