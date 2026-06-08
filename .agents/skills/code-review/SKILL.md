@@ -1,6 +1,11 @@
 ---
 name: code-review
-description: 执行代码审查、PR review、复查、处理未解决 review threads、发 review 评论、request changes 或 approve 前必须使用。适用于检查 GitHub PR diff、本地变更、相关源码、测试覆盖、项目规范和既有评论，并输出对话草稿，或在明确授权后发布 inline / conversation review 评论。
+description: >
+  执行代码审查、PR review、复查，或在处理未解决 review threads、发 review 评论、request changes、approve 前必须使用。
+  审查范围覆盖 GitHub PR diff、本地变更、相关源码、测试覆盖、项目规范与既有评论。
+  当用户以方案文档（PLAN.md）配合 PR 发起 review 时，额外核对实现与方案一致性，并在 review 阶段回写方案。
+  回写方案包括同步版本锚点，以及在实现更优或方案过期时主动询问是否更新方案。
+  默认只输出对话草稿，仅在明确授权后发布评论或回写方案。
 ---
 
 # Code Review
@@ -50,6 +55,7 @@ PR review 场景开始前必须补齐 assignees，未完成前不得继续 revie
 | 项目规范 | 优先读取目标仓库 `AGENTS.md`，再按项目类型读取 `pyproject.toml`、`package.json`、`go.mod`、lint / typecheck 配置等。 |
 | 变更内容 | 查看 PR diff、本地 diff、相关源码、测试和配置变更。 |
 | 历史评论 | 查看已有评论、未解决 review threads，以及用户要求复查的旧问题。 |
+| 关联方案 | 用户以方案文档作为需求文档时，完整读取该 issue 目录的 `README.md`（需求）与 `PLAN.md`（方案）而非只读片段，据此建立需求基线、PR ↔ 里程碑映射与方案一致性基线。 |
 
 不要只看 diff 片段就下结论。
 
@@ -64,6 +70,7 @@ PR review 场景开始前必须补齐 assignees，未完成前不得继续 revie
 | 向前兼容 | 未明确声明 breaking change 时，默认按非破坏性改动审查，重点检查既有调用方、配置、数据、API 和行为兼容性。 |
 | 正确性 | 优先找会导致错误结果、异常、数据损坏、安全风险或发布回滚的问题。 |
 | 测试覆盖 | 检查变更是否覆盖关键路径、兼容场景、失败路径和回归风险。 |
+| 方案一致性 | review 关联方案时核对 PR 实现与方案约定的架构、协议、落点与边界是否一致：偏离若是实现缺陷按 P1 提出并指出对应方案条目，若是实现更优或方案已过期则记录差异并进入方案回写（见 [0x09 方案回写](#0x09-方案回写)）。 |
 
 ### b. 可维护性
 
@@ -136,19 +143,35 @@ PR review 场景开始前必须补齐 assignees，未完成前不得继续 revie
 
 Bad：
 
-```markdown
-[P1] 问题：这里应该同时展示 events 和返回码错误。
-
-建议：去掉早退，按并集逻辑处理。
-```
-
-Good：
-
-```markdown
+````markdown
 [P1] 问题：错误来源应该做并集展示。这里发现已有 exception event 就直接返回，会让同一个 span 中已经上报的标准 exception event 和 attributes.rpc.error_code / attributes.trpc.status_code 变成互斥关系；后续 get_exception_events() 只会看到原始 events，无法再补充返回码逻辑异常，错误列表、详情和接口分布都会漏掉这类返回码错误。
 
 建议：去掉这个早退，保留已有 events，并在存在 RPC/tRPC 错误码时额外 append 一个返回码 exception event。核心逻辑可以保持很简单：events = span.get(OtlpKey.EVENTS) or [] 后写回 span[OtlpKey.EVENTS] = events，然后沿用下面的返回码提取逻辑。这里 if code is None or code == "": 建议保留，并补一句注释说明不要写成 if not code，避免数值型错误码 0 被误判为空。
-```
+````
+
+Good：
+
+````markdown
+[P1] 问题：错误来源应该做并集展示。当前已有 `exception` event 就直接 `return span`，会让已上报 events 和 RPC/tRPC 返回码逻辑异常变成互斥关系；同一个 span 同时包含两类错误来源时，返回码错误不会进入后续 `get_exception_events()`。
+
+建议：去掉早退，保留已有 events，并在命中 RPC/tRPC 错误码时额外 append 返回码 `exception` event：
+
+~~~python
+events: list[dict[str, Any]] = span.get(OtlpKey.EVENTS) or []
+span[OtlpKey.EVENTS] = events
+
+attributes: dict[str, Any] = span.get(OtlpKey.ATTRIBUTES) or {}
+status_message: str = (span.get(OtlpKey.STATUS) or {}).get("message", "")
+
+for code_field, message_field in cls.RPC_EXCEPTION_FIELDS.items():
+    code: Any | None = attributes.get(code_field)
+    # 不使用 `if not code`，避免数值型错误码 0 被误判为空。
+    if code is None or code == "":
+        continue
+
+    ...
+~~~
+````
 
 ### c. 评论语言
 
@@ -168,3 +191,21 @@ Good：
 - 发布到 PR 的评论必须和用户最终确认的草稿完全一致。
 - 发布前逐条比对最终草稿，禁止在发布时二次改写、压缩、补充或删减。
 - 发布到 PR 前再次确认 inline 评论、总结评论和语言选择。
+- 关联方案的 review，必须完成方案回写核对：版本锚点是否登记本次 PR / 分支 / 状态，以及实现与方案是否存在实质出入，缺口在草稿中给出同步或询问动作。
+
+## 0x09 方案回写
+
+review 是方案与现实对齐的关键契机，关联方案时按 knowledge-mgr 技能的方案写作与回写规范落实结论。
+
+本 skill 只在此阶段触发核对、产出差异，不锚定其具体规则，规范遗忘时召回 knowledge-mgr 补读。
+
+| 回写场景 | 触发 | review 侧产物 |
+| --- | --- | --- |
+| 版本锚点 | PR / 分支 / 状态与方案登记的锚点不一致。 | 用 `gh pr view` 取真值，草稿输出「版本锚点核对」（当前值 / 实际值 / 动作）。 |
+| 方案与实现对齐 | 实现更优、边界调整、协议变化或方案过期。 | 草稿单列「方案差异」（方案原述 / 实际实现 / 性质 / 建议），主动询问是否回写方案。 |
+
+约束：
+
+- 缺陷类偏离按 [0x04 审查重心](#0x04-审查重心) 走 P1，不回写方案。
+- 不擅自重写方案：先在草稿给出核对 / 差异与拟改要点，经用户确认或明确指令后再回写。
+- 回写按 knowledge-mgr 的方案规范执行，GitHub 写操作仍遵循 [0x02 权限门禁](#0x02-权限门禁)。
