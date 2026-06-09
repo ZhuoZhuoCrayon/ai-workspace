@@ -4,7 +4,7 @@ tags: [alert, log, log-relation, query-string, alert-drilling, lucene]
 issue: ./README.md
 description: 将日志告警关联日志的过滤语义收敛到 keyword 与 addition 的模式边界，修复 query_string 模式下的范围扩大
 created: 2026-06-04
-updated: 2026-06-04
+updated: 2026-06-09
 ---
 
 # 【告警中心】优化关联日志条件构造不准确的问题 —— 实施方案
@@ -20,6 +20,8 @@ updated: 2026-06-04
 - 合并触发条件是有效 `keyword` 且 `addition` 非空。
 - 合并成功后由 `keyword` 承载完整过滤语义，并清空 `addition`。
 - 聚类场景不合并，继续调用 `build_log_search_condition(..., is_merge2keyword=False)`。
+- `agg_condition.value` 转换为 Lucene 片段前统一规范为 list，空值不进入 `QueryStringGenerator`。
+- `get_log_clustering_info` 未命中时返回 `("", "")`，调用方不再依赖 `None` 做类型收窄。
 
 ## 0x02 架构设计
 
@@ -79,6 +81,13 @@ build_log_search_condition(
 
 日志聚类告警是明确豁免场景。
 
+`get_log_clustering_info()` 输出稳定为 `tuple[str, str]`：
+
+| 场景 | `clustering_type` | `clustering_index_set_id` |
+| --- | --- | --- |
+| 命中聚类标签 | `count` 或 `new_class` | 标签中的索引集 ID |
+| 未命中聚类标签 | `""` | `""` |
+
 `DefaultTarget.list_related_log_targets()` 应统一定义：
 
 ```python
@@ -121,10 +130,11 @@ is_clustering = bool(clustering_type and clustering_index_set_id)
 合并策略：
 
 1. 先按现有逻辑生成 `addition`，保持 UI 模式行为不变。
-2. 当 `is_merge2keyword=True`、`keyword` 有效（去除首尾空白后不为空且不等于 `*`）并且 `addition` 非空时，逐条生成过滤片段。
-3. 使用 `AND` 合并原 `keyword` 和过滤片段，得到新的 `keyword`。
-4. 合并成功后将 `addition` 置为 `[]`。
-5. 不满足合并条件时保持原返回。
+2. 策略过滤条件写入 `addition` 前，把 scalar value 包装为 list，并跳过空 list。
+3. 当 `is_merge2keyword=True`、`keyword` 有效（去除首尾空白后不为空且不等于 `*`）并且 `addition` 非空时，逐条生成过滤片段。
+4. 使用 `AND` 合并原 `keyword` 和过滤片段，得到新的 `keyword`。
+5. 合并成功后将 `addition` 置为 `[]`。
+6. 不满足合并条件时保持原返回。
 
 ### c. `DefaultTarget.list_related_log_targets`
 
@@ -138,6 +148,7 @@ is_clustering = bool(clustering_type and clustering_index_set_id)
 | **[Change]** 非聚类调用 `build_log_search_condition(..., is_merge2keyword=True)` | 让有效 `keyword` 承载完整过滤语义，并清空 `addition` |
 | **[Keep]** 聚类调用 `is_merge2keyword=False` | 保持聚类 UI 过滤模式 |
 | **[Keep]** 聚类 `keyword=""` | 避免前端进入语句模式 |
+| **[Change]** 聚类信息未命中返回 `("", "")` | 删除调用方 `assert`，保持字符串协议稳定 |
 
 ### d. 其它调用方
 
@@ -146,13 +157,16 @@ is_clustering = bool(clustering_type and clustering_index_set_id)
 
 ## 0x04 验收与验证
 
-建议补充单测：
+已补充单测：
 
 | 用例 | 断言重点 |
 | --- | --- |
 | `test_build_log_search_condition_merge_keyword_with_filters` | 有效 `keyword` 和 `addition` 同时存在时，`keyword` 包含原语句和过滤片段 |
-| `test_build_log_search_condition_clear_addition_after_merge` | 合并成功后 `addition` 返回空列表 |
 | `test_build_log_search_condition_keep_ui_mode_without_effective_keyword` | `keyword` 为空或 `*` 时不合并 |
+| `test_build_log_search_condition_keeps_separate_filters_by_default` | 默认调用保持 `keyword` 与 `addition` 分离 |
+| `test_build_log_search_condition_merge_scalar_values_and_skip_empty_values` | scalar value 被包装为 list，空 list 不生成 Lucene 片段 |
+| `test_get_log_clustering_info_returns_empty_strings_without_clustering_label` | 无聚类标签时返回 `("", "")` |
+| `test_default_target_merges_addition_for_non_clustering_alert` | 非聚类日志告警详情合并为语句模式 |
 | `test_default_target_clustering_keeps_addition_mode` | 聚类场景返回 `keyword=""` 且 `addition` 包含聚类过滤 |
 
 建议回归：
@@ -166,6 +180,8 @@ is_clustering = bool(clustering_type and clustering_index_set_id)
 | 时间 | 结论性进展 |
 | --- | --- |
 | `2026-06-04 01:00` | [a] 确认前端语句模式忽略 `addition`。<br />[b] 方案收敛为有效 `keyword` 合并过滤语义，聚类豁免。<br />[c] 合并成功后清空 `addition`，避免双载体并存。 |
+| `2026-06-09 17:22` | [a] PR #10991 首轮 review 指出 `agg_condition.value` 需规范为 list，避免 `QueryStringGenerator` 对 scalar value 生成错误 Lucene。<br />[b] 建议聚类信息未命中时返回 `("", "")`，删除 `assert` 类型收窄。 |
+| `2026-06-09 19:52` | [a] PR #10991 已修复 review 线程，并补充 scalar value、空 value、无聚类标签返回值等单测。<br />[b] 已完成复查并 approve，PR 当前 review 状态为 `APPROVED`。 |
 
 ## 0x06 参考 & 版本锚点
 
@@ -182,4 +198,6 @@ is_clustering = bool(clustering_type and clustering_index_set_id)
 
 ### b. 版本锚点
 
-待补充。
+| 状态 | 分支 | 里程碑 | PR |
+| --- | --- | --- | --- |
+| ✅ | `feat/alert_relate_log_search_condition_accuracy/#1010158081135029831` | 里程碑 1：日志告警关联日志 query_string 模式过滤语义收敛 | [TencentBlueKing/bk-monitor #10991](https://github.com/TencentBlueKing/bk-monitor/pull/10991) |
