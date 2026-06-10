@@ -4,7 +4,7 @@ tags: [apm, error-view, trpc, rpc, exception-type, scene-view, code-remark]
 issue: ./README.md
 description: 通过逻辑异常协议拆分错误展示别名、分组值与过滤来源，让错误视图按真实异常或返回码字段完成一致联动，并在错误详情补全返回码备注
 created: 2026-05-31
-updated: 2026-06-08
+updated: 2026-06-09
 ---
 
 # 错误视图 tRPC 场景适配 —— 实施方案
@@ -407,5 +407,5 @@ for ctx in return_code_contexts:
 |----|---------------------------------------------------------|---------------------------|--------------------------------------------------------------------|
 | ✅  | `feat/trpc_error_display_info_opt/#1010158081134636736` | 里程碑 1：tRPC 场景错误详情展示返回码信息  | [#10784](https://github.com/TencentBlueKing/bk-monitor/pull/10784) |
 | ✅ | `feat/apm_error_tab_trpc_adaptation/#1010158081134972912` | 里程碑 2：APM 错误视图返回码联动适配     | [#10961](https://github.com/TencentBlueKing/bk-monitor/pull/10961) |
-| 🔄 | `<branch_name>`                                         | 里程碑 3：APM 错误列表返回码使用基础别名展示 | 待创建                                                                |
+| ✅ | `feat/apm_error_list_msg_title_display_alias/#1010158081135042689` | 里程碑 3：APM 错误列表返回码使用基础别名展示 | [#10983](https://github.com/TencentBlueKing/bk-monitor/pull/10983) |
 | ⏳ | `<branch_name>`                                         | 里程碑 4：APM 错误详情支持展示返回码备注信息 | 待创建                                                                |
