@@ -3,7 +3,7 @@ title: 日志 UnifyQuery 环境变量白名单与 query_string 增强
 tags: [log, unify-query, data-source, query-string, config]
 description: 为日志 UnifyQuery 灰度白名单增加环境变量配置层，并对齐日志平台 query_string 处理逻辑
 created: 2026-03-05
-updated: 2026-06-08
+updated: 2026-06-10
 ---
 
 # 日志 UnifyQuery 环境变量白名单与 query_string 增强

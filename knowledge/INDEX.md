@@ -17,6 +17,10 @@
 
 ## 0x02 最近更新
 
+- 2026-06-10：更新
+  [日志 UnifyQuery 环境变量白名单与 query_string 增强](./bkmonitor/issues/2026-03-05-log-uq-env-whitelist-and-query-string/README.md)
+  至 bkmonitor
+  （补充日志聚类表 `_clustered` 后缀统一走 UnifyQuery 的方案与验证结论）
 - 2026-06-10：新增
   [bk-collector 自适应限流](./bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/README.md)
   至 bkmonitor-datalink

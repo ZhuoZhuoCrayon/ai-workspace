@@ -26,7 +26,7 @@
 | [Tracing MCP 新增服务列表工具](./issues/2026-03-24-tracing-mcp-service-list/README.md) | `apm` `tracing` `mcp` `service-list` `entity-set` | 新建 | 2026-03-24 |
 | [【告警中心】APM 应用/服务页面嵌入列表页支持](./issues/2026-03-19-alert-apm-embedded-list/README.md) | `alert` `apm` `embedded-list` `frontend` | 新建 | 2026-03-19 |
 | [告警日志查询支持 Doris 数据源](./issues/2026-03-12-log-query-doris-support/README.md) | `log` `unify-query` `doris` `data-source` | 已关闭（UQ 侧修复） | 2026-03-12 |
-| [日志 UnifyQuery 环境变量白名单与 query_string 增强](./issues/2026-03-05-log-uq-env-whitelist-and-query-string/README.md) | `log` `unify-query` `data-source` `query-string` `config` | 已实现 | 2026-06-08 |
+| [日志 UnifyQuery 环境变量白名单与 query_string 增强](./issues/2026-03-05-log-uq-env-whitelist-and-query-string/README.md) | `log` `unify-query` `data-source` `query-string` `config` | 已实现 | 2026-06-10 |
 | [日志数据源切换 unify-query](./issues/2026-02-10-log-ds-to-unify-query/README.md) | `log` `unify-query` `data-source` | 对账中 | 2026-06-08 |
 
 ### b. Articles
