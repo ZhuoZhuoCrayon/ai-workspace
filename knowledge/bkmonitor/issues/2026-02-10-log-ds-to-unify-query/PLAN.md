@@ -201,6 +201,156 @@ python manage.py reconcile_log_strategy --mode reconcile --strategy-ids 12345 12
 
 > 注：指定 `--strategy-ids` 时，`--biz-ids` 参数将被忽略。
 
+### e. 导出正则过滤策略
+
+背景：日志正则过滤原先由查询后置过滤执行，切换到 unify-query 后交由 ES regexp 处理。
+
+后置过滤更接近“搜索命中”语义，字段中任意位置命中即可。
+
+ES regexp 更接近“字段整值匹配”语义，需要把现网正则按兼容口径改写后再回填汇总文档。
+
+导出要求：
+
+- CSV 表头与对账结果保持一致，便于复用 `csv/write_excel.py` 和在线汇总文档同步链路。
+- 执行前按环境修改 `ENV`，输出文件名保留 `_reconcile_` 片段。
+- 脚本只导出正则条件事实，不判断 ES 兼容写法。
+- `diff_reason` 固定记录命中的 `key`、`method` 和 `value`，后续由模型读取 CSV 后回填为正则改写结论。
+
+正则改写判断口径：
+
+| 调整类型 | 数量 | 当前写法 | ES 兼容写法 | 调整原因 | Doris 兼容程度 | 示例 |
+| --- | ---: | --- | --- | --- | --- | --- |
+| 普通包含匹配 | 112 | `foo` / `a.*b` | `.*foo.*` / `.*a.*b.*` | 后置过滤按搜索语义，ES regexp 需显式补齐前后缀 | ✅ 兼容：Doris `REGEXP` 是搜索语义 | `camp-msgcenter -> .*camp-msgcenter.*` |
+| 前缀锚点 | 13 | `^foo` | `foo.*` | 原表达式表示以指定文本开头，ES regexp 用整值匹配下的前缀表达 | ✅ 兼容：Doris 支持 `^` 前缀锚点 | `^4 -> 4.*` |
+| 已经是包含匹配 | 10 | `.*foo.*` | `.*foo.*` | 原表达式已显式表达任意位置包含，符合 ES regexp 整值匹配写法 | ✅ 兼容：当前写法可直接使用 | `.*pressure.* -> .*pressure.*` |
+| 负向前瞻 | 2 | `^(?!.*foo).*` | `nreg: .*foo.*` | ES regexp 不支持 lookahead，语义应由反向正则条件承载 | ⚠️ 需调整：Doris 默认 RE2 不支持 lookahead，建议改为 `NOT REGEXP` / `nreg` | `^(?!.*idip).* -> nreg: .*idip.*` |
+| 首尾锚点 | 1 | `^foo.*bar$` | `foo.*bar` | ES regexp 按整值匹配处理，去掉首尾锚点后保留主体匹配关系 | ✅ 兼容：Doris 支持 `^` / `$` 锚点 | `^k8s-ngr.*-(?:prod\|pre).*$ -> k8s-ngr.*-(?:prod\|pre).*` |
+
+在对应环境的 django shell 中执行：
+
+```python
+import csv
+import json
+from typing import Any
+
+from django.conf import settings
+
+from bkmonitor.models.strategy import QueryConfigModel, StrategyModel
+
+ENV = "ieod"
+OUTPUT = f"/tmp/{ENV}_reconcile_regex_strategy.csv"
+REGEX_METHODS = {"reg", "nreg"}
+SITE_URL = (
+    getattr(settings, "BK_MONITOR_HOST", "")
+    or getattr(settings, "SITE_URL", "")
+).rstrip("/")
+
+COLUMNS = [
+    "bk_biz_id",
+    "bk_biz_name",
+    "strategy_id",
+    "strategy_name",
+    "strategy_url",
+    "data_type_label",
+    "is_consistent",
+    "has_data",
+    "uq_count",
+    "ds_count",
+    "diff_reason",
+    "query_string",
+    "agg_dimension",
+    "query_config",
+]
+
+
+def build_strategy_url(bk_biz_id: int, strategy_id: int) -> str:
+    path = f"/?bizId={bk_biz_id}#/strategy-config/detail/{strategy_id}"
+    return f"{SITE_URL}{path}" if SITE_URL else path
+
+
+def format_value(value: Any) -> str:
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value or "")
+
+
+def build_regex_reason(condition: dict[str, Any]) -> str:
+    key = condition.get("key", "")
+    method = condition.get("method", "")
+    value = format_value(condition.get("value", ""))
+    return f"【正则】key={key}; method={method}; value={value}"
+
+
+rows_by_strategy: dict[int, dict[str, Any]] = {}
+strategy_ids: set[int] = set()
+
+query_configs = QueryConfigModel.objects.filter(
+    data_source_label="bk_log_search",
+).order_by("strategy_id")
+
+for query_config in query_configs:
+    config: dict[str, Any] = query_config.config or {}
+    agg_conditions: list[dict[str, Any]] = config.get("agg_condition") or []
+    regex_reasons: list[str] = [
+        build_regex_reason(condition)
+        for condition in agg_conditions
+        if condition.get("method") in REGEX_METHODS
+    ]
+
+    if not regex_reasons:
+        continue
+
+    strategy_ids.add(query_config.strategy_id)
+    item = rows_by_strategy.setdefault(
+        query_config.strategy_id,
+        {
+            "configs": [],
+            "diff_reasons": [],
+        },
+    )
+    item["configs"].append(config)
+    item["diff_reasons"].extend(regex_reasons)
+
+strategies = StrategyModel.objects.filter(
+    id__in=strategy_ids,
+).order_by("bk_biz_id", "id")
+
+with open(OUTPUT, "w", newline="", encoding="utf-8-sig") as file:
+    writer = csv.DictWriter(file, fieldnames=COLUMNS)
+    writer.writeheader()
+
+    for strategy in strategies:
+        item = rows_by_strategy[strategy.id]
+        configs: list[dict[str, Any]] = item["configs"]
+        query_strings: list[str] = [
+            str(config.get("query_string", ""))
+            for config in configs
+            if config.get("query_string")
+        ]
+
+        writer.writerow(
+            {
+                "bk_biz_id": strategy.bk_biz_id,
+                "bk_biz_name": getattr(strategy, "bk_biz_name", "") or "",
+                "strategy_id": strategy.id,
+                "strategy_name": strategy.name,
+                "strategy_url": build_strategy_url(strategy.bk_biz_id, strategy.id),
+                "data_type_label": "log",
+                "is_consistent": "0",
+                "has_data": "",
+                "uq_count": "",
+                "ds_count": "",
+                "diff_reason": "；".join(item["diff_reasons"]),
+                "query_string": "；".join(dict.fromkeys(query_strings)),
+                "agg_dimension": "",
+                "query_config": json.dumps(configs, ensure_ascii=False),
+            }
+        )
+
+print(f"已生成：{OUTPUT}")
+print(f"命中策略数：{len(strategy_ids)}")
+```
+
 ## 0x03 对账结果分析
 
 ### a. 目标
