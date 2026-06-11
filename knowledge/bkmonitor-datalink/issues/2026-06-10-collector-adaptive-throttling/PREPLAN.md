@@ -113,22 +113,9 @@ updated: 2026-06-10
 
 ## 0x04 业界方案调研
 
-先用一张表横向对比候选来源，再逐个展开核心机制。
+本节先逐个展开候选来源的核心机制（a～g），再用一张表横向对比借鉴点与局限（h），最后回答「能否直接套用、要怎么改造」（i）。
 
-| 方案 | 信号源 | 控制算法 | 适配 |
-|---|---|---|---|
-| Google SRE（Handling Overload） | 服务端利用率（CPU 为主，含内存），客户端 accept 率 | 服务端按优先级（criticality）分级丢弃，客户端 `p=max(0,(req−K·acc)/(req+1))`，K≈2 | ★★★★★ 理念契合 |
-| go-zero、Kratos BBR shedding | CPU 利用率（闸门）加滑窗 inflight | CPU 超阈值（默认 90%）启动，容量按 `maxPass×minRT` 估算，inflight 超容量则拒绝，随 CPU 线性收紧、保底放行 10% | ★★★★ 兜底底座 |
-| Netflix concurrency-limits | 延迟梯度（Gradient2、Vegas） | `gradient=clamp(longRtt/curRtt,0.5,1)`，`newLimit=gradient·limit+√limit` 再平滑 | ★★ 思路参考 |
-| Sentinel 系统自适应 | load1、CPU usage、avgRT、并发、QPS | BBR，load1 启发加并发超 `maxQps·minRT` 触发 | ★★★ 多信号兜底 |
-| Envoy Overload Manager | cgroup 内存、CPU、堆内存（heap）、文件描述符（FD） | 资源监控器触发动作（95% 停止收请求、92% 关 keepalive），多触发器取 max | ★★★★ 内存熔断范本 |
-| Meta Fail at Scale（CoDel、Adaptive LIFO） | 队列驻留时延 | 队列时延超 target 切短超时丢弃，拥塞时 FIFO 转 LIFO | ★★ 思路参考 |
-| deepflow-agent 资源自限 | 自身 RSS、CPU、宿主负载、空闲内存 | 软硬分层降级，双阈值滞回加连续越界、300s 驻留 | ★★★★ 防抖范本 |
-| token、leaky bucket（现状 QPS） | 请求数 | 固定速率 | ✗ 已证不足 |
-
-「适配」为对本方案「CPU 驱动分级丢弃」的契合度，★ 越多越契合，优缺点与详细理由见各子节。
-
-token 桶与漏桶经验证不足以应对大包，不再单列。
+token 桶与漏桶（现状 QPS 限流）经验证不足以应对大包，不进入候选、不再单列，理由见 0x10c。
 
 ### a. Google SRE：过载处理与自适应限流
 
@@ -364,6 +351,64 @@ flowchart TD
 - **可借鉴**：「连续越界门控加双阈值滞回加 `300 s` 驻留」防抖，以及「软档降级、硬档兜底」分层。
 - **差异**：deepflow 进程级一刀切、内存用 `VmRSS`，本方案按 endpoint 分级、内存用工作集（用量减 `inactive_file`）。
 
+### h. 候选来源横向对比（借鉴点与局限）
+
+各行的信号源、借鉴点、局限的源码佐证见对应子节 a～g。
+
+| 方案 | 信号源 | 借鉴点 | 局限 |
+|---|---|---|---|
+| Google SRE | CPU 等资源利用率（任务级）、客户端 accept 率 | [a] 用资源利用率而非 QPS 衡量容量<br />[b] criticality 分级可映射为按 endpoint 分档丢弃 | [a] 客户端自适应需改造客户端，bk-collector 客户端是外部 SDK、不可控<br />[b] 仅框架、无现成「水位到丢弃率」曲线，无内存硬熔断件 |
+| go-zero 与 Kratos aegis BBR | cgroup 归一化 CPU，EWMA `0.95`，阈值 go-zero `900`、aegis `800`（刻度 `1000`） | [a] cgroup 归一化 CPU 加 EWMA 信号管线可照搬<br />[b] CPU 闸门加 `maxInflight≈maxPass×minRT` 并发兜底，go-zero 有 `10%` 保底放行 | [a] 单个全局 shedder、二元拒绝，非按 endpoint 丢弃率<br />[b] 仅 CPU、无内存维度<br />[c] 判定依赖 `inflight`、`minRT`，ingest 延迟信号弱 |
+| Netflix concurrency-limits | 请求 RTT 延迟梯度（非资源水位） | [a] 零静态阈值、延迟回落再平滑探测放大的并发自适应 | [a] 信号是 RTT 梯度、非 CPU、内存水位<br />[b] 输出是并发上限、非丢弃率曲线<br />[c] ingest 延迟信号弱、梯度长期接近 `1`、难感知过载 |
+| Sentinel 系统自适应 | load1、CPU、avgRT、并发、QPS（整应用入口、整进程） | [a] 资源触发加 BBR 并发闸双重确认、减少误杀<br />[b] `MetricType` 加 `TriggerCount` 规则模型可扩成按 endpoint 规则表 | [a] 作用于整应用入口、无 endpoint 维度<br />[b] 二元拒绝、无内存维度<br />[c] CPU 取进程百分比、非 cgroup 归一化 |
+| Envoy Overload Manager | cgroup 内存、容器 CPU（`mode: CONTAINER`）、堆、FD，上报 `0～1` 压力 | [a] 监控器到触发器到动作三层模型加 `scaled` 区间线性 `(p−scaling)/(saturation−scaling)`<br />[b] cgroup 内存加 `threshold` 即内存硬熔断，`bernoulli(state)` 即按丢弃率随机丢 | [a] 动作是整进程、整 listener，非按 endpoint 曲线<br />[b] 独立 C++ 代理、深绑 HTTP，无法作为 Go 入口层库嵌入 |
+| Meta CoDel 与 Adaptive LIFO | 请求队列驻留时延 | [a] 早丢、必要时丢最旧以护尾延迟与有效吞吐<br />[b] 用驻留时延而非队列长度判拥塞 | [a] 入口非显式请求队列，驻留时延信号难直接套用<br />[b] 无资源水位与内存维度、非按 endpoint 丢弃率 |
+| deepflow-agent 资源自限 | 自身 `VmRSS`、CPU、宿主负载、空闲内存 | [a] 双阈值滞回加连续越界加 `300 s` 驻留防抖<br />[b]「软档停采、硬档退出」分层 | [a] 进程级一刀切（停采、退出），非按 endpoint 分级丢<br />[b] 内存用 `VmRSS` 而非 cgroup 工作集，与本方案内存口径不同 |
+
+### i. 能否直接套用与改造方向
+
+先用 [issue README](./README.md) 的硬需求当筛子：
+
+1. **信号**：用真实 CPU、内存水位（cgroup 配额归一化），而非 QPS。
+2. **粒度**：按 endpoint 分别配触发阈值、水位到丢弃率曲线、熔断点。
+3. **行为**：CPU 维度按丢弃率有损分级，内存维度硬熔断（全拒）。
+4. **落点**：HTTP middleware、gRPC interceptor 入口层、解码前丢，不侵入 pipeline。
+5. **形态**：K8s 优先、cgroup 感知。
+
+把这 5 条当筛子，对照 0x04h 逐个核对后，没有一个来源能整体直接套用。
+
+缺口集中在两处：
+
+- 「按 endpoint 的水位到丢弃率曲线」几乎全部缺失。
+- 唯一具备「水位到概率丢弃」输出的 Envoy 是整进程、整 listener 粒度，且为独立 C++ 代理、无法作为 Go 库嵌入。
+
+一个易被忽视、却决定信号选型的事实：bk-collector 接收侧是「同步入队即 ACK、pipeline 异步」。
+
+handler 解码、PreCheck、入队后即回空 ACK，完整 processor 与导出在后台 worker 异步执行（源码见 [otlp/http.go](https://github.com/TencentBlueKing/bkmonitor-datalink/blob/master/pkg/collector/receiver/otlp/http.go#L105-L165)、[controller.go](https://github.com/TencentBlueKing/bkmonitor-datalink/blob/master/pkg/collector/controller/controller.go#L395-L406)）。
+
+由此两点推论：
+
+- **延迟与在途并发信号弱**：入口测得的 RTT 只含解码加入队、反映不了后台积压，go-zero、aegis、Netflix 这类靠 `minRT`、`inflight` 的限流器在此会迟钝。
+- **既有背压是「队列满则阻塞」**：`RecordQueue` 等有界 channel 满则阻塞 handler、不按 endpoint 丢（源码见 [define/record.go](https://github.com/TencentBlueKing/bkmonitor-datalink/blob/master/pkg/collector/define/record.go#L264-L281)），只拉长响应、不缓解过载。
+
+这正是 README 选「资源水位作主信号、丢弃落在入口解码前」的底层原因。
+
+既然不能直接套用，就把可借鉴零件按目标能力组合裁剪，每项能力都能回指业界先例：
+
+| 目标能力 | 可借鉴来源 | 必要的本地改造 |
+|---|---|---|
+| 资源水位信号 | go-zero、aegis 的 cgroup 归一化 CPU 加 EWMA<br />Envoy 的 cgroup 内存压力 | 自研 Go cgroup reader（v1/v2 自检），CPU、内存两路 |
+| 水位到丢弃率曲线 | Envoy `scaled` 区间线性 `(p−scaling)/(saturation−scaling)` 加 `bernoulli` 概率丢 | 全局动作改为按 endpoint 各一条曲线 |
+| 按 endpoint 分级 | Google criticality 分档<br />Sentinel `MetricType` 加 `TriggerCount` 规则模型 | 每 endpoint 配阈值、曲线、熔断点 |
+| 内存硬熔断 | Envoy cgroup 内存加 `threshold`<br />deepflow 内存越限即停 | 越熔断点全拒、配 `GOMEMLIMIT` 背压 |
+| 并发兜底 | go-zero、aegis BBR（`maxInflight≈maxPass×minRT` 加 `10%` 保底放行）<br />Netflix 零阈值梯度 | 弱化对 `minRT`、`inflight` 的依赖（延迟信号弱） |
+| 防抖 | deepflow 双阈值滞回加连续越界加 `300 s` 驻留 | 用于熔断、恢复状态机 |
+
+回到问题本身：
+
+- **能否直接套用**：不能，最接近的 Envoy 形态对、但粒度与落地形态两条不满足，其余方案分别缺 endpoint 维度、缺内存维度或信号口径错位。
+- **怎么改造**：把上表六项能力组合，再针对「同步入队加异步 pipeline、延迟信号弱、客户端不可控、Go 入口层」做本地改造，下一节据此收敛为候选方案。
+
 ---
 
 ## 0x05 候选方案总览
@@ -376,6 +421,13 @@ flowchart TD
 | B 平滑分级丢弃 | A 加 EWMA、滞回、双信号，稳且保留分级语义 | 第一期主体 |
 | C 自适应并发限 | 不设阈值，动态调在途并发上限 | B 的兜底底座 |
 | D 混合防线 | CPU 分级、内存熔断、并发兜底三道并存 | 长期形态 |
+
+四者都是对 0x04i 六项能力的不同取舍：
+
+- **A**：只取信号、曲线、按 endpoint 分级三项，裸瞬时信号、会抖。
+- **B**：在 A 上加防抖与内存硬熔断、快慢双信号。
+- **C**：把并发兜底单独成限，作 B 的底座。
+- **D**：六项能力全叠，三道防线并存。
 
 ---
 
