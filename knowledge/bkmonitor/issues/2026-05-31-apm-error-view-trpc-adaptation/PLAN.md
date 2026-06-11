@@ -408,4 +408,4 @@ for ctx in return_code_contexts:
 | ✅  | `feat/trpc_error_display_info_opt/#1010158081134636736` | 里程碑 1：tRPC 场景错误详情展示返回码信息  | [#10784](https://github.com/TencentBlueKing/bk-monitor/pull/10784) |
 | ✅ | `feat/apm_error_tab_trpc_adaptation/#1010158081134972912` | 里程碑 2：APM 错误视图返回码联动适配     | [#10961](https://github.com/TencentBlueKing/bk-monitor/pull/10961) |
 | ✅ | `feat/apm_error_list_msg_title_display_alias/#1010158081135042689` | 里程碑 3：APM 错误列表返回码使用基础别名展示 | [#10983](https://github.com/TencentBlueKing/bk-monitor/pull/10983) |
-| ⏳ | `feat/apm_exception_detail_display_code_remark/#1010158081135067966` | 里程碑 4：APM 错误详情支持展示返回码备注信息 | [#11005](https://github.com/TencentBlueKing/bk-monitor/pull/11005) |
+| ✅ | `feat/apm_exception_detail_display_code_remark/#1010158081135067966` | 里程碑 4：APM 错误详情支持展示返回码备注信息 | [#11005](https://github.com/TencentBlueKing/bk-monitor/pull/11005) |
