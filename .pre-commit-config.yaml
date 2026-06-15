@@ -9,7 +9,7 @@ repos:
           - '@lint-md/cli@2.0.0'
         pass_filenames: true
         files: \.md$
-        exclude: '(^|/)(node_modules|\.git|__pycache__|\.venv|venv)/'
+        exclude: '(^|/)(node_modules|\.git|__pycache__|\.venv|venv)/|^private/knowledge/performance-review/'
       - id: markdownlint-cli2
         name: markdownlint-cli2
         entry: markdownlint-cli2 --config scripts/config/lint/markdownlint-cli2.jsonc
@@ -18,11 +18,11 @@ repos:
           - markdownlint-cli2@0.22.1
         pass_filenames: true
         files: \.(md|mdc)$
-        exclude: '(^|/)(node_modules|\.git|__pycache__|\.venv|venv)/'
+        exclude: '(^|/)(node_modules|\.git|__pycache__|\.venv|venv)/|^private/knowledge/performance-review/'
       - id: check-doc-style
         name: check-doc-style
         entry: python3 scripts/check_doc_style.py
         language: system
         pass_filenames: true
         files: \.(md|mdc)$
-        exclude: '(^|/)(node_modules|\.git|__pycache__|\.venv|venv)/'
+        exclude: '(^|/)(node_modules|\.git|__pycache__|\.venv|venv)/|^private/knowledge/performance-review/'

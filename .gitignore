@@ -22,5 +22,6 @@ private/
 __pycache__/
 *.pyc
 bkmonitor-files/
+dist/
 # bk-collector 自适应限流验证程序：本地保留，不入库
 knowledge/bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/validation/
