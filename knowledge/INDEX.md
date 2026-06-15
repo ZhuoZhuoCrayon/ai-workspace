@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-06-10
+> 最后更新：2026-06-12
 
 ## 0x01 项目知识
 
@@ -12,11 +12,13 @@
 | bkmonitor_mcp | [bkmonitor_mcp/](./bkmonitor_mcp/INDEX.md) | 1 篇 | 蓝鲸监控 MCP Server |
 | bkmonitor-datalink | [bkmonitor-datalink/](./bkmonitor-datalink/INDEX.md) | 2 篇 | 蓝鲸监控数据链路 |
 | bkmonitor-ecosystem | [bkmonitor-ecosystem/](./bkmonitor-ecosystem/INDEX.md) | 0 篇 | 蓝鲸监控生态 SDK 与接入 demo（外部版） |
+| crypto-python-sdk | [crypto-python-sdk/](./crypto-python-sdk/INDEX.md) | 0 篇 | BlueKing 轻量级密码学工具包，统一加解密抽象层 |
 | throttled-py | [throttled-py/](./throttled-py/INDEX.md) | 7 篇 | High-performance Python rate limiting library |
 | 通用知识 | [_shared/](./_shared/INDEX.md) | 1 篇 | 跨项目通用知识 |
 
 ## 0x02 最近更新
 
+- 2026-06-12：新增 [crypto-python-sdk](./crypto-python-sdk/INDEX.md) 项目知识库（接入 BlueKing crypto-python-sdk 加密 SDK，建立项目知识库入口）
 - 2026-06-10：更新
   [日志 UnifyQuery 环境变量白名单与 query_string 增强](./bkmonitor/issues/2026-03-05-log-uq-env-whitelist-and-query-string/README.md)
   至 bkmonitor
@@ -33,11 +35,3 @@
   [错误视图 tRPC 场景适配](./bkmonitor/issues/2026-05-31-apm-error-view-trpc-adaptation/README.md)
   至 bkmonitor
   （补充里程碑 3：错误列表返回码使用 `exception_alias` 展示基础别名，原错误详情返回码备注顺延为里程碑 4）
-- 2026-06-08：新增
-  [日志数据源切换前后保持原始日志结构一致](./bkmonitor/issues/2026-06-08-log-uq-object-structure-restore/README.md)
-  至 bkmonitor
-  （将日志 UnifyQuery 打平对象字段还原为 ES 查询时期的原始结构，保持数据源切换前后协议一致）
-- 2026-06-08：更新
-  [APM Span 详情支持 Links 反向关联展示](./bkmonitor/issues/2026-06-04-apm-span-links-reverse-relation/README.md)
-  至 bkmonitor
-  （确认 Links 查询不传时间范围，由 `query_span_list` 后台按保留期补全，并扩展 `links.trace_id` / `links.span_id` 精确检索）

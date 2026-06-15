@@ -38,5 +38,13 @@
     "branch": "master",
     "local_path": "/Users/sandrincai/Project/Github/bk/monitor/bkmonitor-ecosystem",
     "language": "zh"
+  },
+  {
+    "name": "crypto-python-sdk",
+    "description": "BlueKing crypto-python-sdk — 基于 pyCryptodome / tongsuopy 等加密库的轻量级密码学工具包，为 Python 应用提供统一加解密实现，支持在不同加密方式间无侵入切换。",
+    "git_url": "https://github.com/TencentBlueKing/crypto-python-sdk.git",
+    "branch": "main",
+    "local_path": "/Users/sandrincai/Project/Github/crypto-python-sdk/crypto-python-sdk",
+    "language": "zh"
   }
 ]
