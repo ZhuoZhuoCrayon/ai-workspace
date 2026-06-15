@@ -34,7 +34,7 @@ updated: 2026-06-10
 **工程落点**
 
 - **丢弃要尽早且省 CPU**：HTTP 在中间件入口、解压之前丢，gRPC 用 `tap.InTapHandle` 在反序列化之前拒绝。
-- **中间件启动后不可改配置**：阈值若要运行时可调，需引入原子配置持有者或走 processor 路径，代价见 [0x13 热重载代价评估](#0x13-热重载代价评估)。
+- **中间件启动后不可改配置**：阈值若要运行时可调，需引入原子配置持有者或走 processor 路径，代价见 [0x14 热重载代价评估](#0x14-热重载代价评估)。
 
 **推荐（第一期）**：以方案 B（CPU 水位平滑分级丢弃）为主体，叠加内存维度硬熔断，方案 C（自适应并发限）作为后续迭代兜底。
 
@@ -90,6 +90,7 @@ updated: 2026-06-10
 - **GOMAXPROCS 未设**：`automaxprocs v1.5.2` 已是依赖，但仅调 `maxprocs.Logger`、从未调 `maxprocs.Set()`，未按 cgroup 配额设置。
 - **无采样回路**：collector 进程内无 CPU、内存水位采样，仅 admin `/metrics` 暴露 `process_*` 与 `go_*`。
 - **依赖现状**：已间接依赖 `containerd/cgroups v1.0.3`、`prometheus/procfs v0.11.0`，`gopsutil` 与 `automemlimit` 不在 go.mod。
+- **信号口径**：要采集哪些指标、如何取数与计算，统一见 0x05。
 
 ### c. 接口端点清单（分级策略的对象）
 
@@ -115,7 +116,7 @@ updated: 2026-06-10
 
 本节先逐个展开候选来源的核心机制（a～g），再用一张表横向对比借鉴点与局限（h），最后回答「能否直接套用、要怎么改造」（i）。
 
-token 桶与漏桶（现状 QPS 限流）经验证不足以应对大包，不进入候选、不再单列，理由见 0x10c。
+token 桶与漏桶（现状 QPS 限流）经验证不足以应对大包，不进入候选、不再单列，理由见 0x11c。
 
 ### a. Google SRE：过载处理与自适应限流
 
@@ -411,7 +412,127 @@ handler 解码、PreCheck、入队后即回空 ACK，完整 processor 与导出�
 
 ---
 
-## 0x05 候选方案总览
+## 0x05 信号基础：指标、获取与计算
+
+本节说明限流要用的信号：先给基础信号的含义与获取（a），再给 CPU 利用率（b）、内存工作集（c）、EWMA 平滑（d）的计算，供方案 A～D 与验证统一复用。
+
+### a. 信号源与获取
+
+信号统一用 [containerd/cgroups/v3](https://github.com/containerd/cgroups) 读取容器自身 cgroup 的运行指标，按配额归一、不看宿主机总量，v1 与 v2 由 `cgroups.Mode()` 自动分流。
+
+五个基础信号及其含义：
+
+| 信号 | 库字段（cgroup2） | 含义 |
+|---|---|---|
+| CPU 累计耗时 | `Stat().CPU.UsageUsec` | 进程组自启动占用的 CPU 微秒数，单调递增，求差得区间耗时 |
+| CPU 配额 | 另读 `cpu.max`（`Stat` 不暴露） | `quota period` 两数，`quota/period` 即容器有效核数，做归一化分母 |
+| 内存当前用量 | `Stat().Memory.Usage` | `memory.current`，匿名页加文件缓存的总占用 |
+| 可回收文件缓存 | `Stat().Memory.InactiveFile` | 不活跃文件页缓存，内存紧张时内核可直接回收 |
+| 内存上限 | `Stat().Memory.UsageLimit` | `memory.max`，容器内存硬上限，值为 `max` 时表示无限 |
+
+核心代码（cgroup2，v1 见下方说明）：
+
+```go
+import (
+    cgroups "github.com/containerd/cgroups/v3"
+    "github.com/containerd/cgroups/v3/cgroup2"
+)
+
+// 启动时：定位并加载本进程所在 cgroup
+path, _ := cgroup2.PidGroupPath(os.Getpid())
+mgr, _ := cgroup2.Load(path)
+
+// 每个采样周期：读一次累计指标
+st, _ := mgr.Stat()
+cpuUsec := st.CPU.UsageUsec        // CPU 累计耗时（μs）
+memCurrent := st.Memory.Usage      // 内存当前用量
+memInactive := st.Memory.InactiveFile
+memLimit := st.Memory.UsageLimit
+
+// 内存工作集 = 当前用量 − 可回收文件缓存（下限 0）
+workingSet := uint64(0)
+if memCurrent > memInactive {
+    workingSet = memCurrent - memInactive
+}
+memUsage := float64(workingSet) / float64(memLimit)
+```
+
+- **CPU 利用率要两次采样**：相邻两次 `UsageUsec` 求差，再除以墙钟与有效核数，公式见 b。
+- **CPU 配额要自读**：`Stat` 与 `Manager` 都不暴露 `cpu.max`，需用 `PidGroupPath` 定位路径后自行读取解析。
+
+读取并解析 cpu.max（cgroup2）：
+
+```go
+// cpu.max 为「quota period」，quota=max 表示无限，仅一列时 period 默认 100000
+groupPath, _ := cgroup2.PidGroupPath(os.Getpid())          // /sys/fs/cgroup 下的相对路径
+buf, _ := os.ReadFile(filepath.Join("/sys/fs/cgroup", groupPath, "cpu.max"))
+fields := strings.Fields(string(buf))                      // 例：["100000", "100000"]
+
+effCores := -1.0                                           // -1 代表无限配额，需回退
+if fields[0] != "max" {
+    quota, _ := strconv.Atoi(fields[0])
+    period := 100000
+    if len(fields) == 2 {
+        period, _ = strconv.Atoi(fields[1])
+    }
+    effCores = float64(quota) / float64(period)            // 有效核数，保留小数
+}
+```
+
+- **统一挂载点**：`/sys/fs/cgroup` 为 v2 统一挂载点，非标准挂载可从 `/proc/self/mountinfo` 解析。
+- **v1 另读两文件**：cgroup1 改读 cpu 控制器下的 `cpu.cfs_quota_us` 与 `cpu.cfs_period_us`，`quota` 为 `-1` 表示无限。
+- **automaxprocs 可参考**：依赖里已有的 `automaxprocs` 同样解析 `cpu.max`，但它向下取整、最小为 `1`，分数核会丢精度。
+- **v1 走 cgroup1**：`cgroups.Mode()` 为 `Legacy` 或 `Hybrid` 时改用 `cgroup1.Load(cgroup1.PidPath(pid))`。
+- **v1 字段对应**：`CPU.Usage.Total`（纳秒）、`Memory.Usage.Usage` 与 `Limit`、`Memory.TotalInactiveFile`。
+- **只读不触发 eBPF**：仅 `Load` 加 `Stat` 不设置 device 资源，不加载 eBPF、不需特权，引库只增二进制体积。
+
+### b. CPU 利用率：取数与归一化
+
+每隔采样周期 `T`（建议 `250 ms`）取两次 `Stat().CPU.UsageUsec` 求差，再除以同期可用的 CPU 时间。
+
+```text
+有效核数 effCores = quota / period          # quota、period 来自 cpu.max
+CPU 利用率 = Δusage / (Δwall × effCores)
+```
+
+- **分母必须用 cgroup 配额**：用 `runtime.NumCPU()`、`nproc`（宿主核数）会严重低估，实测容器报 `14` 核、实配 `1` 核时低估约 14 倍、限流永不触发（见 0x11e）。
+- **无限配额要回退**：`cpu.max` 为 `max` 或 v1 `quota` 为 `-1` 时，取配置 `max_procs`、再回退宿主核数。
+- **越过 1.0 是信号**：过载时利用率会大于 `1.0`，这正是要捕捉的过载证据、不要截断。
+- **周期是权衡**：`T` 越短越灵敏也越抖，去抖交给 EWMA（见 d）。
+
+### c. 内存工作集：取数与口径
+
+工作集是 kubelet、cAdvisor 的口径，从当前用量扣掉可回收的文件缓存，比裸用量更贴近真实压力（口径来源见 [Kubernetes 内存工作集解析](https://mtardy.com/posts/memory-kubernetes-golang-ebpf/)）。
+
+```text
+工作集 workingSet = max(0, current - inactive_file)
+内存利用率 = workingSet / limit
+```
+
+- **不用裸当前用量**：`current` 含可回收页缓存（page cache），直接用会把内存压力判高。
+- **不用 RSS**：常驻内存（RSS）漏掉活跃文件缓存，deepflow 的 `VmRSS` 与本口径不同（见 0x04g）。
+- **硬熔断可双参考**：kubelet 的 OOM 判定看 `current` 对 `limit`，工作集偏早预警、硬熔断点可两者并看。
+- **顺带配 `GOMEMLIMIT`**：设到内存上限的 `90%`，让 Go GC 提前加压形成背压，可直接复用 `automemlimit`。
+
+### d. EWMA：出处、原理与计算
+
+EWMA（指数加权移动平均）源自统计学的指数平滑，用一条递推式持续逼近真实水平、无需保留历史窗口。
+
+```text
+s_t = α · x_t + (1 − α) · s_{t-1}
+```
+
+其中 `x_t` 是当前采样，`s_t` 是平滑值，`α` 是新样本权重（历史权重为 `1 − α`），部分实验用历史权重 `β = 1 − α` 表述。
+
+- **出处**：网络领域由 Van Jacobson 于 `1988` 年用于 TCP 往返时延（RTT）估计、后被 [RFC 6298](https://datatracker.ietf.org/doc/html/rfc6298) 标准化，go-zero、Kratos aegis 的 CPU 信号沿用同族衰减。
+- **本质**：新样本固定权重、历史按 `(1 − α)` 几何衰减，等价一阶低通滤波，内存 `O(1)`。
+- **快慢由 α 定**：`α` 越小越平滑也越滞后，等效时间常数约 `T / α`（`T` 为采样周期），RFC 6298 取 `α = 1/8`。
+- **双时间常数**：分级丢弃用慢信号（历史权重大）防抖、硬熔断用快信号（历史权重小）防漏，两路分采（见 0x08c）。
+- **校准教训**：历史权重过大时短尖刺推不动平滑值、硬熔断会失灵，实测见 0x11d。
+
+---
+
+## 0x06 候选方案总览
 
 四个方案是同一目标的不同收敛形态，并非互斥，D 是 A、B、C 的组合上限。
 
@@ -431,7 +552,7 @@ handler 解码、PreCheck、入队后即回空 ACK，完整 processor 与导出�
 
 ---
 
-## 0x06 方案 A：静态水位曲线
+## 0x07 方案 A：静态水位曲线
 
 本质：把 CPU、内存的瞬时水位直接查一条预设折线，得到丢弃概率。
 
@@ -473,7 +594,7 @@ handler 解码、PreCheck、入队后即回空 ACK，完整 processor 与导出�
 
 ---
 
-## 0x07 方案 B：平滑分级丢弃（推荐主体）
+## 0x08 方案 B：平滑分级丢弃（推荐主体）
 
 本质：在 A 的折线之上，先把信号平滑成一条稳的线再查表，并用快慢两路信号分别管「分级」和「熔断」。
 
@@ -568,7 +689,7 @@ stateDiagram-v2
 
 ---
 
-## 0x08 方案 C：自适应并发限
+## 0x09 方案 C：自适应并发限
 
 本质：不设固定阈值，而是把过载控制收敛到一个动态的「在途并发上限 L」，请求进入即占额度、超限即拒，L 随反馈升降。
 
@@ -644,11 +765,11 @@ C 不替代 B，而是补其在 CPU 饱和处的短板：
 - B：水位顶到 `1.0`、丢弃率曲线失去区分度，靠熔断点全丢兜底。
 - C：在途并发仍随单请求成本上涨持续收紧、仍能区分轻重。
 
-二者共用采样与挂载、第一期可不落，全局对比见 0x11a。
+二者共用采样与挂载、第一期可不落，全局对比见 0x12a。
 
 ---
 
-## 0x09 方案 D：混合防线
+## 0x10 方案 D：混合防线
 
 本质：把三种手段叠成三道防线，按「最先命中」拦截，覆盖 CPU 与内存两类危险。
 
@@ -670,11 +791,11 @@ C 不替代 B，而是补其在 CPU 饱和处的短板：
 
 - **优点**：最稳健，CPU 与内存两类危险都覆盖。
 - **缺点**：复杂度最高。
-- **判定**：长期目标形态，第一期不落，推荐方案见 0x11b。
+- **判定**：长期目标形态，第一期不落，推荐方案见 0x12b。
 
 ---
 
-## 0x10 最小化场景验证
+## 0x11 最小化场景验证
 
 > 验证代码在 `./validation/`（运行方式见该目录 [README](./validation/README.md)），实验 1 到 4 是 stdlib 仿真、实验 5 是容器压测。
 
@@ -728,7 +849,7 @@ CPU 水位刻意停在进入线 `0.80` 附近带噪声加两段 `3 s` 尖刺，�
 
 - **EWMA 主导**：贡献最大（`79` 降到 `7`），滞回与连续门控继续打磨到 `4`。
 - **校准发现**：β=`0.95` @ `250 ms` 过慢，`3 s` 尖刺只把 EWMA 推到约 `0.87`、低于熔断点 `0.90`，硬熔断失灵。
-- **结论**：该校准印证 0x07c 的双时间常数设计（慢信号管分级、快信号管熔断），此处不再展开。
+- **结论**：该校准印证 0x08c 的双时间常数设计（慢信号管分级、快信号管熔断），此处不再展开。
 
 ### e. 实验 5：真实容器压测（OrbStack，cgroup v2）
 
@@ -767,7 +888,7 @@ CPU 水位交叉校验（进程自读对比 `docker stats`）：
 
 ---
 
-## 0x11 对比与推荐
+## 0x12 对比与推荐
 
 ### a. 决策矩阵
 
@@ -797,17 +918,17 @@ CPU 水位交叉校验（进程自读对比 `docker stats`）：
 
 ---
 
-## 0x12 待确认问题（进入 PLAN 前需拍板）
+## 0x13 待确认问题（进入 PLAN 前需拍板）
 
 1. **范围**：第一期是否采纳「B 加内存硬熔断」，C（BBR 并发限）是否延后。
-2. **运行时可调**：阈值是否要求热重载，倾向原子配置持有者或 v1 先重启生效，代价见 [0x13 热重载代价评估](#0x13-热重载代价评估)。
+2. **运行时可调**：阈值是否要求热重载，倾向原子配置持有者或 v1 先重启生效，代价见 [0x14 热重载代价评估](#0x14-热重载代价评估)。
 3. **信号源选型**：手写 cgroup reader 还是 `containerd/cgroups v3`。
 4. **分级语义**：endpoint 折线是否引入优先级分级，还是仅按 endpoint。
 5. **二进制形态**：无 cgroup 配额时回退宿主机 `/proc` 加 NumCPU 是否可接受。
 
 ---
 
-## 0x13 热重载代价评估
+## 0x14 热重载代价评估
 
 > 约束见 0x03d：中间件启动期固定、`Receiver.Reload` 不重建中间件，README 限定限流在中间件层、不侵入 processor。
 
@@ -824,7 +945,7 @@ CPU 水位交叉校验（进程自读对比 `docker stats`）：
 
 ---
 
-## 0x14 参考
+## 0x15 参考
 
 业界方案：
 
