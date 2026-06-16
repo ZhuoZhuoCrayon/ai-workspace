@@ -266,7 +266,7 @@ flowchart LR
 
 [Envoy Overload Manager](https://www.envoyproxy.io/docs/envoy/latest/configuration/operations/overload_manager/overload_manager) 把过载治理抽象成「资源监控器上报 `0～1` 压力、触发器按阈值驱动分级与熔断」的统一框架。
 
-它的内存分层降级范式，正是 bk-collector 内存维度硬熔断可直接照搬的对象。
+它的内存分层降级范式可直接照搬到 bk-collector 的内存维度硬熔断。
 
 ```text
 内存 pressure = cgroup 用量 / 配额
@@ -325,7 +325,7 @@ CoDel 判定逻辑（`M`、`N` 基本无需逐服务调参，优于固定队列�
 
 ### g. deepflow-agent：资源自限与熔断
 
-[deepflow-agent](https://github.com/deepflowio/deepflow/blob/f93be50de618598d563aa3ece0d8f5c0250c0ef0/agent/src/utils/guard.rs) 用一条独立 `guard` 线程做「自我体检」，默认每 `10 s` 采样自身内存、CPU 与宿主机负载、空闲内存，确保探针永不拖垮被观测主机。
+[deepflow-agent](https://github.com/deepflowio/deepflow/blob/f93be50de618598d563aa3ece0d8f5c0250c0ef0/agent/src/utils/guard.rs) 用一条独立 `guard` 线程做「自我体检」，默认每 `10 s` 采样自身内存、CPU 与宿主机负载、空闲内存，避免探针自身拖垮被观测主机。
 
 它的设计要点是软档「整体停采」、硬档「进程退出由外部守护拉起」，并用双阈值滞回与连续越界门控抑制误触发。
 
@@ -418,85 +418,125 @@ handler 解码、PreCheck、入队后即回空 ACK，完整 processor 与导出�
 
 ### a. 信号源与获取
 
-信号统一用 [containerd/cgroups/v3](https://github.com/containerd/cgroups) 读取容器自身 cgroup 的运行指标，按配额归一、不看宿主机总量，v1 与 v2 由 `cgroups.Mode()` 自动分流。
+信号直接读容器自身 cgroup 的伪文件，不引外部 cgroup 库，对容器内不同挂载布局更稳。
 
-五个基础信号及其含义：
+实现参考 [VictoriaMetrics lib/cgroup](https://github.com/VictoriaMetrics/VictoriaMetrics/tree/master/lib/cgroup) 与 [go-zero core/stat](https://github.com/zeromicro/go-zero/tree/master/core/stat)。
 
-| 信号 | 库字段（cgroup2） | 含义 |
-|---|---|---|
-| CPU 累计耗时 | `Stat().CPU.UsageUsec` | 进程组自启动占用的 CPU 微秒数，单调递增，求差得区间耗时 |
-| CPU 配额 | 另读 `cpu.max`（`Stat` 不暴露） | `quota period` 两数，`quota/period` 即容器有效核数，做归一化分母 |
-| 内存当前用量 | `Stat().Memory.Usage` | `memory.current`，匿名页加文件缓存的总占用 |
-| 可回收文件缓存 | `Stat().Memory.InactiveFile` | 不活跃文件页缓存，内存紧张时内核可直接回收 |
-| 内存上限 | `Stat().Memory.UsageLimit` | `memory.max`，容器内存硬上限，值为 `max` 时表示无限 |
+基础信号与对应的 cgroup 文件（v1 与 v2 字段不同）：
 
-核心代码（cgroup2，v1 见下方说明）：
+| 信号 | cgroup v2 | cgroup v1 | 含义 |
+|---|---|---|---|
+| CPU 累计耗时 | `cpu.stat` 的 `usage_usec`（微秒） | `cpuacct.usage`（纳秒） | 进程组自启动占用的 CPU 时间，单调递增，求差得区间耗时 |
+| CPU 配额 | `cpu.max` 的 `quota period` | `cpu.cfs_quota_us` 与 `cpu.cfs_period_us` | `quota/period` 即有效核数，做归一化分母 |
+| 有效核集合 | `cpuset.cpus.effective` | `cpuset.cpus` | 可用核列表，与配额取小作上限 |
+| 内存当前用量 | `memory.current` | `memory.usage_in_bytes` | 匿名页加文件缓存的总占用 |
+| 可回收文件缓存 | `memory.stat` 的 `inactive_file` | `memory.stat` 的 `total_inactive_file` | 不活跃文件页缓存，内存紧张时内核可直接回收 |
+| 内存上限 | `memory.max` | `memory.limit_in_bytes` | 容器内存硬上限，无限时为 `max` 或极大值 |
 
-```go
-import (
-    cgroups "github.com/containerd/cgroups/v3"
-    "github.com/containerd/cgroups/v3/cgroup2"
-)
+取配额沿用 VM `lib/cgroup` 的链路：先读控制器挂载根，读不到再回退 `/proc/self/cgroup` 子路径，最后解析 `cpu.max`。
 
-// 启动时：定位并加载本进程所在 cgroup
-path, _ := cgroup2.PidGroupPath(os.Getpid())
-mgr, _ := cgroup2.Load(path)
+调用链（代入线上实测：`cpu.cfs_quota_us=3000000`、`period=100000`）：
 
-// 每个采样周期：读一次累计指标
-st, _ := mgr.Stat()
-cpuUsec := st.CPU.UsageUsec        // CPU 累计耗时（μs）
-memCurrent := st.Memory.Usage      // 内存当前用量
-memInactive := st.Memory.InactiveFile
-memLimit := st.Memory.UsageLimit
-
-// 内存工作集 = 当前用量 − 可回收文件缓存（下限 0）
-workingSet := uint64(0)
-if memCurrent > memInactive {
-    workingSet = memCurrent - memInactive
-}
-memUsage := float64(workingSet) / float64(memLimit)
+```text
+getCPUQuota
+└─ getCPUQuotaGeneric            # v1 优先，失败再 v2
+   └─ getCPUStat("cpu.cfs_quota_us")
+      └─ getFileContents
+         ① 读 /sys/fs/cgroup/cpu/cpu.cfs_quota_us  → "3000000"（命中即返回）
+         ② 失败才回退：grep /proc/self/cgroup 的 "cpu," 行取子路径再拼
+   → 3000000 / 100000 = 30 核
 ```
 
-- **CPU 利用率要两次采样**：相邻两次 `UsageUsec` 求差，再除以墙钟与有效核数，公式见 b。
-- **CPU 配额要自读**：`Stat` 与 `Manager` 都不暴露 `cpu.max`，需用 `PidGroupPath` 定位路径后自行读取解析。
-
-读取并解析 cpu.max（cgroup2）：
+核心代码（直读伪文件，v1 优先、v2 兜底）：
 
 ```go
-// cpu.max 为「quota period」，quota=max 表示无限，仅一列时 period 默认 100000
-groupPath, _ := cgroup2.PidGroupPath(os.Getpid())          // /sys/fs/cgroup 下的相对路径
-buf, _ := os.ReadFile(filepath.Join("/sys/fs/cgroup", groupPath, "cpu.max"))
-fields := strings.Fields(string(buf))                      // 例：["100000", "100000"]
+const cgroupRoot = "/sys/fs/cgroup"
 
-effCores := -1.0                                           // -1 代表无限配额，需回退
-if fields[0] != "max" {
-    quota, _ := strconv.Atoi(fields[0])
-    period := 100000
-    if len(fields) == 2 {
-        period, _ = strconv.Atoi(fields[1])
+// 先读控制器挂载根；读不到再用 /proc/self/cgroup 的相对子路径兜底。
+// 兼容两种布局：挂载根已是本容器 cgroup（leaf 被 bind-mount），或挂载根非 leaf。
+func readStat(name, controller, grep string) (string, error) {
+    if b, err := os.ReadFile(path.Join(cgroupRoot, controller, name)); err == nil {
+        return strings.TrimSpace(string(b)), nil
     }
-    effCores = float64(quota) / float64(period)            // 有效核数，保留小数
+    sub, err := subPathFromProc("/proc/self/cgroup", grep) // grep 如 "cpu,"
+    if err != nil {
+        return "", err
+    }
+    b, err := os.ReadFile(path.Join(cgroupRoot, controller, sub, name))
+    return strings.TrimSpace(string(b)), err
+}
+
+// 有效核数（小数）；第二个返回值表示配额是否设置。
+func cpuQuota() (float64, bool) {
+    q, e1 := readStat("cpu.cfs_quota_us", "cpu", "cpu,")    // v1
+    p, e2 := readStat("cpu.cfs_period_us", "cpu", "cpu,")
+    if e1 == nil && e2 == nil {
+        quota, _ := strconv.ParseInt(q, 10, 64)
+        if quota <= 0 {                                     // -1 表示无限
+            return 0, false
+        }
+        period, _ := strconv.ParseUint(p, 10, 64)
+        return float64(quota) / float64(period), true
+    }
+    data, err := readStat("cpu.max", "", "")               // v2
+    if err != nil {
+        return 0, false
+    }
+    return parseCPUMax(data)
+}
+
+// 解析 cpu.max："quota period"；max 表示无限；单列时 period 默认 100000。
+func parseCPUMax(data string) (float64, bool) {
+    f := strings.Fields(data)
+    if len(f) == 0 || f[0] == "max" {
+        return 0, false
+    }
+    quota, _ := strconv.ParseUint(f[0], 10, 64)
+    period := uint64(100000)
+    if len(f) == 2 {
+        period, _ = strconv.ParseUint(f[1], 10, 64)
+    }
+    if period == 0 {
+        return 0, false
+    }
+    return float64(quota) / float64(period), true
 }
 ```
 
-- **统一挂载点**：`/sys/fs/cgroup` 为 v2 统一挂载点，非标准挂载可从 `/proc/self/mountinfo` 解析。
-- **v1 另读两文件**：cgroup1 改读 cpu 控制器下的 `cpu.cfs_quota_us` 与 `cpu.cfs_period_us`，`quota` 为 `-1` 表示无限。
-- **automaxprocs 可参考**：依赖里已有的 `automaxprocs` 同样解析 `cpu.max`，但它向下取整、最小为 `1`，分数核会丢精度。
-- **v1 走 cgroup1**：`cgroups.Mode()` 为 `Legacy` 或 `Hybrid` 时改用 `cgroup1.Load(cgroup1.PidPath(pid))`。
-- **v1 字段对应**：`CPU.Usage.Total`（纳秒）、`Memory.Usage.Usage` 与 `Limit`、`Memory.TotalInactiveFile`。
-- **只读不触发 eBPF**：仅 `Load` 加 `Stat` 不设置 device 资源，不加载 eBPF、不需特权，引库只增二进制体积。
+- **读取顺序是关键**：先读挂载根可兜住「leaf 被 bind-mount 到根」的线上布局，比 `containerd/cgroups` 的 `PidPath` 拼深路径更稳。
+- **配额保留小数**：分母用 `quota/period` 的浮点值，别用 `GOMAXPROCS`（向下取整、最小 2）或 `nproc`（宿主核数）。
+- **配额未设要保守回退**：`cpu.max=max` 或 v1 `quota=-1` 时取配置 `max_procs` 兜底，不要回退成全节点核数。
+- **与 cpuset 取小**：最终上限取 `min(cpuset 有效核数, 配额)`，应对 cpuset 把核钉得比配额更少的情况。
+- **零依赖**：仅用 `os`、`strconv`、`strings`，不引 cgroup 库，无 eBPF 与 logrus 传递依赖、二进制不膨胀。
 
 ### b. CPU 利用率：取数与归一化
 
-每隔采样周期 `T`（建议 `250 ms`）取两次 `Stat().CPU.UsageUsec` 求差，再除以同期可用的 CPU 时间。
+CPU% 是速率，必须两次采样求差：每隔周期 `T`（建议 `250 ms`）读一次 CPU 累计耗时，相邻两次相减，再除以同期可用 CPU 时间（参考 go-zero `RefreshCpu`）。
+
+读数来源：cgroup v2 取 `cpu.stat` 的 `usage_usec`（微秒），v1 取 `cpuacct.usage`（纳秒），统一换算成纳秒。
 
 ```text
-有效核数 effCores = quota / period          # quota、period 来自 cpu.max
+effCores = min(cpuset 有效核数, quota/period)     # 归一化分母，见 a
 CPU 利用率 = Δusage / (Δwall × effCores)
 ```
 
+```go
+var prevUsage, prevWall = cpuUsageNanos(), time.Now()    // 启动时播种
+
+func sampleCPU() float64 {
+    usage, wall := cpuUsageNanos(), time.Now()
+    du := float64(usage - prevUsage)                     // CPU 耗时增量（ns）
+    dw := float64(wall.Sub(prevWall).Nanoseconds())      // 墙钟增量（ns）
+    prevUsage, prevWall = usage, wall
+    if du <= 0 || dw <= 0 {
+        return 0
+    }
+    return du / (dw * effCores)                           // 过载时可大于 1.0
+}
+```
+
 - **分母必须用 cgroup 配额**：用 `runtime.NumCPU()`、`nproc`（宿主核数）会严重低估，实测容器报 `14` 核、实配 `1` 核时低估约 14 倍、限流永不触发（见 0x11e）。
-- **无限配额要回退**：`cpu.max` 为 `max` 或 v1 `quota` 为 `-1` 时，取配置 `max_procs`、再回退宿主核数。
+- **无限配额要回退**：配额未设时按 a 的口径取 `max_procs` 兜底，不回退宿主核数。
 - **越过 1.0 是信号**：过载时利用率会大于 `1.0`，这正是要捕捉的过载证据、不要截断。
 - **周期是权衡**：`T` 越短越灵敏也越抖，去抖交给 EWMA（见 d）。
 
@@ -509,6 +549,53 @@ CPU 利用率 = Δusage / (Δwall × effCores)
 内存利用率 = workingSet / limit
 ```
 
+读数来源见 a 的信号表（`memory.current`/`memory.max`、v1 对应 `*_in_bytes`），沿用 `readStat` 读取与解析 `memory.stat`。
+
+```go
+// 复用 a 的 readStat；statKey 从 memory.stat 取某一行的值。
+func memUsage() (float64, bool) {
+    cur, err := readStat("memory.current", "memory", "memory")        // v2
+    key := "inactive_file"
+    if err != nil {
+        cur, err = readStat("memory.usage_in_bytes", "memory", "memory") // v1
+        key = "total_inactive_file"
+    }
+    limit, ok := memLimit()
+    if err != nil || !ok {
+        return 0, false                       // 读不到或上限未设
+    }
+    current, _ := strconv.ParseUint(cur, 10, 64)
+    inactive := statKey("memory.stat", "memory", key)
+
+    ws := uint64(0)                           // 工作集 = max(0, current − inactive_file)
+    if current > inactive {
+        ws = current - inactive
+    }
+    return float64(ws) / float64(limit), true
+}
+
+// 内存上限：v2 "max" 表示无限；v1 limit_in_bytes 接近 uint64 上限表示无限。
+func memLimit() (uint64, bool) {
+    if s, err := readStat("memory.max", "memory", "memory"); err == nil { // v2
+        if s == "max" {
+            return 0, false
+        }
+        v, _ := strconv.ParseUint(s, 10, 64)
+        return v, true
+    }
+    s, err := readStat("memory.limit_in_bytes", "memory", "memory")       // v1
+    if err != nil {
+        return 0, false
+    }
+    v, _ := strconv.ParseUint(s, 10, 64)
+    if v >= 1<<62 {                           // 极大值（如 0x7FFFFFFFFFFFF000）视为无限
+        return 0, false
+    }
+    return v, true
+}
+```
+
+- **上限无限要识别**：v2 `memory.max=max`、v1 `memory.limit_in_bytes` 接近 uint64 上限都表示未限，按 a 的口径回退、不做内存归一化。
 - **不用裸当前用量**：`current` 含可回收页缓存（page cache），直接用会把内存压力判高。
 - **不用 RSS**：常驻内存（RSS）漏掉活跃文件缓存，deepflow 的 `VmRSS` 与本口径不同（见 0x04g）。
 - **硬熔断可双参考**：kubelet 的 OOM 判定看 `current` 对 `limit`，工作集偏早预警、硬熔断点可两者并看。
