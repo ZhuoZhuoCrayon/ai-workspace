@@ -233,7 +233,9 @@ ListLinkResource.build_links(
 
 本里程碑复用 PR [#10755](https://github.com/TencentBlueKing/bk-monitor/pull/10755) 已合入的 Links 展示结构，只补齐反向 Links 的异步加载。
 
-前提：`webpack/src/monitor-api/modules/apm_trace.js` 已注册 `listLinks`，指向 `apm/trace_api/trace_query/list_links/`。
+前提：`webpack/src/monitor-api/modules/apm_trace.js` 已注册 `listLink`，指向 `apm/trace_api/trace_query/list_links/`。
+
+命名规则：前端 API 函数名由 `ListLinkResource` 自动生成，endpoint `list_links` 只决定 URL。
 
 改动范围：
 
@@ -242,14 +244,14 @@ ListLinkResource.build_links(
 
 | 变更 | 目标 |
 | --- | --- |
-| **[Change]** `SpanDetails.getDetails()` | 打开 Span 详情并解析到当前 `trace_id` / `span_id` 后，触发 `listLinks` 请求。 |
+| **[Change]** `SpanDetails.getDetails()` | 打开 Span 详情并解析到当前 `trace_id` / `span_id` 后，触发 `listLink` 请求。 |
 | **[Keep]** `formatSpanLinks()` | 继续将接口返回的 OpenTelemetry Link 数组转换为现有 Links 展示结构。 |
 | **[Keep]** BasicInfo `Links` 分组 | 继续展示在 Span 详情基础信息中，不新增独立 Tab 或新组件。 |
 
 请求参数直接取当前详情上下文：
 
 ```ts
-listLinks({
+listLink({
   bk_biz_id,
   app_name,
   trace_id,
