@@ -85,9 +85,8 @@ CPU 超配额  → CFS 节流（throttling）：被迫变慢，可恢复，压�
 | 控制方式 | 比例降级（连续旋钮） | 阈值熔断（开关） |
 | 应用层目标 | 被节流时保住延迟与质量 | 绝不越线、不被 OOM |
 
-业界印证：go-zero、Kratos 的自适应丢弃主信号都是 CPU，内存普遍作为触发保护动作的开关（Envoy overload manager 用堆内存压力触发「停止接收新连接」），没有谁把内存当连续限流旋钮。
-
-内存这一路对 collector 不可省：下游（Kafka 等）变慢导致队列堆积时，CPU 可能不高，内存才是真正的瓶颈，熔断兜的正是「CPU 没事但要被撑死」这条死法。
+- 业界主信号都用 CPU：go-zero、Kratos 的自适应丢弃以 CPU 为准，内存只作触发开关（如 Envoy overload manager 用堆内存压力触发停接新连接），无人当连续旋钮。
+- 内存这路不可省：下游（Kafka 等）变慢致队列堆积时 CPU 可能不高，内存才是真正瓶颈，熔断兜的正是「CPU 没事但被撑死」。
 
 ### c. 核心对象模型
 
@@ -109,7 +108,7 @@ flowchart LR
     end
     WL -.原子读.-> M
     ST -.原子读.-> M
-    CFG["ThrottleConfig<br/>启动期加载"] -.-> S
+    CFG["throttle.Config<br/>启动期加载"] -.-> S
     CFG -.-> M
 ```
 
@@ -179,8 +178,8 @@ stateDiagram-v2
 | 信号读取 | `WaterLevel` 由 `ResourceSampler` 每 `250 ms` 原子发布，请求路径只读 |
 | HTTP 拒绝点 | `throttle` 中间件置于 `content_decompressor` 之后入列 *[1]*，按 `r.URL.Path` 归类数据类型后判定，丢弃返回 `429` 加 `Retry-After`、不读 body |
 | gRPC 拒绝点 | `throttle` 注册为 `grpc.InTapHandle`，在反序列化前按 `info.FullMethodName` 归类数据类型后判定，拒绝返回 `ResourceExhausted` |
-| 配置下发 | 新增结构化 `receiver.throttle` 配置块，启动期一次性加载，中间件持有 manager 引用，详见 0x03e |
-| 观测 | `bk_collector_throttle_*` 系列指标，沿用 `promauto` 加 `metricMonitor` 模式，详见 0x03f |
+| 配置下发 | 新增结构化 `receiver.throttle` 配置块，启动期一次性加载，中间件持有 manager 引用，详见 0x03g |
+| 观测 | `bk_collector_throttle_*` 系列指标，沿用 `promauto` 加 `metricMonitor` 模式，详见 0x03h |
 
 - *[1] 更外层、解压前执行*：列表 inner→outer 包裹、末尾项最先执行（见 `startRecvHttpServer`），`throttle` 列在 `content_decompressor` 之后即解压前拒绝。
 
@@ -188,19 +187,20 @@ stateDiagram-v2
 
 ## 0x03 开发方案
 
-落实 0x02 的两个单例与一条解耦边界，新增 `pkg/collector/internal/throttle/` 承载信号与决策，HTTP / gRPC 侧只加薄适配层。
+0x02 的两个单例与解耦边界落到新包 `pkg/collector/internal/throttle/`，HTTP 与 gRPC 各加薄适配层，既有 receiver 只动两处，pipeline 与 processor 零改动。
 
-```text
-pkg/collector/internal/throttle/
-  cgroup.go    # cgroup.Reader：移植 VM lib/cgroup 的读取逻辑
-  sampler.go   # ResourceSampler + WaterLevel
-  classify.go  # HTTP 路径 / gRPC 方法名 → 数据类型（traces/metrics/logs/profiles）预先注册映射
-  manager.go   # ThrottleManager + Rule + Decision + 每数据类型状态机
-  config.go    # ThrottleConfig 协议
-  metrics.go   # bk_collector_throttle_* 指标
-pkg/collector/internal/httpmiddleware/throttle.go   # 注册 "throttle"，按 path 归类后调 manager
-pkg/collector/internal/grpcmiddleware/throttle.go   # 注册 "throttle"，按 method 归类后产出 grpc.InTapHandle
-```
+| 文件 · 位置 | 改动 |
+|---|---|
+| **[Add]** `throttle/cgroup.go` | `cgroup.Reader`，移植 VM `lib/cgroup` 的读取逻辑 |
+| **[Add]** `throttle/sampler.go` | `ResourceSampler` 与 `WaterLevel` |
+| **[Add]** `throttle/classify.go` | HTTP 路径 / gRPC 方法名 → 数据类型预先注册映射 |
+| **[Add]** `throttle/manager.go` | `ThrottleManager` + `Rule` + `Decision` + 每数据类型状态机 |
+| **[Add]** `throttle/config.go` | `Config` 协议与默认值 |
+| **[Add]** `throttle/metrics.go` | `bk_collector_throttle_*` 指标 |
+| **[Add]** `httpmiddleware/throttle.go` | `init` 注册 `"throttle"`，工厂绑定 `Manager()`，按 `r.URL.Path` 归类后判定 |
+| **[Add]** `grpcmiddleware/throttle.go` | `init` 注册 `"throttle"`，产出 `grpc.InTapHandle`，按 `info.FullMethodName` 归类后判定 |
+| **[Change]** `receiver/config.go` · `Config` | 加 `Throttle throttle.Config` 字段（tag `config:"throttle"`），随 `receiver` 块由 `UnpackChild` 解析 |
+| **[Change]** `receiver/receiver.go` · `New` | 解包 `Config` 后调 `throttle.Init(c.Throttle)`，建单例并拉起采样回路 |
 
 算法与读取一律对齐业界既有实现并标注出处，不自造、不引第三方库，避免拖入 eBPF、logrus 等传递依赖。
 
@@ -233,6 +233,7 @@ type Reader interface {
 
 - **配额保留小数**：分母用 `quota/period` 浮点值，不用 `GOMAXPROCS`（向下取整、最小 2）或 `nproc`（宿主核数）。
 - **配额未设要保守回退**：`cpu.max=max` 或 v1 `quota=-1` 时取配置 `fallback_cores`（缺省 `define.CoreNum()`），不回退成全节点核数。
+- **内存上限未设则跳过**：`memory.max=max`（或 v1 哨兵极大值）时不做内存归一化，只保留 CPU 分级与熔断。
 - **零新增依赖**：仅用 `os`、`strconv`、`strings`。
 
 ### b. 计算：CPU 利用率、内存工作集、EWMA
@@ -246,7 +247,7 @@ effCores = min(cpuset 有效核数, quota/period)
 CPU 利用率 = Δusage / (Δwall × effCores)      # 过载时可大于 1.0，不要截断
 ```
 
-分母用 cgroup 配额，按宿主核数会严重低估（线上实测容器报 `14` 核、实配 `1` 核，低估约 `14` 倍，限流永不触发）。
+- 分母用 cgroup 配额，宿主核数会严重低估（线上实测容器报 `14` 核、实配 `1` 核，低估约 `14` 倍，限流永不触发）。
 
 **（2）内存工作集**：对齐 kubelet、cAdvisor 口径，从当前用量扣掉可回收文件缓存（口径见 [Kubernetes 内存工作集解析](https://mtardy.com/posts/memory-kubernetes-golang-ebpf/)）。
 
@@ -255,7 +256,7 @@ workingSet = max(0, current - inactive_file)
 内存利用率 = workingSet / limit
 ```
 
-裸 `current` 含可回收页缓存、会把压力判高，RSS 漏掉活跃文件缓存、偏低，两者都不取。
+- 裸 `current` 含可回收页缓存会判高，RSS 漏掉活跃文件缓存会偏低，两者都不取。
 
 **（3）EWMA 平滑**：对齐 go-zero、Kratos aegis 的同族衰减，源自 [RFC 6298](https://datatracker.ietf.org/doc/html/rfc6298) 的 RTT 估计，一阶低通、内存 `O(1)`。
 
@@ -263,9 +264,8 @@ workingSet = max(0, current - inactive_file)
 s_t = (1 - β) · x_t + β · s_{t-1}      # β 为历史权重，越大越平滑越滞后
 ```
 
-快慢两路用不同 β：慢信号 `β=0.95` 驱动分级抗抖，快信号 `β=0.7` 驱动熔断防漏。
-
-递推式仅三行，直接内联实现并在注释标注出处，不引第三方 EWMA 库。
+- 快慢两路用不同 β：慢信号 `β=0.95` 驱动分级抗抖，快信号 `β=0.7` 驱动熔断防漏。
+- 递推式仅三行，直接内联实现并注释标注出处，不引第三方 EWMA 库。
 
 ### c. ResourceSampler：采样回路
 
@@ -273,7 +273,7 @@ s_t = (1 - β) · x_t + β · s_{t-1}      # β 为历史权重，越大越平�
 
 - **职责**：每 `sample_interval` 调 `cgroup.Reader` 取一次原始水位，算 CPU 快慢两路 EWMA 与内存占比，推进每数据类型状态机，原子发布 `WaterLevel`。
 - **发布方式**：`WaterLevel` 用 `atomic.Pointer[WaterLevel]` 整体替换，请求路径无锁读，决策与采样彻底解耦。
-- **生命周期**：随 `ThrottleManager` 首次 `Update` 启动，进程级单例，四类状态机启动期建好、运行期不增减。
+- **生命周期**：由 `throttle.Init` 在启动期拉起，进程级单例，四类状态机启动期建好、运行期只读不增减。
 
 协议骨架：
 
@@ -284,11 +284,13 @@ func (s *ResourceSampler) Level() *WaterLevel   // 原子读，请求路径用
 func (s *ResourceSampler) tick()                // 周期回调：采样 + EWMA + 状态机 + 发布
 ```
 
-### d. 决策与挂载
+### d. 决策
 
-`ThrottleManager` 是单例裁决者，HTTP 与 gRPC 适配层只把请求归类到数据类型再调 `Decide`。
+`ThrottleManager` 是单例裁决者，HTTP 与 gRPC 适配层只把请求归类后调 `Decide`，自身不持有状态。
 
-`Decide` 协议：
+决策只此一处，两个入口零重复。
+
+**`Decide` 协议**
 
 ```go
 type Action uint8 // Admit / Shed / Open
@@ -309,11 +311,9 @@ p_drop = drop_min + (drop_max - drop_min) * t
 
 - `cpu_slow ≤ cpu_enter` → `p_drop = drop_min`（缺省 `0`）
 - `cpu_slow ≥ cpu_hard` → `p_drop = drop_max`（缺省 `1`）
-- `Open` 态不走此式、直接全丢
+- `Open` 态不走此式，直接全丢
 
-**端点归类（预先注册）**：`classify` 用预先注册的「路由 → 数据类型」映射表，把 HTTP 路径与 gRPC 全方法名归为四类，对齐 collector 既有 `define.RecordType`，未命中放行。
-
-第一期只注册下表端点，其余端点（admin、proxy、zipkin、skywalking 等）暂不参与限流，直接放行。
+**端点归类**：`classify` 用预先注册的「路由 → 数据类型」映射表把 HTTP 路径与 gRPC 全方法名归为四类，对齐 collector 既有 `define.RecordType`。
 
 | 数据类型 | HTTP 路径 | gRPC 全方法名 |
 |---|---|---|
@@ -322,26 +322,61 @@ p_drop = drop_min + (drop_max - drop_min) * t
 | `logs` | `/v1/logs` | `opentelemetry.proto.collector.logs.v1.LogsService/Export` |
 | `profiles` | `/pyroscope/ingest` | 无（connect-rpc 经 HTTP 路由上报） |
 
-**HTTP 适配（Add `httpmiddleware/throttle.go`）**：`Register("throttle", ...)`，工厂忽略 optmap 串、绑定 `throttle.Manager()` 单例。
+- 第一期只注册上表端点，其余（admin、proxy、zipkin、skywalking 等）未命中放行，暂不限流。
+- 路径取自各 receiver 的入站常量（`routeV1Traces`、`routeRemoteWrite` 等），与 receiver 自身落 `RecordType` 解耦。
 
-```go
-func Throttle(_ string) MiddlewareFunc // handler：Decide(classify(r.URL.Path)) 命中丢弃则写 429/503，不读 body
+**决策器装配**：中间件注册表只认 optmap 串，够不到结构化 `receiver.throttle`，靠启动期单例搭桥。
+
+```mermaid
+sequenceDiagram
+    participant Init as init() 包加载
+    participant New as receiver.New
+    participant Start as receiver.Start
+    participant Mid as middleware.Get
+    participant Req as 请求路径
+    Init->>Init: Register("throttle", 工厂)，仅登记不构造
+    New->>New: UnpackChild("receiver") 得 Config
+    New->>New: throttle.Init(c.Throttle)，建 Manager + 拉起 Sampler
+    Start->>Mid: startRecvHttpServer / startGrpcServer 取中间件
+    Mid->>Mid: 工厂绑定 throttle.Manager() 单例
+    Req->>Req: 适配层 classify -> Manager().Decide
 ```
 
-**gRPC 适配（Add `grpcmiddleware/throttle.go`）**：`Register("throttle", ...)` 产出 `grpc.InTapHandle`，反序列化前按方法名归类判定。
+- `New` 早于 `Start`，单例在工厂执行前已就绪。
+- `enabled=false` 时 `Init` 空跑，工厂返回放行中间件。
+
+### e. HTTP 挂载
+
+工厂忽略 optmap 串，绑定 `throttle.Manager()` 单例，按 `r.URL.Path` 归类后判定。
 
 ```go
-func Throttle(_ string) grpc.ServerOption // grpc.InTapHandle(func(ctx, *tap.Info) (context.Context, error))
-// 命中丢弃返回 status.Error(codes.ResourceExhausted, ...)
+func Throttle(_ string) MiddlewareFunc
+// a := Manager().Decide(classify(r.URL.Path))
+//   Open / Shed 命中丢弃 -> 写 429 + Retry-After 后 return（不读 body）
+//   Admit              -> next.ServeHTTP(w, r)
 ```
 
-`InTapHandle` 在读消息前触发，是 gRPC 最省 CPU 的拒绝点，每个 server 仅允许一个，与既有 `maxbytes`（另一类 ServerOption）不冲突。
+挂载顺序由 `startRecvHttpServer` 的包裹循环 `handler = fn(handler)` 决定：
 
-流式接口在建流时即判定，覆盖 SkyWalking 的 client-stream。
+- 列表末项裹在最外层、最先执行，`throttle` 列在 `content_decompressor` 之后即位于其外层。
+- 请求先过限流再解压，丢弃落在解压前，省掉无谓的解压与反序列化开销。
 
-**单点决策**：HTTP 与 gRPC 两个适配层都不持有状态，只调同一个 `ThrottleManager`，决策逻辑不重复。
+### f. gRPC 挂载
 
-### e. 配置协议
+工厂产出 `grpc.InTapHandle`，在读消息体前按 `info.FullMethodName` 判定。
+
+```go
+func Throttle(_ string) grpc.ServerOption
+// grpc.InTapHandle(func(ctx context.Context, info *tap.Info) (context.Context, error) {
+//   命中丢弃 -> nil, status.Error(codes.ResourceExhausted, ...)
+//   放行     -> ctx, nil
+// })
+```
+
+- `InTapHandle` 是 gRPC 最省 CPU 的拒绝点，unary 与 streaming 都在首帧判定，一处即覆盖。
+- grpc-go 限定每个 server 只一个 tap，重复注册会 panic，与既有 `maxbytes`（`grpc.MaxRecvMsgSize`）互不冲突。
+
+### g. 配置协议
 
 新增结构化 `receiver.throttle` 配置块，按 signal / thresholds / rules 三层承载，中间件列表里只放占位项 `throttle`，解决 optmap 装不下的矛盾。
 
@@ -428,7 +463,7 @@ rules:
 
 本期不涉及热重载，配置仅启动期加载、变更走重启生效。
 
-### f. 观测指标
+### h. 观测指标
 
 沿用 `bk_collector_*` 命名加 `promauto` 加 `metricMonitor` 模式（参照 [<源码> receiver/metrics.go](https://github.com/TencentBlueKing/bkmonitor-datalink/blob/master/pkg/collector/receiver/metrics.go)）。
 
@@ -438,21 +473,11 @@ rules:
 | `bk_collector_throttle_water_level` | gauge | `resource` | 当前水位，`resource` 取 `cpu_slow`、`cpu_fast`、`mem` |
 | `bk_collector_throttle_state` | gauge | `record_type` | 状态机当前态（0 Normal、1 Shedding、2 Open） |
 
-### g. 依赖与兼容
-
-- **新增依赖**：无，cgroup 读取与 EWMA 自实现。
-- **既有依赖**：`containerd/cgroups v1.0.3`（indirect）保持现状、不被本方案引用。
-- **CPU 配额回退**：读不到 cgroup 配额时按 `fallback_cores` 兜底，不回退宿主核数。
-- **内存上限回退**：内存上限无限时跳过内存归一化，只保留 CPU 维度。
-- **与 processor 限流并存**：pipeline 层 `rate_limiter`（按租户 QPS）与本方案职责不重叠，可并存。
-
 ---
 
 ## 0x04 验收与验证
 
-验证分三层：单测锁定取数与决策正确，原型压测在受限容器验证端到端丢弃，真实 collector 集成验证平稳运行目标。
-
-脚本与运行说明在 [validation/](./validation/)。
+验证分三层：单测锁定取数与决策正确，压测在受限容器验证端到端丢弃，集成验证真实 collector 平稳运行。
 
 ### a. 单测门禁
 
@@ -465,9 +490,15 @@ rules:
 | `classify_test.go` | 端点 → 数据类型归类 | 四类注册端点命中正确（含 metrics 的 `/v1/metrics`、`/prometheus/write`）、未注册端点放行 |
 | `manager_test.go` | 状态机转移与丢弃概率插值 | 滞回带不横跳、连续门控过滤毛刺、`p_drop` 在 `drop_min`～`drop_max` 线性插值与边界、`enabled=false` 恒放行 |
 
-### b. 压测脚本
+### b. 压测工具
 
-提供 stdlib 压测脚本 [validation/loadgen.py](./validation/loadgen.py)，向 OTLP HTTP `/v1/traces` 发 JSON trace，三阶段模拟真实冲击。
+压测程序用 Go 写、仅依赖标准库，放在 collector example 目录下单独编译成二进制。
+
+- 位置：`pkg/collector/example/loadgen/main.go`（`package main`）。
+- 编译：`cd pkg/collector && go build -o loadgen ./example/loadgen`。
+- 运行：`./loadgen -url http://127.0.0.1:4318/v1/traces -token <TOKEN>`。
+- 行为：向 OTLP HTTP `/v1/traces` 发 JSON trace，三阶段串行施压，逐阶段打印 `200` / `429` / `503` 计数与成功请求 p99。
+- 参数：`-url` 目标地址、`-token` 写 `X-BK-TOKEN` 头、`-c` 并发数（缺省 `50`）、`-d` 每阶段时长（缺省 `30s`）。
 
 | 阶段 | 负载 | 目的 |
 |---|---|---|
@@ -475,15 +506,13 @@ rules:
 | burst | 高并发、小包 | 触发 CPU 快信号熔断 |
 | bigpayload | 并发不变、单包成本翻倍 | 验证成本盲点，触发慢信号分级 |
 
-脚本按阶段打印 `200`、`429`、`503` 计数与成功请求 p99，支持 `--token` 设置 `X-BK-TOKEN`、`--url` 指向原型或真实 collector。
-
 ### c. OrbStack 集成验证
 
-把真实 collector 放进 OrbStack 受限容器跑，复现流量冲击、确认平稳运行，步骤见 [validation/README.md](./validation/README.md)。
+把真实 collector 放进 OrbStack 受限容器跑，复现流量冲击、确认平稳运行。
 
 - **环境**：OrbStack（cgroup v2），容器限 `--cpus=1 --memory=300m`，模拟 K8s 紧资源。
 - **配置**：启用 OTLP HTTP 接收、`throttle` 中间件与 `receiver.throttle` 块，配最简管道。
-- **施压**：`loadgen.py` 跑三阶段，对照 `throttle.enabled` 关与开。
+- **施压**：编译好的 `loadgen` 跑三阶段，对照 `throttle.enabled` 关与开。
 
 平稳运行的验收口径如下，全部满足即达标。
 
@@ -504,7 +533,7 @@ rules:
 
 | 时间 | 结论性进展 |
 |---|---|
-| `2026-06-17` | 方案 B 定稿并收敛第一期范围 <br />[a] 确立「CPU 主限流、内存做熔断」，落到 `ResourceSampler` 与 `ThrottleManager` 两单例，cgroup 直读取数单一基准 VM `lib/cgroup`、EWMA 对齐 RFC 6298，go-zero `core/stat` 仅作 CPU 速率公式对齐 <br />[b] 移除 GOMEMLIMIT 软背压与配置热重载，内存只留硬熔断、配置仅启动期加载 <br />[c] 限流粒度由 endpoint 改为数据类型（traces/metrics/logs/profiles）、每类一台状态机，端点用预先注册映射表归类（准确路径如 `/v1/traces`、`/prometheus/write`、`/pyroscope/ingest`） <br />[d] 配置收敛为 signal / thresholds / rules 三层：阈值全局共用（`cpu_enter`/`cpu_exit`/`cpu_hard`/`mem_hard`/`breach_n`），每类只调 `drop_min`/`drop_max`，丢弃概率在 `cpu_enter`～`cpu_hard` 线性插值，`enabled: false` 整类豁免，指标标签按 `record_type` <br />[e] 验收含单测门禁、压测脚本与 OrbStack 集成口径 |
+| `2026-06-17` | 方案 B 定稿并收敛第一期范围 <br />[a] 确立「CPU 主限流、内存做熔断」，落到 `ResourceSampler` 与 `ThrottleManager` 两单例，cgroup 直读取数单一基准 VM `lib/cgroup`、EWMA 对齐 RFC 6298，go-zero `core/stat` 仅作 CPU 速率公式对齐 <br />[b] 移除 GOMEMLIMIT 软背压与配置热重载，内存只留硬熔断、配置仅启动期加载 <br />[c] 限流粒度由 endpoint 改为数据类型（traces/metrics/logs/profiles）、每类一台状态机，端点用预先注册映射表归类（准确路径如 `/v1/traces`、`/prometheus/write`、`/pyroscope/ingest`） <br />[d] 配置收敛为 signal / thresholds / rules 三层：阈值全局共用（`cpu_enter`/`cpu_exit`/`cpu_hard`/`mem_hard`/`breach_n`），每类只调 `drop_min`/`drop_max`，丢弃概率在 `cpu_enter`～`cpu_hard` 线性插值，`enabled: false` 整类豁免，指标标签按 `record_type` <br />[e] 验收含单测门禁、Go 压测工具（collector example 目录、单独编译二进制）与 OrbStack 集成口径 |
 
 ---
 
