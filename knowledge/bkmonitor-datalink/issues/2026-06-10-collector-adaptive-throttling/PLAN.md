@@ -551,6 +551,4 @@ collector 锚点（优先读本地代码库）：
 
 | 状态 | 分支 | 里程碑 | PR |
 |---|---|---|---|
-| 🔄 | `<branch_name>` | 里程碑 1：throttle 包（cgroup 读取 + ResourceSampler + 单测） | 待创建 |
-| 🔄 | `<branch_name>` | 里程碑 2：数据类型分类 + ThrottleManager 决策状态机 + HTTP / gRPC 适配 + 配置块 | 待创建 |
-| 🔄 | `<branch_name>` | 里程碑 3：观测指标 + OrbStack 集成验证 | 待创建 |
+| 🔄 | `<branch_name>` | 支持自适应限流 | 待创建 |
