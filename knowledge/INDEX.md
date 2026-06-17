@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-06-16
+> 最后更新：2026-06-17
 
 ## 0x01 项目知识
 
@@ -18,6 +18,10 @@
 
 ## 0x02 最近更新
 
+- 2026-06-17：更新
+  [bk-collector 自适应限流](./bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/README.md)
+  至 bkmonitor-datalink
+  （收敛方案 B：按数据类型分级丢弃，CPU 主限流、内存硬熔断）
 - 2026-06-16：新增
   [为什么我又写了一个 Python 限流库：throttled-py](./throttled-py/articles/2026-06-16-throttled-py-intro/README.md)
   至 throttled-py
@@ -27,10 +31,6 @@
   [日志 UnifyQuery 环境变量白名单与 query_string 增强](./bkmonitor/issues/2026-03-05-log-uq-env-whitelist-and-query-string/README.md)
   至 bkmonitor
   （补充日志聚类表 `_clustered` 后缀统一走 UnifyQuery 的方案与验证结论）
-- 2026-06-10：新增
-  [bk-collector 自适应限流](./bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/README.md)
-  至 bkmonitor-datalink
-  （以 CPU / 内存真实资源水位驱动按 endpoint 分级的有损降级，避免 collector 高负载下被压垮导致用户数据持续中断）
 - 2026-06-08：更新
   [日志数据源切换 unify-query](./bkmonitor/issues/2026-02-10-log-ds-to-unify-query/README.md)
   至 bkmonitor

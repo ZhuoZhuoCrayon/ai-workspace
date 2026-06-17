@@ -1,9 +1,9 @@
 ---
 title: bk-collector 自适应限流
 tags: [collector, throttling, load-shedding, overload-protection, k8s]
-description: 以 CPU / 内存等真实资源水位驱动按 endpoint 分级的有损降级，避免 collector 高负载下被压垮导致用户数据持续中断
+description: 以 CPU / 内存真实资源水位驱动按数据类型分级的有损降级，避免 collector 高负载下被压垮导致用户数据持续中断
 created: 2026-06-10
-updated: 2026-06-10
+updated: 2026-06-17
 ---
 
 # bk-collector 自适应限流
@@ -33,8 +33,8 @@ QPS 维度无法表达真实资源压力，静态阈值要么误杀正常流量�
 
 ### b. 目标
 
-- collector 在资源水位逼近危险阈值时，能按接收端点（endpoint）分级有损降级，自我保护不被压垮。
-- 降级策略可配置：按 endpoint 配置触发阈值、丢弃比例与熔断点。
+- collector 在资源水位逼近危险阈值时，能按数据类型（traces / metrics / logs / profiles）分级有损降级，自我保护不被压垮。
+- 降级策略可配置：阈值全局共用，按数据类型配置丢弃强度与豁免策略。
 - 优先覆盖 k8s 部署形态，二进制形态尽量兼容。
 
 ## 0x02 实现路线
@@ -46,12 +46,12 @@ QPS 维度无法表达真实资源压力，静态阈值要么误杀正常流量�
 **核心对象与关键路径**
 
 - 资源水位信号：采集 collector 自身 CPU / 内存使用率作为限流决策输入，k8s 形态需反映容器 cgroup limit 而非宿主机。
-- 分级降级决策：按「资源水位 × endpoint 策略」决定放行、按比例丢弃或熔断，不同 endpoint 可配独立的阈值与「水位 → 丢弃率」映射曲线。
+- 分级降级决策：按「资源水位 × 数据类型策略」决定放行、按比例丢弃或熔断，不同数据类型可配置独立丢弃强度。
 - 挂载位置：复用现有 HTTP / gRPC middleware 链，与 `maxbytes` / `maxconns` 同层，在请求入口处决策，不侵入 pipeline / processor。
 
 **分级降级示例**
 
-`/v1/traces` 在 CPU 达 `80%` 时丢弃 `50%`，达 `90%` 时彻底熔断。
+`traces` 在 CPU 达 `80%` 时开始按比例丢弃，达 `90%` 时触发硬熔断。
 
 **资源信号采集（待确认）**
 
