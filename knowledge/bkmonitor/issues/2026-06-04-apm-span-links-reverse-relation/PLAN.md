@@ -4,7 +4,7 @@ tags: [apm, span, trace, links, relation, otlp]
 issue: ./README.md
 description: 通过 ListLinkResource 合并数据上报侧与反向关联 Links，并统一返回 OpenTelemetry Link 列表
 created: 2026-06-04
-updated: 2026-06-08
+updated: 2026-06-17
 ---
 
 # APM Span 详情支持 Links 反向关联展示 —— 实施方案
@@ -229,20 +229,62 @@ ListLinkResource.build_links(
 - 缺失 `trace_state` 或 `attributes` 时补充协议默认值。
 - 按完整 Link 内容去重。
 
+### e. 前端展示方案（里程碑 2）
+
+本里程碑复用 PR [#10755](https://github.com/TencentBlueKing/bk-monitor/pull/10755) 已合入的 Links 展示结构，只补齐反向 Links 的异步加载。
+
+前提：`webpack/src/monitor-api/modules/apm_trace.js` 已注册 `listLinks`，指向 `apm/trace_api/trace_query/list_links/`。
+
+改动范围：
+
+- `webpack/src/trace/pages/main/span-details.tsx`
+- `webpack/src/trace/pages/main/utils/format-span-links.ts`
+
+| 变更 | 目标 |
+| --- | --- |
+| **[Change]** `SpanDetails.getDetails()` | 打开 Span 详情并解析到当前 `trace_id` / `span_id` 后，触发 `listLinks` 请求。 |
+| **[Keep]** `formatSpanLinks()` | 继续将接口返回的 OpenTelemetry Link 数组转换为现有 Links 展示结构。 |
+| **[Keep]** BasicInfo `Links` 分组 | 继续展示在 Span 详情基础信息中，不新增独立 Tab 或新组件。 |
+
+请求参数直接取当前详情上下文：
+
+```ts
+listLinks({
+  bk_biz_id,
+  app_name,
+  trace_id,
+  span_id,
+});
+```
+
+实现口径：
+
+- `getDetails()` 先按现有逻辑渲染基础信息，避免 Links 请求阻塞详情打开。
+- `loadSpanLinks()` 独立请求 Links，成功后用 `formatSpanLinks(response)` 生成列表。
+- 请求返回后更新 Span 详情的响应式 BasicInfo 数据源，确保页面随接口结果刷新 `Links` 分组。
+- Links 列表非空时插入或替换 BasicInfo 的 `Links` 分组。
+- Links 列表为空时不展示该分组。
+- 使用递增请求序号或请求 key 忽略过期响应，避免快速切换 Span 时旧 Links 覆盖新详情。
+
 ## 0x04 实施进展
 
 | 时间 | 结论性进展 |
 | --- | --- |
-| `2026-06-04 21:00` | 核心图明确双路 filters，开发方案补齐查询参数与 `build_links` 输入、映射协议。 |
+| `2026-06-17 15:00` | 完成 PR [#11110](https://github.com/TencentBlueKing/bk-monitor/pull/11110) review 写回：<br />[a] 反向查询同一 `links[]` 对象语义按符合预期的已知边界记录。<br />[b] APIGW `list_links` 资源暴露按符合预期的已知边界记录。<br />[c] 增加里程碑 2：复用 PR [#10755](https://github.com/TencentBlueKing/bk-monitor/pull/10755) 的 Links 展示结构，打开 Span 详情时异步请求反向 Links。 |
 | `2026-06-08 22:20` | 确认 Links 查询复用 `query_span_list` 新链路，后台放宽共享 `QuerySerializer` 时间参数，并将 `links.trace_id` / `links.span_id` 纳入精确 ID 查询识别。 |
+| `2026-06-04 21:00` | 核心图明确双路 filters，开发方案补齐查询参数与 `build_links` 输入、映射协议。 |
 
 ## 0x05 参考 & 版本锚点
 
 ### a. 参考
 
+- PR - Links 反向关联查询：[TencentBlueKing/bk-monitor #11110](https://github.com/TencentBlueKing/bk-monitor/pull/11110)
+- PR - Span 详情 Links 展示：[TencentBlueKing/bk-monitor #10755](https://github.com/TencentBlueKing/bk-monitor/pull/10755)
 - [<源码> bk-monitor/bkmonitor/packages/apm_web/trace/resources.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/apm_web/trace/resources.py)
 - [<源码> bk-monitor/bkmonitor/packages/apm_web/trace/views.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/apm_web/trace/views.py)
 - [<源码> bk-monitor/bkmonitor/packages/apm_web/trace/serializers.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/apm_web/trace/serializers.py)
+- [<源码> bk-monitor/bkmonitor/webpack/src/trace/pages/main/span-details.tsx](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/webpack/src/trace/pages/main/span-details.tsx)
+- [<源码> bk-monitor/bkmonitor/webpack/src/trace/pages/main/utils/format-span-links.ts](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/webpack/src/trace/pages/main/utils/format-span-links.ts)
 - [<源码> bk-monitor/bkmonitor/apm/resources.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/apm/resources.py)
 - [<源码> bk-monitor/bkmonitor/api/apm_api/default.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/api/apm_api/default.py)
 
@@ -250,4 +292,5 @@ ListLinkResource.build_links(
 
 | 状态 | 分支 | 里程碑 | PR |
 | --- | --- | --- | --- |
-| 🔄 | `<branch_name>` | 里程碑 1：Links 反向关联查询 | 待创建 |
+| 🔄 | `feat/apm_span_links_reverse_relation/#1010158081135172749` | 里程碑 1：Links 反向关联查询 | [TencentBlueKing/bk-monitor #11110](https://github.com/TencentBlueKing/bk-monitor/pull/11110) |
+| 🔄 | `<branch_name>` | 里程碑 2：APM Span 详情支持展示反向 Links | 待创建 |

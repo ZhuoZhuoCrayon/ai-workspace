@@ -3,8 +3,8 @@
 
 | 文件                                                                                                     | 标签                                                        | 摘要                                                      | 更新日期       |
 |------|------|------|---------|
+| [APM Span 详情支持 Links 反向关联展示](./2026-06-04-apm-span-links-reverse-relation/README.md) | `apm` `span` `trace` `links` `relation` `otlp` | 通过 TraceID 和 SpanID 过滤正向与反向关联，并统一返回 OpenTelemetry Link 列表 | 2026-06-17 |
 | [日志数据源切换前后保持原始日志结构一致](./2026-06-08-log-uq-object-structure-restore/README.md) | `log` `unify-query` `data-source` `object-field` | 让日志 UnifyQuery 返回的打平对象字段恢复为 ES 查询时期的原始结构 | 2026-06-08 |
-| [APM Span 详情支持 Links 反向关联展示](./2026-06-04-apm-span-links-reverse-relation/README.md) | `apm` `span` `trace` `links` `relation` `otlp` | 通过 TraceID 和 SpanID 过滤正向与反向关联，并统一返回 OpenTelemetry Link 列表 | 2026-06-08 |
 | [主机场景容器事件关联准确性提升](./2026-06-03-alert-host-k8s-event-relation-accuracy/README.md) | `alert` `k8s-event` `host-target` `k8s-node` `scene-view` `unify-query` | 让主机与 K8S-NODE 告警按节点维度关联容器事件，避免跨节点 workload 事件混入并降低关联查询成本 | 2026-06-04 |
 | [【告警中心】优化关联日志条件构造不准确的问题](./2026-06-04-alert-log-search-condition-accuracy/README.md) | `alert` `log` `log-relation` `query-string` `alert-drilling` `lucene` | 修复日志告警关联日志在 query_string 模式下忽略策略过滤条件，导致查询范围大于实际告警范围的问题 | 2026-06-04 |
 | [错误视图 tRPC 场景适配](./2026-05-31-apm-error-view-trpc-adaptation/README.md) | `apm` `error-view` `trpc` `rpc` `exception-type` `scene-view` `code-remark` | 让 APM 错误视图在 tRPC/RPC 返回码错误中统一构造异常语义，并支持联动过滤与错误详情返回码备注展示 | 2026-06-08 |

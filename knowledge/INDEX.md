@@ -19,6 +19,10 @@
 ## 0x02 最近更新
 
 - 2026-06-17：更新
+  [APM Span 详情支持 Links 反向关联展示](./bkmonitor/issues/2026-06-04-apm-span-links-reverse-relation/README.md)
+  至 bkmonitor
+  （写回 PR #11110，记录符合预期的已知边界，并补充里程碑 2 前端展示方案）
+- 2026-06-17：更新
   [bk-collector 自适应限流](./bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/README.md)
   至 bkmonitor-datalink
   （收敛方案 B：按数据类型分级丢弃，CPU 主限流、内存硬熔断）
