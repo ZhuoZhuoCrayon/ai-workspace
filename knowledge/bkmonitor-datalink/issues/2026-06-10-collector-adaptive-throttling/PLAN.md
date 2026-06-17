@@ -168,14 +168,158 @@ stateDiagram-v2
 | 信号读取 | `WaterLevel` 由 `ResourceSampler` 每 `250 ms` 原子发布，请求路径只读 |
 | HTTP 拒绝点 | `throttle` 中间件置于 `content_decompressor` 之后入列 *[1]*，按 `r.URL.Path` 归类数据类型后判定，丢弃返回 `429` 加 `Retry-After`、不读 body |
 | gRPC 拒绝点 | `throttle` 注册为 `grpc.InTapHandle`，在反序列化前按 `info.FullMethodName` 归类数据类型后判定，拒绝返回 `ResourceExhausted` |
-| 配置下发 | 新增结构化 `receiver.throttle` 配置块，启动期一次性加载，中间件持有 manager 引用，详见 0x03g |
-| 观测 | `bk_collector_throttle_*` 系列指标，沿用 `promauto` 加 `metricMonitor` 模式，详见 0x03h |
+| 配置下发 | 新增结构化 `receiver.throttle` 配置块，启动期一次性加载，中间件持有 manager 引用，详见 0x04g |
+| 观测 | `bk_collector_throttle_*` 系列指标，沿用 `promauto` 加 `metricMonitor` 模式，详见 0x04h |
 
 - *[1] 更外层、解压前执行*：列表 inner→outer 包裹、末尾项最先执行（见 `startRecvHttpServer`），`throttle` 列在 `content_decompressor` 之后即解压前拒绝。
 
 ---
 
-## 0x03 开发方案
+## 0x03 cgroup 基础
+
+collector 的限流取数全靠直读容器 cgroup 伪文件，这里先打底两件事：容器视角下这些文件长什么样（v1/v2 差异），以及多级 cgroup 下「该读哪一层」的语义，供 0x04 取数层据此实现。
+
+### a. 容器视角下的 cgroup v1/v2 结构
+
+容器内（开启 cgroup namespace）`/sys/fs/cgroup` 下，限流取数用到的容量与用量文件布局如下，v2 单层级聚合、v1 按控制器分目录。
+
+其中 `inactive_file` 是 `memory.stat` 内的字段而非独立文件，不画成树里的子节点。
+
+cgroup v2（统一层级）：
+
+```text
+/sys/fs/cgroup/                  # 容器自身 cgroup 即此根
+├── cpu.stat                     # CPU 用量：usage_usec，求差得区间耗时
+├── cpu.max                      # CPU 容量：quota period，quota/period 作归一化分母
+├── cpuset.cpus.effective        # CPU 容量：有效核集合，与配额取小
+├── memory.current               # 内存用量：当前用量，工作集被减项
+├── memory.max                   # 内存容量：上限，内存归一化分母
+└── memory.stat                  # 内存明细文件，取其中 inactive_file 字段算工作集（current - inactive_file）
+```
+
+cgroup v1（按控制器分目录）：
+
+```text
+/sys/fs/cgroup/
+├── cpu,cpuacct/
+│   ├── cpuacct.usage            # CPU 用量：累计 ns，求差得区间耗时
+│   ├── cpu.cfs_quota_us         # CPU 容量：配额上限
+│   └── cpu.cfs_period_us        # CPU 容量：配额周期，quota/period 作归一化分母
+├── cpuset/
+│   └── cpuset.cpus              # CPU 容量：有效核集合，与配额取小
+└── memory/
+    ├── memory.usage_in_bytes    # 内存用量：当前用量，工作集被减项
+    ├── memory.limit_in_bytes    # 内存容量：上限，内存归一化分母
+    └── memory.stat              # 内存明细文件，取其中 total_inactive_file 字段算工作集（usage - total_inactive_file）
+```
+
+### b. 分层继承：cgroup 为什么有「上层」，谁严听谁的
+
+cgroup 是一棵树，就是 `/sys/fs/cgroup` 下的目录层级。
+
+你的进程挂在某个叶子节点上，但它**同时受这条路径上每一层的限额管**，内核执行其中**最严（最小）的那条**。
+
+```text
+/sys/fs/cgroup/                          cpu.max = max          （没限）
+└── kubepods/                            cpu.max = max          （没限）
+    └── burstable/                       cpu.max = max          （没限）
+        └── pod<uid>/                    cpu.max = 4 核
+            └── <container-id>/  (进程)   cpu.max = 1 核          ← 进程挂这里
+```
+
+进程真正能用多少？不是只看叶子，而是 `min(1, 4, max, max, max) = 1 核`。
+
+反过来，如果叶子写的是 `max`（多层容器里很常见），真正的 `4 核` 设在 `pod` 那层，**只读叶子就会以为「没限制」**，这就是要往上看的根本原因。
+
+### c. 两种视角：宿主看整棵树，容器只见自己这层
+
+同一棵树，宿主和容器看到的范围不一样，这决定了「能不能往上走」。
+
+宿主视角（能看到整棵树）：
+
+```text
+/sys/fs/cgroup/
+└── kubepods/ ─── burstable/ ─── pod<uid>/ ─── <container-id>/
+    ↑________________整条链的目录都在，能一层层往上读________________↑
+```
+
+容器视角（开了 cgroup namespace，被「锁」在自己这层当根）：
+
+```text
+/sys/fs/cgroup/          ← 这就是容器能看到的根，上面 kubepods/pod 全都看不见
+├── cpu.max
+├── cpu.stat
+├── memory.max
+└── memory.current
+```
+
+容器看不到自己的祖先目录，这是隔离的本意。
+
+### d. 基于 /sys/fs/cgroup 推导上层路径
+
+> `/proc/self` 是内核提供的「魔法符号链接」，谁来读它就指向谁的 `/proc/<pid>`，所以 VM 进程读 `/proc/self/cgroup` 得到的就是 VM 自己那条 cgroup 路径。
+
+核心点：**不是在文件系统里 `cd ..` 去找父目录**，而是分两步：
+
+1. **先问 `/proc/self/cgroup`「我在哪条路径上」**。它返回一个字符串：
+
+```text
+0::/kubepods/burstable/pod<uid>/<container-id>     ← 宿主 / 无 namespace 视角
+0::/                                               ← 容器 namespace 视角
+```
+
+2. **把这个路径接到 `/sys/fs/cgroup` 后面，再用字符串砍末段得到父路径**（`path.Dir` 就是砍掉最后一段）：
+
+```text
+/sys/fs/cgroup/kubepods/burstable/pod<uid>/<container-id>   ← 起点
+/sys/fs/cgroup/kubepods/burstable/pod<uid>                  ← 砍一段 = 父
+/sys/fs/cgroup/kubepods/burstable                           ← 再砍
+/sys/fs/cgroup/kubepods
+/sys/fs/cgroup/                                             ← 到根，停
+```
+
+所以「上层路径」是**算出来的字符串**，能不能真读到，取决于那个目录在当前视角下存不存在。
+
+### e. 「向上取」在两种视角下的表现
+
+| | 路径起点（来自 `/proc/self/cgroup`） | 往上走会怎样 |
+|---|---|---|
+| 宿主 / 无 namespace | `/kubepods/.../<ctr>` | 祖先目录都在，逐层读 `cpu.max`、取最小，真正找到那条绑定限额 |
+| 容器 namespace | `/`（已经是根） | 砍无可砍，只读自己这一层就到顶，**看不到也读不到上层** |
+
+直白说：**在容器视角里，你拿不到上层路径**，这是隔离决定的。
+
+VM 在容器内通常读完自己这层就停，那段「逐层向上取 min」要在能看见整棵树的宿主 / 多层容器场景才真正发挥作用。
+
+对应到代码，就是这个循环（砍路径 + 取最小 + 到根停）：
+
+```go
+for {
+    data, err := os.ReadFile(path.Join(sysfsPrefix, subPath, "cpu.max")) // 读当前层
+    if err == nil {
+        quota, _ := parseCPUMax(...)
+        if quota > 0 && (minQuota < 0 || quota < minQuota) {
+            minQuota = quota                 // 取最小
+        }
+    }
+    if subPath == "/" || subPath == "." {
+        break                                // 到根就停
+    }
+    subPath = path.Dir(subPath)              // 砍掉末段 = 往上一层
+}
+```
+
+### f. 小结
+
+- `/proc/self/cgroup` 告诉进程「我在 cgroup 树的哪条路径上」（self = 读取者自己的 pid）。
+- 限额沿这条路径继承、最严的生效，所以要往上看，不能只看叶子。
+- 「往上」是把这条路径接到 `/sys/fs/cgroup` 后用字符串逐段砍出父路径来读，**不是文件系统里向上翻目录**。
+- 容器视角被锁在自己这层，看不到上层。
+- VM 的逐层向上取 min 主要服务于宿主 / 多层容器视角，容器内退化成「只读自己这层」。
+
+---
+
+## 0x04 开发方案
 
 0x02 的两个单例与解耦边界落到新包 `pkg/collector/internal/throttle/`，HTTP 与 gRPC 各加薄适配层，既有 receiver 只动两处，pipeline 与 processor 零改动。
 
@@ -210,6 +354,8 @@ stateDiagram-v2
 - *[1] 取配额链路沿用 VM `lib/cgroup`*：先读控制器挂载根、命中即返回，读不到回退 `/proc/self/cgroup` 子路径，最后解析 `cpu.max`。
 - *[2] 先读挂载根更稳*：兜住「leaf 被 bind-mount 到控制器根」的布局，比 `containerd/cgroups` 的 `PidPath` 拼深路径稳（实测见 [PREPLAN 0x05a](./PREPLAN.md)）。
 
+容器视角下 `/sys/fs/cgroup` 的文件结构（v1/v2 差异）与多级 cgroup 的取数语义见 0x03。
+
 `cgroup.Reader` 协议骨架（只给签名与契约，实现移植 VM `lib/cgroup`）：
 
 ```go
@@ -230,7 +376,7 @@ type Reader interface {
 
 三项算法各自对齐一个业界实现，公式与出处如下。
 
-**（1）CPU 利用率**：速率量，两次采样求差，公式对齐 go-zero `core/stat` 的 `RefreshCpu`，取数仍走 0x03a 的 VM `cgroup.Reader`，不混用 go-zero。
+**（1）CPU 利用率**：速率量，两次采样求差，公式对齐 go-zero `core/stat` 的 `RefreshCpu`，取数仍走 0x04a 的 VM `cgroup.Reader`，不混用 go-zero。
 
 ```text
 effCores = min(cpuset 有效核数, quota/period)
@@ -465,7 +611,7 @@ rules:
 
 ---
 
-## 0x04 验收与验证
+## 0x05 验收与验证
 
 验证分三层：单测锁定取数与决策正确，压测在受限容器验证端到端丢弃，集成验证真实 collector 平稳运行。
 
@@ -519,7 +665,7 @@ rules:
 
 ---
 
-## 0x05 实施进展
+## 0x06 实施进展
 
 | 时间 | 结论性进展 |
 |---|---|
@@ -527,7 +673,7 @@ rules:
 
 ---
 
-## 0x06 参考 & 版本锚点
+## 0x07 参考 & 版本锚点
 
 ### a. 参考
 
