@@ -272,7 +272,7 @@ listLink({
 
 | 时间 | 结论性进展 |
 | --- | --- |
-| `2026-06-17 15:00` | 完成 PR [#11110](https://github.com/TencentBlueKing/bk-monitor/pull/11110) review 写回：<br />[a] 反向查询同一 `links[]` 对象语义按符合预期的已知边界记录。<br />[b] APIGW `list_links` 资源暴露按符合预期的已知边界记录。<br />[c] 增加里程碑 2：复用 PR [#10755](https://github.com/TencentBlueKing/bk-monitor/pull/10755) 的 Links 展示结构，打开 Span 详情时异步请求反向 Links。 |
+| `2026-06-17 17:00` | PR [#11110](https://github.com/TencentBlueKing/bk-monitor/pull/11110) 已完成 review 并 Approve，里程碑 1 状态更新为 done。<br />[a] 反向查询同一 `links[]` 对象语义按符合预期的已知边界记录。<br />[b] APIGW `list_links` 资源暴露按符合预期的已知边界记录。<br />[c] 增加里程碑 2：复用 PR [#10755](https://github.com/TencentBlueKing/bk-monitor/pull/10755) 的 Links 展示结构，打开 Span 详情时异步请求反向 Links。 |
 | `2026-06-08 22:20` | 确认 Links 查询复用 `query_span_list` 新链路，后台放宽共享 `QuerySerializer` 时间参数，并将 `links.trace_id` / `links.span_id` 纳入精确 ID 查询识别。 |
 | `2026-06-04 21:00` | 核心图明确双路 filters，开发方案补齐查询参数与 `build_links` 输入、映射协议。 |
 
@@ -294,5 +294,5 @@ listLink({
 
 | 状态 | 分支 | 里程碑 | PR |
 | --- | --- | --- | --- |
-| 🔄 | `feat/apm_span_links_reverse_relation/#1010158081135172749` | 里程碑 1：Links 反向关联查询 | [TencentBlueKing/bk-monitor #11110](https://github.com/TencentBlueKing/bk-monitor/pull/11110) |
+| ✅  | `feat/apm_span_links_reverse_relation/#1010158081135172749` | 里程碑 1：Links 反向关联查询 | [TencentBlueKing/bk-monitor #11110](https://github.com/TencentBlueKing/bk-monitor/pull/11110) |
 | 🔄 | `<branch_name>` | 里程碑 2：APM Span 详情支持展示反向 Links | 待创建 |
