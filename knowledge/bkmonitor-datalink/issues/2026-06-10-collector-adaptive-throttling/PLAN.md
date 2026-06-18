@@ -4,7 +4,7 @@ tags: [collector, throttling, load-shedding, overload-protection, cgroup, k8s]
 description: 以容器 cgroup 真实水位驱动按数据类型分级的有损降级，CPU 做主限流、内存做硬熔断，落在 HTTP / gRPC 入口的统一限流器
 issue: knowledge/bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/README.md
 created: 2026-06-10
-updated: 2026-06-17
+updated: 2026-06-18
 ---
 
 # bk-collector 自适应限流方案
@@ -49,7 +49,7 @@ bk-collector 被突发流量打满 CPU、内存而崩溃，崩溃后重启又被
 
 ### a. 总体思路
 
-过载保护改用容器 cgroup 的真实水位驱动，在入口按数据类型分级决定每个请求放行还是丢。
+过载保护改用容器 cgroup 的真实水位驱动，在入口按数据类型分级决定每个请求是否放行。
 
 限流粒度取数据类型而非单个 Endpoint，理由有两条：
 
@@ -58,24 +58,10 @@ bk-collector 被突发流量打满 CPU、内存而崩溃，崩溃后重启又被
 
 ### b. 信号职责：CPU 主限流、内存做熔断
 
-为什么 CPU 当主信号、内存只做熔断，根因在内核对两类资源的处置本就不对称。
-
-```text
-CPU 超配额  → CFS 节流（throttling）：被迫变慢，可恢复，压力一降立即回弹
-内存超上限  → OOM Killer：进程被杀，在途数据全丢，不可逆
-```
-
-应用层据此分工，不能互换。
-
-| 维度    | CPU         | 内存                    |
-|-------|-------------|-----------------------|
-| 失败形态  | 渐变、可恢复      | 悬崖、致命                 |
-| 信号特性  | 毫秒级响应，丢载即回落 | 滞后粘滞，丢载后不立即回落（GC 与缓存） |
-| 控制方式  | 比例降级（连续旋钮）  | 阈值熔断（开关）              |
-| 应用层目标 | 被节流时保住延迟与质量 | 绝不越线、不被 OOM           |
-
-- 业界主信号都用 CPU：go-zero、Kratos 的自适应丢弃以 CPU 为准，内存只作触发开关（如 Envoy overload manager 用堆内存压力触发停接新连接），无人当连续旋钮。
-- 内存这路不可省：下游（Kafka 等）变慢致队列堆积时 CPU 可能不高，内存才是真正瓶颈，熔断兜的正是「CPU 没事但被撑死」。
+为什么 CPU 当主信号、内存只做熔断？
+* CPU 超限触发 CFS 节流，处理变慢，而内存超限将导致进程被杀，不可逆转。
+* 基于 CPU 节流能保障 bk-collector 数据处理效率，不积压内存，基于内存熔断确保服务临近过载线时，通过主动拒绝入口请求不至于雪崩。
+* 业界主信号都用 CPU：go-zero、Kratos 的自适应丢弃以 CPU 为准，内存只作触发开关（如 Envoy overload manager 用堆内存压力触发停接新连接）。
 
 ### c. 核心对象模型
 
@@ -89,7 +75,7 @@ CPU 超配额  → CFS 节流（throttling）：被迫变慢，可恢复，压�
 flowchart LR
     subgraph BG["容量负载采样（250ms）"]
         CG["cgroup.Reader<br/>读伪文件 + 按配额归一化"] --> S["ResourceSampler<br/>CPU%/Mem% + EWMA 快慢两路"]
-        S -->|原子发布| WL["WaterLevel<br/>(cpuSlow, cpuFast, mem)"]
+        S -->|原子发布| WL["WaterLevel<br/>(cpu, cpuSlow, cpuFast, mem)"]
         S --> ST["更新每数据类型状态机<br/>Normal / Shedding / Open"]
     end
     subgraph REQ["限流决策"]
@@ -109,7 +95,7 @@ flowchart LR
 |-------------------|------------------------------------------------------|
 | `cgroup.Reader`   | 读取容量（CPU、内存限额），当前负载（CPU 使用率、内存使用率（不含 Cache））         |
 | `ResourceSampler` | 按周期采样，预处理负载信号并推进状态机                                  |
-| `WaterLevel`      | 不可变水位快照，含 CPU 使用率（快慢信号）与内存使用率                        |
+| `WaterLevel`      | 不可变水位快照，含原始 CPU / 内存水位，以及 CPU 快慢信号                   |
 | `classify`        | 预先注册的「路由 → 数据类型」映射，把 HTTP 路径 / gRPC 全方法名归为四类数据，未命中放行 |
 | `ThrottleManager` | 持有限流策略、状态机，负责决策当前请求是否执行流控                            |
 | `Rule`            | 单数据类型的丢弃强度（`drop_min` / `drop_max`、`enabled`），阈值全局共用 |
@@ -363,14 +349,14 @@ s_t = (1 - β) · x_t + β · s_{t-1}
 
 ### c. ResourceSampler：采样回路
 
-- **职责**：每 `sample_interval` 调 `cgroup.Reader` 取一次原始水位，算 CPU 快慢两路 EWMA 与内存占比，推进每数据类型状态机，原子发布 `WaterLevel`。
+- **职责**：每 `sample_interval` 调 `cgroup.Reader` 取一次原始水位，算 CPU 快慢两路 EWMA，推进每数据类型状态机，原子发布 `WaterLevel`。
 - **发布方式**：`WaterLevel` 用 `atomic.Pointer[WaterLevel]` 整体替换，请求路径无锁读，决策与采样彻底解耦。
 - **生命周期**：由 `throttle.Init` 在启动期拉起，进程级单例，四类状态机启动期建好、运行期只读不增减。
 
 协议骨架：
 
 ```go
-type WaterLevel struct{ CPUSlow, CPUFast, Mem float64 }
+type WaterLevel struct{ CPU, CPUSlow, CPUFast, Mem float64 }
 
 func (s *ResourceSampler) Level() *WaterLevel   // 原子读，请求路径用
 func (s *ResourceSampler) tick()                // 周期回调：采样 + EWMA + 状态机 + 发布
@@ -556,11 +542,16 @@ rules:
 
 沿用 `bk_collector_*` 命名加 `promauto` 加 `metricMonitor` 模式（参照 [<源码> receiver/metrics.go](https://github.com/TencentBlueKing/bkmonitor-datalink/blob/master/pkg/collector/receiver/metrics.go)）。
 
-| 指标                                    | 类型      | 标签                                | 用途                                            |
-|---------------------------------------|---------|-----------------------------------|-----------------------------------------------|
-| `bk_collector_throttle_dropped_total` | counter | `protocol`、`record_type`、`action` | 丢弃量，`action` 区分 `shed`、`open`                 |
-| `bk_collector_throttle_water_level`   | gauge   | `resource`                        | 当前水位，`resource` 取 `cpu_slow`、`cpu_fast`、`mem` |
-| `bk_collector_throttle_state`         | gauge   | `record_type`                     | 状态机当前态（0 Normal、1 Shedding、2 Open）            |
+自适应限流只暴露水位、状态机状态和请求量 `3` 类指标。
+
+| 指标                                      | 类型    | 标签                                  | 用途                                                                                      |
+|-----------------------------------------|-------|-------------------------------------|-----------------------------------------------------------------------------------------|
+| `bk_collector_throttle_water_level`     | gauge | `kind`                              | 水位与阈值线，`kind` 取 `cpu`、`cpu_slow`、`cpu_fast`、`mem`、`cpu_exit`、`cpu_enter`、`cpu_hard`、`mem_hard` |
+| `bk_collector_throttle_state`           | gauge | `record_type`                       | 状态机当前态（`0` Normal、`1` Shedding、`2` Open）                                                   |
+| `bk_collector_throttle_requests_total`  | counter | `protocol`、`record_type`、`decision` | 请求量，`decision` 取 `allowed`、`denied`                                                        |
+
+- `cpu` 与 `mem` 表示当前原始水位，`cpu_slow` 与 `cpu_fast` 表示平滑后的 CPU 慢信号和快信号。
+- `denied` 统一表示被自适应限流拒绝的请求，拒绝原因通过当时的 `bk_collector_throttle_state` 反查。
 
 ---
 
@@ -612,7 +603,7 @@ rules:
 | 尾延迟受保护  | 大包阶段成功请求 p99 显著低于关闭限流                                                                      |
 | 早丢省 CPU | `429`、`503` 在解压、反序列化之前返回                                                                   |
 | 豁免类不丢   | `metrics` 配 `enabled: false` 时全程 `0` 丢弃，CPU、内存双高也不误伤                                       |
-| 可观测     | `bk_collector_throttle_dropped_total`、`throttle_water_level`、`throttle_state` 随负载与数据类型如实变化 |
+| 可观测     | `bk_collector_throttle_requests_total`、`bk_collector_throttle_water_level`、`bk_collector_throttle_state` 随负载与数据类型如实变化 |
 
 原型快路径（可选）：把 `throttle` 包嵌入最小 `loadserver` 加合成 CPU 处理，先在受限容器快速验证决策行为，再做真实 collector 集成（原型评估见 [PREPLAN 0x11e](./PREPLAN.md)）。
 
@@ -622,6 +613,7 @@ rules:
 
 | 时间           | 结论性进展                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 |--------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `2026-06-18 15:00` | 收敛观测指标协议：<br />[a] 水位统一用 `bk_collector_throttle_water_level{kind}` 承载原始 CPU / 内存水位、CPU 快慢信号和阈值线 <br />[b] 请求量统一用 `bk_collector_throttle_requests_total{decision}` 承载 `allowed` / `denied`，不再单独按 `shed` / `open` 拆丢弃量。 |
 | `2026-06-17` | 方案 B 定稿并收敛第一期范围 <br />[a] 确立「CPU 主限流、内存做熔断」，落到 `ResourceSampler` 与 `ThrottleManager` 两单例，cgroup 直读取数单一基准 VM `lib/cgroup`、EWMA 对齐 RFC 6298，go-zero `core/stat` 仅作 CPU 速率公式对齐 <br />[b] 移除 GOMEMLIMIT 软背压与配置热重载，内存只留硬熔断、配置仅启动期加载 <br />[c] 限流粒度由 Endpoint 改为数据类型（traces/metrics/logs/profiles）、每类一台状态机，端点用预先注册映射表归类（准确路径如 `/v1/traces`、`/prometheus/write`、`/pyroscope/ingest`） <br />[d] 配置收敛为 signal / thresholds / rules 三层：阈值全局共用（`cpu_enter`/`cpu_exit`/`cpu_hard`/`mem_hard`/`breach_n`），每类只调 `drop_min`/`drop_max`，丢弃概率在 `cpu_enter`～`cpu_hard` 线性插值，`enabled: false` 整类豁免，指标标签按 `record_type` <br />[e] 验收含单测门禁、Go 压测工具（collector example 目录、单独编译二进制）与 OrbStack 集成口径 |
 
 ---

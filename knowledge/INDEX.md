@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-06-17
+> 最后更新：2026-06-18
 
 ## 0x01 项目知识
 
@@ -18,14 +18,14 @@
 
 ## 0x02 最近更新
 
+- 2026-06-18：更新
+  [bk-collector 自适应限流](./bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/README.md)
+  至 bkmonitor-datalink
+  （收敛自适应限流观测指标：水位、状态机状态与 allowed / denied 请求量）
 - 2026-06-17：更新
   [APM Span 详情支持 Links 反向关联展示](./bkmonitor/issues/2026-06-04-apm-span-links-reverse-relation/README.md)
   至 bkmonitor
   （写回 PR #11110，记录符合预期的已知边界，并补充里程碑 2 前端展示方案）
-- 2026-06-17：更新
-  [bk-collector 自适应限流](./bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/README.md)
-  至 bkmonitor-datalink
-  （收敛方案 B：按数据类型分级丢弃，CPU 主限流、内存硬熔断）
 - 2026-06-16：新增
   [为什么我又写了一个 Python 限流库：throttled-py](./throttled-py/articles/2026-06-16-throttled-py-intro/README.md)
   至 throttled-py
@@ -35,7 +35,3 @@
   [日志 UnifyQuery 环境变量白名单与 query_string 增强](./bkmonitor/issues/2026-03-05-log-uq-env-whitelist-and-query-string/README.md)
   至 bkmonitor
   （补充日志聚类表 `_clustered` 后缀统一走 UnifyQuery 的方案与验证结论）
-- 2026-06-08：更新
-  [日志数据源切换 unify-query](./bkmonitor/issues/2026-02-10-log-ds-to-unify-query/README.md)
-  至 bkmonitor
-  （补充 Pod 同步环境备注，并整理对账方案文档格式）
