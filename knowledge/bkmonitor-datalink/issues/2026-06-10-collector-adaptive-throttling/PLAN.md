@@ -96,7 +96,7 @@ flowchart LR
 | `cgroup.Reader`   | 读取容量（CPU、内存限额），当前负载（CPU 使用率、内存使用率（不含 Cache））         |
 | `ResourceSampler` | 按周期采样，预处理负载信号并推进状态机                                  |
 | `WaterLevel`      | 不可变水位快照，含原始 CPU / 内存水位，以及 CPU 快慢信号                   |
-| `classify`        | 预先注册的「路由 → 数据类型」映射，把 HTTP 路径 / gRPC 全方法名归为四类数据，未命中放行 |
+| `classify`        | 维护「路由 → 数据类型」注册表，receiver 用本地路由常量声明参与限流的 HTTP 路径 / gRPC 全方法名，未命中放行 |
 | `ThrottleManager` | 持有限流策略、状态机，负责决策当前请求是否执行流控                            |
 | `Rule`            | 单数据类型的丢弃强度（`drop_min` / `drop_max`、`enabled`），阈值全局共用 |
 | `Decision`        | 限流决策：通过、按比例流控降级、熔断                                   |
@@ -277,14 +277,14 @@ for {
 |----------------------------------------------|-------------------------------------------------------------------------------------------|
 | **[Add]** `throttle/cgroup.go`               | `cgroup.Reader`，参考 VM `lib/cgroup` 的读取逻辑                                                  |
 | **[Add]** `throttle/sampler.go`              | 新增 `ResourceSampler`、`WaterLevel`                                                         |
-| **[Add]** `throttle/classify.go`             | HTTP 路径 / gRPC 方法名 → 数据类型预先注册映射                                                           |
+| **[Add]** `throttle/classify.go`             | 提供 HTTP 路径 / gRPC 方法名 → 数据类型注册表，receiver 用本地路由常量登记参与限流的端点                                |
 | **[Add]** `throttle/manager.go`              | 新增 `ThrottleManager`、`Rule`、`Decision`                                                    |
 | **[Add]** `throttle/config.go`               | `Config` 协议与默认值                                                                           |
 | **[Add]** `throttle/metrics.go`              | 观测指标                                                                                      |
 | **[Add]** `httpmiddleware/throttle.go`       | `init` 注册 `"throttle"`，工厂绑定 `Manager()`，按 `r.URL.Path` 归类后判定                              |
 | **[Add]** `grpcmiddleware/throttle.go`       | `init` 注册 `"throttle"`，产出 `grpc.InTapHandle`，按 `info.FullMethodName` 归类后判定                |
 | **[Change]** `receiver/config.go` · `Config` | 加 `Throttle throttle.Config` 字段（tag `config:"throttle"`），随 `receiver` 块由 `UnpackChild` 解析 |
-| **[Change]** `receiver/receiver.go` · `New`  | 解包 `Config` 后调 `throttle.Init(c.Throttle)`，建单例并拉起采样回路                                     |
+| **[Change]** `receiver/receiver.go` · `New`  | 解包 `Config` 后按总开关管理生命周期：开启时建单例并拉起采样回路，关闭时清理旧单例与采样回路                                  |
 
 ### a. 信号基础：指标与获取
 
@@ -388,17 +388,19 @@ p_drop = drop_min + (drop_max - drop_min) * t
 - `cpu_slow ≤ cpu_enter` → `p_drop = drop_min`（缺省 `0`）
 - `cpu_slow ≥ cpu_hard` → `p_drop = drop_max`（缺省 `1`）
 
-**端点归类**：`classify` 用预先注册的「路由 → 数据类型」映射表把 HTTP 路径与 gRPC 全方法名归为四类，对齐既有 `define.RecordType`。
+**端点归类**：`classify` 只维护「路由 → 数据类型」注册表，具体端点由对应 receiver 在 `init` 中用本地路由常量登记。
+
+这样新增 receiver 端点时，开发者能在同一处看到路由注册与限流归类。
 
 | 数据类型       | HTTP 路径                           | gRPC 全方法名                                                        |
 |------------|-----------------------------------|------------------------------------------------------------------|
 | `traces`   | `/v1/traces`                      | `opentelemetry.proto.collector.trace.v1.TraceService/Export`     |
 | `metrics`  | `/v1/metrics`、`/prometheus/write` | `opentelemetry.proto.collector.metrics.v1.MetricsService/Export` |
 | `logs`     | `/v1/logs`                        | `opentelemetry.proto.collector.logs.v1.LogsService/Export`       |
-| `profiles` | `/pyroscope/ingest`               | 无（connect-rpc 经 HTTP 路由上报）                                       |
+| `profiles` | `/pyroscope/ingest`、`/push.v1.PusherService/Push` | 无（connect-rpc 经 HTTP 路由上报）                                       |
 
 * *[1] 第一期只注册上表端点，其余（admin、proxy、zipkin、skywalking 等）未命中放行，暂不限流.*
-* *[2] 路径取自各 receiver 的入站常量（`routeV1Traces`、`routeRemoteWrite` 等），与 receiver 自身落 `RecordType` 解耦。*
+* *[2] HTTP 路径取自各 receiver 的入站常量（`routeV1Traces`、`routeRemoteWrite` 等），gRPC 全方法名靠近对应 receiver 服务注册处声明。*
 
 **决策器装配**：中间件注册表只认 optmap 串，够不到结构化 `receiver.throttle`，靠启动期单例搭桥。
 
@@ -410,15 +412,17 @@ sequenceDiagram
     participant Mid as middleware.Get
     participant Req as 请求路径
     Init->>Init: Register("throttle", 工厂)，仅登记不构造
+    Init->>Init: 各 receiver 注册路由 → 数据类型
     New->>New: UnpackChild("receiver") 得 Config
-    New->>New: throttle.Init(c.Throttle)，建 Manager + 拉起 Sampler
+    New->>New: enabled=true 时 throttle.Init，建 Manager + 拉起 Sampler
+    New->>New: enabled=false 时 throttle.Stop，清理旧 Manager / Sampler
     Start->>Mid: startRecvHttpServer / startGrpcServer 取中间件
     Mid->>Mid: 工厂绑定 throttle.Manager() 单例
     Req->>Req: 适配层 classify -> Manager().Decide
 ```
 
 - `New` 早于 `Start`，单例在工厂执行前已就绪。
-- `enabled=false` 时 `Init` 空跑，工厂返回放行中间件。
+- `enabled=false` 时仍保留中间件，`GlobalManager` 返回 disabled manager 后恒放行，不拉起负载采样回路。
 
 ### e. HTTP 挂载
 
@@ -567,7 +571,7 @@ rules:
 |--------------------|-----------------------|------------------------------------------------------------------------------|
 | `cgroup_test.go`   | v1/v2 fixture 解析与回退分支 | 有效核数、CPU 累计耗时、工作集计算正确，含 v1 `-1`、v2 `max`、内存无限哨兵                              |
 | `sampler_test.go`  | 两次采样 CPU%、EWMA 快慢两路   | 过载越 `1.0`、宿主核数分母被否决、β 越大越平滑                                                  |
-| `classify_test.go` | 端点 → 数据类型归类           | 四类注册端点命中正确（含 metrics 的 `/v1/metrics`、`/prometheus/write`）、未注册端点放行            |
+| `classify_test.go` | 注册表与端点 → 数据类型归类       | 注册后四类端点命中正确、重复注册同类幂等、冲突注册失败、未注册端点放行                                         |
 | `manager_test.go`  | 状态机转移与丢弃概率插值          | 滞回带不横跳、连续门控过滤毛刺、`p_drop` 在 `drop_min`～`drop_max` 线性插值与边界、`enabled=false` 恒放行 |
 
 ### b. 压测工具
@@ -613,7 +617,7 @@ rules:
 
 | 时间           | 结论性进展                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 |--------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `2026-06-18 16:00` | 完成代码落地与验收闭环：<br />[a] 指标实现对齐水位、状态机状态、请求量 `3` 类协议，保留 `allowed` / `denied` 请求量口径 <br />[b] `throttle.enabled=false` 时过滤 HTTP / gRPC / admin 的 `throttle` 中间件，并跳过限流单例、采样回路与指标注册 <br />[c] 使用 Go `1.23.0` 执行 `go test ./internal/throttle ./receiver`、`go test ./internal/...` 与 `go test ./...` 通过 <br />[d] `2` 位复核 Agent 按 throttle 白名单复查后同意合入，样例配置、`go.mod`、`go.sum` 等非本任务改动不纳入本次验收。 |
+| `2026-06-18 16:00` | 完成代码落地与验收闭环：<br />[a] 指标实现对齐水位、状态机状态、请求量 `3` 类协议，保留 `allowed` / `denied` 请求量口径 <br />[b] `throttle.enabled=false` 时保留 HTTP / gRPC / admin 的 `throttle` 中间件，关闭状态下恒放行，并跳过限流单例与采样回路初始化 <br />[c] Endpoint 归类改为 receiver 侧注册，OTLP、RemoteWrite、Pyroscope 复用本地路由常量 <br />[d] 使用 Go `1.23.0` 执行限流定向测试、`go test ./internal/... ./receiver/...` 与 `go test ./...` 通过 <br />[e] `2` 位复核 Agent 按 throttle 白名单复查后同意合入，样例配置、`go.mod`、`go.sum` 等非本任务改动不纳入本次验收。 |
 | `2026-06-18 15:00` | 收敛观测指标协议：<br />[a] 水位统一用 `bk_collector_throttle_water_level{kind}` 承载原始 CPU / 内存水位、CPU 快慢信号和阈值线 <br />[b] 请求量统一用 `bk_collector_throttle_requests_total{decision}` 承载 `allowed` / `denied`，不再单独按 `shed` / `open` 拆丢弃量。 |
 | `2026-06-17` | 方案 B 定稿并收敛第一期范围 <br />[a] 确立「CPU 主限流、内存做熔断」，落到 `ResourceSampler` 与 `ThrottleManager` 两单例，cgroup 直读取数单一基准 VM `lib/cgroup`、EWMA 对齐 RFC 6298，go-zero `core/stat` 仅作 CPU 速率公式对齐 <br />[b] 移除 GOMEMLIMIT 软背压与配置热重载，内存只留硬熔断、配置仅启动期加载 <br />[c] 限流粒度由 Endpoint 改为数据类型（traces/metrics/logs/profiles）、每类一台状态机，端点用预先注册映射表归类（准确路径如 `/v1/traces`、`/prometheus/write`、`/pyroscope/ingest`） <br />[d] 配置收敛为 signal / thresholds / rules 三层：阈值全局共用（`cpu_enter`/`cpu_exit`/`cpu_hard`/`mem_hard`/`breach_n`），每类只调 `drop_min`/`drop_max`，丢弃概率在 `cpu_enter`～`cpu_hard` 线性插值，`enabled: false` 整类豁免，指标标签按 `record_type` <br />[e] 验收含单测门禁、Go 压测工具（collector example 目录、单独编译二进制）与 OrbStack 集成口径 |
 
