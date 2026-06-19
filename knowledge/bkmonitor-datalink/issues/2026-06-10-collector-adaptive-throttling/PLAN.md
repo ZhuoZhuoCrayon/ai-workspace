@@ -669,6 +669,8 @@ rules:
 | Receiver 字节速率峰值 | A、B、C、D | `B/s` | `max_over_time((sum by (pod) (rate(bkmonitor:bk_collector_receiver_received_bytes_total{bcs_cluster_id="<bcs_cluster_id>"}[1m])))[<window>:30s])` |
 | Receiver 处理平均耗时峰值 | A、B、C、D | `s` | `max_over_time((sum by (pod) (rate(bkmonitor:bk_collector_receiver_handled_duration_seconds_sum{bcs_cluster_id="<bcs_cluster_id>"}[1m])) / sum by (pod) (rate(bkmonitor:bk_collector_receiver_handled_duration_seconds_count{bcs_cluster_id="<bcs_cluster_id>"}[1m])))[<window>:30s])` |
 | Receiver 处理耗时 P99 峰值 | A、B、C、D | `s` | `max_over_time((histogram_quantile(0.99, sum by (le, pod) (rate(bkmonitor:bk_collector_receiver_handled_duration_seconds_bucket{bcs_cluster_id="<bcs_cluster_id>"}[1m]))))[<window>:30s])` |
+| CPU 使用率峰值（Limits） | A、B、C、D | 比例 | `max_over_time((sum by (pod) (rate(container_cpu_usage_seconds_total{bcs_cluster_id="<bcs_cluster_id>"}[1m])) / sum by (pod) (bkmonitor:kube_pod_container_resource_limits_cpu_cores{bcs_cluster_id="<bcs_cluster_id>"}))[<window>:30s])` |
+| 内存使用率峰值（Limits） | A、B、C、D | 比例 | `max_over_time((sum by (pod) (container_memory_working_set_bytes{bcs_cluster_id="<bcs_cluster_id>"}) / sum by (pod) (bkmonitor:kube_pod_container_resource_limits_memory_bytes{bcs_cluster_id="<bcs_cluster_id>"}))[<window>:30s])` |
 
 * *[1] off 取 `receiver_handled_total`（throttle 关时不暴露 throttle 指标），on 取 `throttle_requests_total`（丢弃请求不进 receiver）。*
 
@@ -685,14 +687,14 @@ rules:
 
 ### e. 记录模板
 
-collector 端 4 项按 `0x06 d` 主表 PromQL 取，`压测成功率` 与 `压测总请求` 取自压测客户端。
+collector 端 6 项按 `0x06 d` 主表 PromQL 取，`压测成功率` 与 `压测总请求` 取自压测客户端。
 
-| 场景 | QPM 峰值 | 字节速率峰值 | 处理平均耗时峰值 | P99 峰值 | 压测成功率 | 压测总请求 |
-| --- | --- | --- | --- | --- | --- | --- |
-| A 未过载（关闭 throttle） |  |  |  |  |  |  |
-| B 过载未开启 throttle |  |  |  |  |  |  |
-| C 未过载（开启 throttle） |  |  |  |  |  |  |
-| D 默认限流参数（开启 throttle） |  |  |  |  |  |  |
+| 场景 | QPM 峰值 | 字节速率峰值 | 处理平均耗时峰值 | P99 峰值 | CPU 峰值（Limits） | 内存峰值（Limits） | 压测成功率 | 压测总请求 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| A 未过载（关闭 throttle） |  |  |  |  |  |  |  |  |
+| B 过载未开启 throttle |  |  |  |  |  |  |  |  |
+| C 未过载（开启 throttle） |  |  |  |  |  |  |  |  |
+| D 默认限流参数（开启 throttle） |  |  |  |  |  |  |  |  |
 
 辅助表：`—` 表示该场景下指标不适用，预期值与实测不一致需排查。
 
