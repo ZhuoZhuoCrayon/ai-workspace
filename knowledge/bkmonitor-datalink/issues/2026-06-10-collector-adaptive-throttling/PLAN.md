@@ -4,7 +4,7 @@ tags: [collector, throttling, load-shedding, overload-protection, cgroup, k8s]
 description: 以容器 cgroup 真实水位驱动按数据类型分级的有损降级，CPU 做主限流、内存做硬熔断，落在 HTTP / gRPC 入口的统一限流器
 issue: knowledge/bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/README.md
 created: 2026-06-10
-updated: 2026-06-18
+updated: 2026-06-19
 ---
 
 # bk-collector 自适应限流方案
@@ -613,7 +613,94 @@ rules:
 
 ---
 
-## 0x06 实施进展
+## 0x06 基准压测
+
+### a. 测试矩阵
+
+`2c2g` 单容器跑 4 个场景，覆盖「throttle 开关 × 是否过载」四种组合，看限流上线后能扛多少、降级怎么走、关了会不会雪崩。
+
+| 场景 | throttle | 工况 | 观察重点 |
+| --- | --- | --- | --- |
+| A | 关闭 | 未过载极值 | 记关闭限流时的最大 QPM 与 P99 耗时。 |
+| B | 关闭 | 过载饱和 | 看关闭限流时是否失稳，给 D 当对照。 |
+| C | 开启（默认参数） | 未过载极值 | 记开启限流后能保留多少 QPM，与 A 对比看开销。 |
+| D | 开启（默认参数） | 默认参数稳态 | 看 CPU 触到 `cpu_enter` 后的丢弃比例与 P99 耗时。 |
+
+### b. 容器与配置
+
+| 配置 | `receiver.throttle.enabled` | 阈值与规则 |
+| --- | --- | --- |
+| 关闭（A、B） | `false` | 不生效，中间件恒放行。 |
+| 开启（C、D） | `true` | `cpu_enter=0.80` / `cpu_exit=0.70` / `cpu_hard=0.90` / `mem_hard=0.92` / `breach_n=2` <br />`rules.default={drop_min: 0.0, drop_max: 1.0}` <br />`rules.metrics.enabled=false` |
+
+压测前把 `pipeline` 段的 `rate_limiter/token_bucket` 放宽到 `qps=100000 / burst=200000`，避免令牌桶先于 throttle 返 `429`。
+
+### c. 压测参数
+
+下表是 OrbStack `2c2g` 容器预跑得到的并发与时长建议，落到具体压测工具时按其参数命名替换。
+
+| 场景 | throttle | 并发 | 时长 | 备注 |
+| --- | --- | --- | --- | --- |
+| A 未过载（关闭 throttle） | off | `20` | `60s` | 关闭限流时容器吞吐刚好压满 `2` 核 CPU 的临界值。 |
+| B 过载未开启 throttle | off | `200` | `60s` | `10×` A 的并发，制造持续过载用于对照 D。 |
+| C 未过载（开启 throttle） | on | `2` | `60s` | 开启默认限流后，不触发分级丢弃的最大并发，超过即在大包流量上触发。 |
+| D 默认限流参数（开启 throttle） | on | `50` | `60s` | 让容器 CPU 稳态压在 `cpu_enter ≈ 0.80` 线、持续触发分级丢弃。 |
+
+* *[1] `时长` ≥ `60s` 给 EWMA `β=0.95` 留足收敛时间（时间常数 ≈ `5s`）。*
+* *[2] 客户端读超时建议 ≥ `10s`，否则 B、D 的高延迟请求会被记为客户端超时而非服务端拒绝。*
+
+### d. 数据采集 PromQL
+
+下表 PromQL 已在 `bk_biz_id=5000140`、`bcs_cluster_id=BCS-K8S-25973` 通过 bkte MCP 拉取验证。
+
+**主表（用户指定 6 项）**：
+
+| 指标 | 适用场景 | 单位 | PromQL |
+| --- | --- | --- | --- |
+| QPM *[1]* | A、B | `req/min` | `sum by (pod) (increase(bkmonitor:bk_collector_receiver_handled_total{bcs_cluster_id="<bcs_cluster_id>"}[1m]))` |
+| QPM *[1]* | C、D | `req/min` | `sum by (pod) (increase(bkmonitor:bk_collector_throttle_requests_total{bcs_cluster_id="<bcs_cluster_id>"}[1m]))` |
+| Receiver HTTP 接收字节速率 | A、B、C、D | `B/s` | `sum by (pod) (rate(bkmonitor:bk_collector_receiver_received_bytes_total{bcs_cluster_id="<bcs_cluster_id>"}[1m]))` |
+| Receiver 处理平均耗时 | A、B、C、D | `s` | `sum by (pod) (rate(bkmonitor:bk_collector_receiver_handled_duration_seconds_sum{bcs_cluster_id="<bcs_cluster_id>"}[1m])) / sum by (pod) (rate(bkmonitor:bk_collector_receiver_handled_duration_seconds_count{bcs_cluster_id="<bcs_cluster_id>"}[1m]))` |
+| Receiver 处理耗时 P99 | A、B、C、D | `s` | `histogram_quantile(0.99, sum by (le, pod) (rate(bkmonitor:bk_collector_receiver_handled_duration_seconds_bucket{bcs_cluster_id="<bcs_cluster_id>"}[1m])))` |
+
+* *[1] off 取 `receiver_handled_total`（throttle 关时不暴露 throttle 指标），on 取 `throttle_requests_total`（丢弃请求不进 receiver）。*
+
+**辅助表（结论复核用）**：用下表 `4` 条交叉验证，确认 limit 真生效、容器真碰到 CPU 门槛、`429` 来自 throttle 而非令牌桶。
+
+| 指标 | 适用场景 | 单位 | PromQL |
+| --- | --- | --- | --- |
+| Throttle 丢弃占比 | C、D | 比例 | `sum by (pod) (rate(bkmonitor:bk_collector_throttle_requests_total{bcs_cluster_id="<bcs_cluster_id>",decision="denied"}[1m])) / sum by (pod) (rate(bkmonitor:bk_collector_throttle_requests_total{bcs_cluster_id="<bcs_cluster_id>"}[1m]))` |
+| Throttle 状态机当前态 | C、D | `0/1/2` *[1]* | `max by (pod, record_type) (bkmonitor:bk_collector_throttle_state{bcs_cluster_id="<bcs_cluster_id>"})` |
+| 容器 CPU 慢信号 | C、D | 比例 | `max by (pod) (bkmonitor:bk_collector_throttle_water_level{bcs_cluster_id="<bcs_cluster_id>",kind="cpu_slow"})` |
+| 容器内存水位 | C、D | 比例 | `max by (pod) (bkmonitor:bk_collector_throttle_water_level{bcs_cluster_id="<bcs_cluster_id>",kind="mem"})` |
+
+* *[1] `0` Normal、`1` Shedding、`2` Open，状态语义见 `0x02 d`。*
+
+### e. 记录模板
+
+主表填 `6` 项核心结果，辅助表给 C、D 的限流证据，每场景填一行。
+
+接口指标取压测窗口稳态均值，`压测成功率` 与 `压测总请求` 取自压测客户端的统计输出。
+
+| 场景 | 接口 QPM | 接收字节速率 | 处理平均耗时 | 处理耗时 P99 | 压测成功率 | 压测总请求 |
+| --- | --- | --- | --- | --- | --- | --- |
+| A 未过载（关闭 throttle） |  |  |  |  |  |  |
+| B 过载未开启 throttle |  |  |  |  |  |  |
+| C 未过载（开启 throttle） |  |  |  |  |  |  |
+| D 默认限流参数（开启 throttle） |  |  |  |  |  |  |
+
+辅助表：`—` 表示该场景下指标不适用，预期值是验收前置判断，与实测不一致需排查。
+
+| 场景 | 客户端 `429` | 客户端 `5xx` | denied 占比 | 稳态 `cpu_slow` | 稳态 state | 稳态 `mem` |
+| --- | --- | --- | --- | --- | --- | --- |
+| A 未过载（关闭 throttle） | 预期 `0` | 预期 `0` | — | — | — | — |
+| B 过载未开启 throttle | 预期 `0` |  | — | — | — | — |
+| C 未过载（开启 throttle） |  | 预期 `0` |  |  | 预期 `0`（Normal） |  |
+| D 默认限流参数（开启 throttle） |  | 预期 `0` |  | 预期 ≈ `0.80` | 预期 `1`（Shedding）为主 |  |
+
+---
+
+## 0x07 实施进展
 
 | 时间           | 结论性进展                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 |--------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -623,7 +710,7 @@ rules:
 
 ---
 
-## 0x07 参考 & 版本锚点
+## 0x08 参考 & 版本锚点
 
 ### a. 参考
 
