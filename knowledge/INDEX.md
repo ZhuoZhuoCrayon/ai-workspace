@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-06-20
+> 最后更新：2026-06-21
 
 ## 0x01 项目知识
 
@@ -18,7 +18,7 @@
 
 ## 0x02 最近更新
 
-- 2026-06-20：更新 [bk-collector 自适应限流](./bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/README.md) 至 bkmonitor-datalink（修正压测资源峰值 PromQL：限定 `container="collector"`，并补充 OOMKilled 与运行时长复核指标）
+- 2026-06-21：更新 [bk-collector 自适应限流](./bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/README.md) 至 bkmonitor-datalink（收敛基准压测记录结构：调用约定并入 PromQL，记录表改用 A/B/C/D 横向对比与脚注结论）
 - 2026-06-17：更新 [APM Span 详情支持 Links 反向关联展示](./bkmonitor/issues/2026-06-04-apm-span-links-reverse-relation/README.md) 至 bkmonitor（写回 PR #11110，记录符合预期的已知边界，并补充里程碑 2 前端展示方案）
 - 2026-06-16：新增 [为什么我又写了一个 Python 限流库：throttled-py](./throttled-py/articles/2026-06-16-throttled-py-intro/README.md) 至 throttled-py（介绍限流的本质与现有 Python 库的不足，并给出 throttled-py 的核心功能与快速上手）
 - 2026-06-12：新增 [crypto-python-sdk](./crypto-python-sdk/INDEX.md) 项目知识库（接入 BlueKing crypto-python-sdk 加密 SDK，建立项目知识库入口）

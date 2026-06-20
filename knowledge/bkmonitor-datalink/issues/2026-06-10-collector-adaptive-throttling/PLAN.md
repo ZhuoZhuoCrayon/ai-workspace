@@ -4,7 +4,7 @@ tags: [collector, throttling, load-shedding, overload-protection, cgroup, k8s]
 description: 以容器 cgroup 真实水位驱动按数据类型分级的有损降级，CPU 做主限流、内存做硬熔断，落在 HTTP / gRPC 入口的统一限流器
 issue: knowledge/bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/README.md
 created: 2026-06-10
-updated: 2026-06-20
+updated: 2026-06-21
 ---
 
 # bk-collector 自适应限流方案
@@ -615,69 +615,60 @@ rules:
 
 ## 0x06 基准压测
 
-### a. 测试矩阵
+### a. 配置
 
-`2c2g` 单容器跑 4 个场景，覆盖「throttle 开关 × 是否过载」四种组合，看限流上线后能扛多少、降级怎么走、关了会不会雪崩。
+单容器跑 4 个场景，覆盖「throttle 开关 × 是否过载」四种组合，看限流上线后能扛多少、降级怎么走、关了会不会雪崩。
 
-| 场景 | throttle | 工况 | 观察重点 |
-| --- | --- | --- | --- |
-| A | 关闭 | 未过载极值 | 记关闭限流时的最大 QPM 与 P99 耗时。 |
-| B | 关闭 | 过载饱和 | 看关闭限流时是否失稳，给 D 当对照。 |
-| C | 开启（默认参数） | 未过载极值 | 记开启限流后能保留多少 QPM，与 A 对比看开销。 |
-| D | 开启（默认参数） | 默认参数稳态 | 看 CPU 触到 `cpu_enter` 后的丢弃比例与 P99 耗时。 |
+| 场景 | throttle | 工况 | 压测参数 | 观察重点 |
+| --- | --- | --- | --- | --- |
+| A | 关闭 | 未过载极值 | `-c 26 -d 240s -warmup-spans 128 -burst-spans 512 -bigpayload-spans 128` | 记关闭限流时的最大 QPM 与 P99 耗时。 |
+| B | 关闭 | 过载饱和 | 待补充 | 看关闭限流时是否失稳，给 D 当对照。 |
+| C | 开启（默认参数） | 未过载极值 | 待补充 | 记开启限流后能保留多少 QPM，与 A 对比看开销。 |
+| D | 开启（默认参数） | 默认参数稳态 | 待补充 | 看 CPU 触到 `cpu_enter` 后的丢弃比例与 P99 耗时。 |
 
-### b. 容器与配置
+C、D 使用默认限流配置：
 
-| 配置 | `receiver.throttle.enabled` | 阈值与规则 |
-| --- | --- | --- |
-| 关闭（A、B） | `false` | 不生效，中间件恒放行。 |
-| 开启（C、D） | `true` | `cpu_enter=0.80` / `cpu_exit=0.70` / `cpu_hard=0.90` / `mem_hard=0.92` / `breach_n=2` <br />`rules.default={drop_min: 0.0, drop_max: 1.0}` <br />`rules.metrics.enabled=false` |
+```yaml
+receiver:
+  throttle:
+    enabled: true
+    thresholds:
+      cpu_enter: 0.80
+      cpu_exit: 0.70
+      cpu_hard: 0.90
+      mem_hard: 0.92
+      breach_n: 2
+    rules:
+      default:
+        drop_min: 0.0
+        drop_max: 1.0
+      metrics:
+        enabled: false
+```
 
 压测前把 `pipeline` 段的 `rate_limiter/token_bucket` 放宽到 `qps=100000 / burst=200000`，避免令牌桶先于 throttle 返 `429`。
 
-### c. 压测参数
-
-下表是 OrbStack `2c2g` 容器预跑得到的并发与时长建议，落到具体压测工具时按其参数命名替换。
-
-| 场景 | throttle | 并发 | 时长 | 备注 |
-| --- | --- | --- | --- | --- |
-| A 未过载（关闭 throttle） | off | `20` | `60s` | 关闭限流时容器吞吐刚好压满 `2` 核 CPU 的临界值。 |
-| B 过载未开启 throttle | off | `200` | `60s` | `10×` A 的并发，制造持续过载用于对照 D。 |
-| C 未过载（开启 throttle） | on | `2` | `60s` | 开启默认限流后，不触发分级丢弃的最大并发，超过即在大包流量上触发。 |
-| D 默认限流参数（开启 throttle） | on | `50` | `60s` | 让容器 CPU 稳态压在 `cpu_enter ≈ 0.80` 线、持续触发分级丢弃。 |
-
-* *[1] `时长` ≥ `60s` 给 EWMA `β=0.95` 留足收敛时间（时间常数 ≈ `5s`）。*
-* *[2] 客户端读超时建议 ≥ `10s`，否则 B、D 的高延迟请求会被记为客户端超时而非服务端拒绝。*
-
-### d. 数据采集 PromQL
+### c. 数据采集 PromQL
 
 下表 PromQL 已在 `bk_biz_id=5000140`、`bcs_cluster_id=BCS-K8S-25973` 通过 bkte MCP 拉取验证。
 
 调用约定：
 
-- `<window>` 填 loadgen 整段压测时长，默认 `3m`（对应 `-d 60s × 3` 阶段）。
-- 取值用 range query，`start_time = end_time = 压测结束时刻 + 30s`，让 rate `1m` 窗口完整覆盖压测末段。
-- 所有 PromQL 直接返回单值，调用方读 `stat.last` 即可。
-- Subquery 内层步长 `[1m:30s]` 对齐底层 `30s` 采样间隔。
-- 容器资源指标必须加 `container="collector"`，避免 Pod 内 sidecar、pause 容器或其他容器污染 collector 自身水位。
-- `<pod>` 填 collector Pod 名正则，例如 `bkm-collector-.*`。
-- 只看单 Pod 时，`<pod>` 填完整 Pod 名。
+- `<window>` 取 loadgen 整段压测时长，例如 `-d 240s × 3` 填 `12m`。
+- 取值用 range query，查询窗口放在压测结束后 `30s`～`60s`，读取 `stat.last`。
 
 **主表**：
 
-| 指标 | 适用场景 | 单位 | PromQL |
-| --- | --- | --- | --- |
-| QPM 峰值 *[1]* | A、B | `req/min` | `max_over_time((sum by (pod) (rate(bkmonitor:bk_collector_receiver_handled_total{bcs_cluster_id="<bcs_cluster_id>"}[1m])) * 60)[<window>:30s])` |
-| QPM 峰值 *[1]* | C、D | `req/min` | `max_over_time((sum by (pod) (rate(bkmonitor:bk_collector_throttle_requests_total{bcs_cluster_id="<bcs_cluster_id>"}[1m])) * 60)[<window>:30s])` |
-| Receiver 字节速率峰值 | A、B、C、D | `B/s` | `max_over_time((sum by (pod) (rate(bkmonitor:bk_collector_receiver_received_bytes_total{bcs_cluster_id="<bcs_cluster_id>"}[1m])))[<window>:30s])` |
-| Receiver 处理平均耗时峰值 | A、B、C、D | `s` | `max_over_time((sum by (pod) (rate(bkmonitor:bk_collector_receiver_handled_duration_seconds_sum{bcs_cluster_id="<bcs_cluster_id>"}[1m])) / sum by (pod) (rate(bkmonitor:bk_collector_receiver_handled_duration_seconds_count{bcs_cluster_id="<bcs_cluster_id>"}[1m])))[<window>:30s])` |
-| Receiver 处理耗时 P99 峰值 | A、B、C、D | `s` | `max_over_time((histogram_quantile(0.99, sum by (le, pod) (rate(bkmonitor:bk_collector_receiver_handled_duration_seconds_bucket{bcs_cluster_id="<bcs_cluster_id>"}[1m]))))[<window>:30s])` |
-| CPU 使用率峰值（Limits） | A、B、C、D | 比例 | `max_over_time((sum by (pod) (rate(container_cpu_usage_seconds_total{bcs_cluster_id="<bcs_cluster_id>",container="collector"}[1m])) / sum by (pod) (bkmonitor:kube_pod_container_resource_limits_cpu_cores{bcs_cluster_id="<bcs_cluster_id>",container="collector"}))[<window>:30s])` |
-| 内存使用率峰值（Limits） | A、B、C、D | 比例 | `max_over_time((sum by (pod) (container_memory_working_set_bytes{bcs_cluster_id="<bcs_cluster_id>",container="collector"}) / sum by (pod) (bkmonitor:kube_pod_container_resource_limits_memory_bytes{bcs_cluster_id="<bcs_cluster_id>",container="collector"}))[<window>:30s])` |
+| 指标 | 单位 | PromQL |
+| --- | --- | --- |
+| QPM 峰值 | `req/min` | [a] 未开启限流：`max_over_time((sum by (pod) (rate(bkmonitor:bk_collector_receiver_handled_total{bcs_cluster_id="<bcs_cluster_id>"}[1m])) * 60)[<window>:30s])` <br />[b] 开启限流：`max_over_time((sum by (pod) (rate(bkmonitor:bk_collector_throttle_requests_total{bcs_cluster_id="<bcs_cluster_id>"}[1m])) * 60)[<window>:30s])` |
+| Receiver 字节速率峰值 | `B/s` | `max_over_time((sum by (pod) (rate(bkmonitor:bk_collector_receiver_received_bytes_total{bcs_cluster_id="<bcs_cluster_id>"}[1m])))[<window>:30s])` |
+| Receiver 处理平均耗时峰值 | `s` | `max_over_time((sum by (pod) (rate(bkmonitor:bk_collector_receiver_handled_duration_seconds_sum{bcs_cluster_id="<bcs_cluster_id>"}[1m])) / sum by (pod) (rate(bkmonitor:bk_collector_receiver_handled_duration_seconds_count{bcs_cluster_id="<bcs_cluster_id>"}[1m])))[<window>:30s])` |
+| Receiver 处理耗时 P99 峰值 | `s` | `max_over_time((histogram_quantile(0.99, sum by (le, pod) (rate(bkmonitor:bk_collector_receiver_handled_duration_seconds_bucket{bcs_cluster_id="<bcs_cluster_id>"}[1m]))))[<window>:30s])` |
+| CPU 使用率峰值（Limits） | 比例 | `max_over_time((sum by (pod) (rate(container_cpu_usage_seconds_total{bcs_cluster_id="<bcs_cluster_id>",container="collector"}[1m])) / sum by (pod) (bkmonitor:kube_pod_container_resource_limits_cpu_cores{bcs_cluster_id="<bcs_cluster_id>",container="collector"}))[<window>:30s])` |
+| 内存使用率峰值（Limits） | 比例 | `max_over_time((sum by (pod) (container_memory_working_set_bytes{bcs_cluster_id="<bcs_cluster_id>",container="collector"}) / sum by (pod) (bkmonitor:kube_pod_container_resource_limits_memory_bytes{bcs_cluster_id="<bcs_cluster_id>",container="collector"}))[<window>:30s])` |
 
-* *[1] off 取 `receiver_handled_total`（throttle 关时不暴露 throttle 指标），on 取 `throttle_requests_total`（丢弃请求不进 receiver）。*
-
-**辅助表**（仅 C、D 场景，throttle 行为复核）：
+**辅助表**：throttle 行为指标仅 C、D 场景有效，稳定性复核指标适用于全部场景。
 
 | 指标 | 单位 | PromQL |
 | --- | --- | --- |
@@ -686,31 +677,29 @@ rules:
 | 容器 CPU 慢信号峰值 | 比例 | `max by (pod) (max_over_time(bkmonitor:bk_collector_throttle_water_level{bcs_cluster_id="<bcs_cluster_id>",kind="cpu_slow"}[<window>]))` |
 | 容器内存水位峰值 | 比例 | `max by (pod) (max_over_time(bkmonitor:bk_collector_throttle_water_level{bcs_cluster_id="<bcs_cluster_id>",kind="mem"}[<window>]))` |
 | Pod OOM 复核 *[2]* | `0/1` | `max by (pod) (max_over_time((increase(bkmonitor:kube_pod_container_status_terminated_reason{bcs_cluster_id=~"<bcs_cluster_id>",pod=~"<pod>",reason="OOMKilled"}[2m]))[<window>:30s])) > 0` |
-| Collector 运行时长 *[3]* | `s` | `min by (pod) (bkmonitor:bk_collector_uptime{bcs_cluster_id="<bcs_cluster_id>"})` |
+| Collector 重启增量 *[3]* | 次 | `max by (pod) (increase(kube_pod_container_status_restarts_total{bcs_cluster_id=~"<bcs_cluster_id>",pod=~"<pod>",container="collector"}[<window>]))` |
+| Collector 运行时长 *[4]* | `s` | `min by (pod) (bkmonitor:bk_collector_uptime{bcs_cluster_id="<bcs_cluster_id>"})` |
 
 * *[1] `0` Normal、`1` Shedding、`2` Open，语义见 `0x02 d`。*
 * *[2] 内层 `[2m]` 识别 OOMKilled 增量，外层 `[<window>:30s]` 扫描整段压测窗口。*
-* *[3] 用压测结束后的查询点读取 `stat.last`，运行时长过小表示 collector 进程近期重启过。*
+* *[3] 取压测窗口内 `collector` 容器重启次数增量。*
+* *[4] 用压测结束后的查询点读取 `stat.last`，运行时长过小表示 collector 进程近期重启过。*
 
-### e. 记录模板
+### d. 记录
 
-collector 端 6 项按 `0x06 d` 主表 PromQL 取，`压测成功率` 与 `压测总请求` 取自压测客户端。
+| 指标 | A *[1]* | B *[2]* | C *[3]* | D *[4]* |
+| --- | --- | --- | --- | --- |
+| QPM 峰值 | `3,504 req/min` | 待压测 | 待压测 | 待压测 |
+| Receiver 字节速率峰值 | `5.94 MiB/s` | 待压测 | 待压测 | 待压测 |
+| Receiver 处理平均耗时峰值 | `1.122 s` | 待压测 | 待压测 | 待压测 |
+| Receiver 处理耗时 P99 峰值 | `6.896 s` | 待压测 | 待压测 | 待压测 |
+| CPU 使用率峰值（Limits） | `119.45%` | 待压测 | 待压测 | 待压测 |
+| 内存使用率峰值（Limits） | `81.96%` | 待压测 | 待压测 | 待压测 |
 
-| 场景 | QPM 峰值 | 字节速率峰值 | 处理平均耗时峰值 | P99 峰值 | CPU 峰值（Limits） | 内存峰值（Limits） | 压测成功率 | 压测总请求 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| A 未过载（关闭 throttle） |  |  |  |  |  |  |  |  |
-| B 过载未开启 throttle |  |  |  |  |  |  |  |  |
-| C 未过载（开启 throttle） |  |  |  |  |  |  |  |  |
-| D 默认限流参数（开启 throttle） |  |  |  |  |  |  |  |  |
-
-辅助表：`—` 表示该场景下指标不适用，预期值与实测不一致需排查。
-
-| 场景 | 客户端 `429` | 客户端 `5xx` | 丢弃总占比 | `cpu_slow` 峰值 | `state` 最高态 | `mem` 峰值 |
-| --- | --- | --- | --- | --- | --- | --- |
-| A 未过载（关闭 throttle） | 预期 `0` | 预期 `0` | — | — | — | — |
-| B 过载未开启 throttle | 预期 `0` |  | — | — | — | — |
-| C 未过载（开启 throttle） |  | 预期 `0` |  |  | 预期 `0`（Normal） |  |
-| D 默认限流参数（开启 throttle） |  | 预期 `0` |  | 预期 ≈ `0.80` | 预期 `1`（Shedding） |  |
+* *[1] A：`-c 26` 在 `240s × 3` 下可稳定压满 CPU；内存峰值 `81.96%`，继续加压需重点观察 OOM 与重启。*
+* *[2] B：待压测。*
+* *[3] C：待压测。*
+* *[4] D：待压测。*
 
 ---
 
