@@ -8,7 +8,7 @@
 
 | 需求 | 标签 | 状态 | 更新日期 |
 |------|------|------|----------|
-| [bk-collector 自适应限流](./issues/2026-06-10-collector-adaptive-throttling/README.md) | `collector` `throttling` `load-shedding` `overload-protection` `k8s` | 设计中 | 2026-06-18 |
+| [bk-collector 自适应限流](./issues/2026-06-10-collector-adaptive-throttling/README.md) | `collector` `throttling` `load-shedding` `overload-protection` `k8s` | 设计中 | 2026-06-20 |
 | [Taf 服务上报适配环境字段](./issues/2026-03-27-taf-set-env-field-adapter/README.md) | `taf` `tars` `set` `converter` `apm` | 新建 | 2026-03-27 |
 
 ### b. Snippets

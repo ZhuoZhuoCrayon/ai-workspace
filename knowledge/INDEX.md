@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-06-18
+> 最后更新：2026-06-20
 
 ## 0x01 项目知识
 
@@ -18,10 +18,10 @@
 
 ## 0x02 最近更新
 
-- 2026-06-18：更新
+- 2026-06-20：更新
   [bk-collector 自适应限流](./bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/README.md)
   至 bkmonitor-datalink
-  （收敛自适应限流观测指标：水位、状态机状态与 allowed / denied 请求量）
+  （修正压测资源峰值 PromQL：限定 `container="collector"`，并补充 OOMKilled 复核指标）
 - 2026-06-17：更新
   [APM Span 详情支持 Links 反向关联展示](./bkmonitor/issues/2026-06-04-apm-span-links-reverse-relation/README.md)
   至 bkmonitor

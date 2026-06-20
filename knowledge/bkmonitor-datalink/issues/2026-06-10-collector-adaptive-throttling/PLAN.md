@@ -4,7 +4,7 @@ tags: [collector, throttling, load-shedding, overload-protection, cgroup, k8s]
 description: 以容器 cgroup 真实水位驱动按数据类型分级的有损降级，CPU 做主限流、内存做硬熔断，落在 HTTP / gRPC 入口的统一限流器
 issue: knowledge/bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/README.md
 created: 2026-06-10
-updated: 2026-06-19
+updated: 2026-06-20
 ---
 
 # bk-collector 自适应限流方案
@@ -659,6 +659,9 @@ rules:
 - 取值用 range query，`start_time = end_time = 压测结束时刻 + 30s`，让 rate `1m` 窗口完整覆盖压测末段。
 - 所有 PromQL 直接返回单值，调用方读 `stat.last` 即可。
 - Subquery 内层步长 `[1m:30s]` 对齐底层 `30s` 采样间隔。
+- 容器资源指标必须加 `container="collector"`，避免 Pod 内 sidecar、pause 容器或其他容器污染 collector 自身水位。
+- `<pod>` 填 collector Pod 名正则，例如 `bkm-collector-.*`。
+- 只看单 Pod 时，`<pod>` 填完整 Pod 名。
 
 **主表**：
 
@@ -669,8 +672,8 @@ rules:
 | Receiver 字节速率峰值 | A、B、C、D | `B/s` | `max_over_time((sum by (pod) (rate(bkmonitor:bk_collector_receiver_received_bytes_total{bcs_cluster_id="<bcs_cluster_id>"}[1m])))[<window>:30s])` |
 | Receiver 处理平均耗时峰值 | A、B、C、D | `s` | `max_over_time((sum by (pod) (rate(bkmonitor:bk_collector_receiver_handled_duration_seconds_sum{bcs_cluster_id="<bcs_cluster_id>"}[1m])) / sum by (pod) (rate(bkmonitor:bk_collector_receiver_handled_duration_seconds_count{bcs_cluster_id="<bcs_cluster_id>"}[1m])))[<window>:30s])` |
 | Receiver 处理耗时 P99 峰值 | A、B、C、D | `s` | `max_over_time((histogram_quantile(0.99, sum by (le, pod) (rate(bkmonitor:bk_collector_receiver_handled_duration_seconds_bucket{bcs_cluster_id="<bcs_cluster_id>"}[1m]))))[<window>:30s])` |
-| CPU 使用率峰值（Limits） | A、B、C、D | 比例 | `max_over_time((sum by (pod) (rate(container_cpu_usage_seconds_total{bcs_cluster_id="<bcs_cluster_id>"}[1m])) / sum by (pod) (bkmonitor:kube_pod_container_resource_limits_cpu_cores{bcs_cluster_id="<bcs_cluster_id>"}))[<window>:30s])` |
-| 内存使用率峰值（Limits） | A、B、C、D | 比例 | `max_over_time((sum by (pod) (container_memory_working_set_bytes{bcs_cluster_id="<bcs_cluster_id>"}) / sum by (pod) (bkmonitor:kube_pod_container_resource_limits_memory_bytes{bcs_cluster_id="<bcs_cluster_id>"}))[<window>:30s])` |
+| CPU 使用率峰值（Limits） | A、B、C、D | 比例 | `max_over_time((sum by (pod) (rate(container_cpu_usage_seconds_total{bcs_cluster_id="<bcs_cluster_id>",container="collector"}[1m])) / sum by (pod) (bkmonitor:kube_pod_container_resource_limits_cpu_cores{bcs_cluster_id="<bcs_cluster_id>",container="collector"}))[<window>:30s])` |
+| 内存使用率峰值（Limits） | A、B、C、D | 比例 | `max_over_time((sum by (pod) (container_memory_working_set_bytes{bcs_cluster_id="<bcs_cluster_id>",container="collector"}) / sum by (pod) (bkmonitor:kube_pod_container_resource_limits_memory_bytes{bcs_cluster_id="<bcs_cluster_id>",container="collector"}))[<window>:30s])` |
 
 * *[1] off 取 `receiver_handled_total`（throttle 关时不暴露 throttle 指标），on 取 `throttle_requests_total`（丢弃请求不进 receiver）。*
 
@@ -682,8 +685,10 @@ rules:
 | Throttle 状态机最高态 *[1]* | `0/1/2` | `max by (pod, record_type) (max_over_time(bkmonitor:bk_collector_throttle_state{bcs_cluster_id="<bcs_cluster_id>"}[<window>]))` |
 | 容器 CPU 慢信号峰值 | 比例 | `max by (pod) (max_over_time(bkmonitor:bk_collector_throttle_water_level{bcs_cluster_id="<bcs_cluster_id>",kind="cpu_slow"}[<window>]))` |
 | 容器内存水位峰值 | 比例 | `max by (pod) (max_over_time(bkmonitor:bk_collector_throttle_water_level{bcs_cluster_id="<bcs_cluster_id>",kind="mem"}[<window>]))` |
+| Pod OOM 复核 *[2]* | `0/1` | `max by (pod) (max_over_time((increase(bkmonitor:kube_pod_container_status_terminated_reason{bcs_cluster_id=~"<bcs_cluster_id>",pod=~"<pod>",reason="OOMKilled"}[2m]))[<window>:30s])) > 0` |
 
 * *[1] `0` Normal、`1` Shedding、`2` Open，语义见 `0x02 d`。*
+* *[2] 内层 `[2m]` 识别 OOMKilled 增量，外层 `[<window>:30s]` 扫描整段压测窗口。*
 
 ### e. 记录模板
 
