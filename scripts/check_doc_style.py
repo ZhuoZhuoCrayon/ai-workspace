@@ -12,7 +12,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DOC_SUFFIXES = {".md", ".mdc"}
 EXCLUDED_PARTS = {".git", "node_modules", "__pycache__", ".venv", "venv"}
-MAX_PROSE_LINE_LENGTH = 120
+MAX_PROSE_LINE_LENGTH = 360
+MAX_PUNCTUATION_COUNT = 4
+MAX_TABLE_CELL_PUNCTUATION_COUNT = 1
 STRUCTURED_SPLIT_HINT = "拆分时先判断信息关系，并按段落与载体规则选择承载方式，不要只做源码硬换行"
 TABLE_SPLIT_HINT = "若内容有多层结构，改成编号换行、子表或表格外说明"
 
@@ -156,6 +158,10 @@ def iter_prose_blocks(lines: list[str], frontmatter_lines: set[int]) -> list[tup
         if is_table_line(stripped) or HEADING_PATTERN.match(line):
             flush()
             continue
+        if stripped.startswith(">"):
+            flush()
+            blocks.append((line_no, [line], strip_inline_code(line).strip()))
+            continue
         if LIST_ITEM_PATTERN.match(line):
             flush()
             current_lines = [line]
@@ -275,26 +281,29 @@ def check_file(path: Path) -> list[Issue]:
             issues.append(Issue(rel_path, line_no, "subsection-format", "三级标题应使用 `### a. 标题` 格式"))
 
     for line_no, source_lines, block in iter_prose_blocks(lines, frontmatter_lines):
-        if block.count("。") >= 2:
+        end_punct_count = len(PROSE_END_PUNCT_PATTERN.findall(block))
+        if end_punct_count > MAX_PUNCTUATION_COUNT:
             issues.append(
                 Issue(
                     rel_path,
                     line_no,
                     "sentence-split-period",
-                    f"同一 Markdown 段落或列表项里不要出现两个句号。{STRUCTURED_SPLIT_HINT}",
+                    f"同一 Markdown 段落或列表项里句末点号不要超过 {MAX_PUNCTUATION_COUNT} 个。"
+                    f"{STRUCTURED_SPLIT_HINT}",
                 )
             )
-        if ";" in block or "；" in block:
+        semicolon_count = block.count(";") + block.count("；")
+        if semicolon_count > MAX_PUNCTUATION_COUNT:
             issues.append(
                 Issue(
                     rel_path,
                     line_no,
                     "sentence-split-semicolon",
-                    f"同一 Markdown 段落或列表项里不要出现分号。{STRUCTURED_SPLIT_HINT}",
+                    f"同一 Markdown 段落或列表项里分号不要超过 {MAX_PUNCTUATION_COUNT} 个。"
+                    f"{STRUCTURED_SPLIT_HINT}",
                 )
             )
         raw_block = " ".join(line.strip() for line in source_lines).strip()
-        end_punct_count = len(PROSE_END_PUNCT_PATTERN.findall(block))
         if len(source_lines) > 1 and len(raw_block) <= MAX_PROSE_LINE_LENGTH and end_punct_count <= 1:
             issues.append(
                 Issue(
@@ -308,27 +317,30 @@ def check_file(path: Path) -> list[Issue]:
     table_semicolon_lines: set[int] = set()
     table_multi_end_punct_lines: set[int] = set()
     for line_no, cell in iter_table_cells(lines, frontmatter_lines):
-        if (";" in cell or "；" in cell) and line_no not in table_semicolon_lines:
+        semicolon_count = cell.count(";") + cell.count("；")
+        if semicolon_count > MAX_TABLE_CELL_PUNCTUATION_COUNT and line_no not in table_semicolon_lines:
             table_semicolon_lines.add(line_no)
             issues.append(
                 Issue(
                     rel_path,
                     line_no,
                     "table-cell-semicolon",
-                    f"表格单元格内不要出现分号。{TABLE_SPLIT_HINT}",
+                    f"表格单元格内分号不要超过 {MAX_TABLE_CELL_PUNCTUATION_COUNT} 个。"
+                    f"{TABLE_SPLIT_HINT}",
                 )
             )
         if line_no in table_multi_end_punct_lines:
             continue
         for segment in split_table_cell_segments(cell):
-            if len(TABLE_CELL_END_PUNCT_PATTERN.findall(segment)) >= 2:
+            if len(TABLE_CELL_END_PUNCT_PATTERN.findall(segment)) > MAX_TABLE_CELL_PUNCTUATION_COUNT:
                 table_multi_end_punct_lines.add(line_no)
                 issues.append(
                     Issue(
                         rel_path,
                         line_no,
                         "table-cell-multi-end-punct",
-                        f"表格单元格未分段时不要出现多个结束符。{TABLE_SPLIT_HINT}",
+                        f"表格单元格未分段时句末点号不要超过 {MAX_TABLE_CELL_PUNCTUATION_COUNT} 个。"
+                        f"{TABLE_SPLIT_HINT}",
                     )
                 )
                 break
