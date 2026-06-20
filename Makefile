@@ -9,8 +9,6 @@ SKILLS_SOURCE ?= https://github.com/anthropics/skills
 SKILLS_IDE ?= cursor
 SKILLS_DIR ?= .agents/skills
 SKILLS ?= skill-creator mcp-builder docx pdf pptx xlsx webapp-testing
-SKILLS_EXTRA_SOURCE ?= https://github.com/op7418/humanizer-zh
-SKILLS_EXTRA ?= humanizer-zh
 SKILLS_MOUNT_TARGETS ?= .codebuddy .claude .cursor
 SKILLS_MOUNT_BLACKLIST ?=
 SKILLS_AGENT_ARGS := $(if $(strip $(SKILLS_IDE)),--agent $(SKILLS_IDE),)
@@ -33,9 +31,7 @@ help:
 		"  SKILLS_MOUNT_BLACKLIST=$(SKILLS_MOUNT_BLACKLIST) # 可选，跳过指定 skill（空格分隔）" \
 		"  UV=$(UV)                       # Python 工具统一通过 uv 运行" \
 		"  PRE_COMMIT=$(PRE_COMMIT)       # pre-commit 运行入口" \
-		"  SKILLS=$(SKILLS)" \
-		"  SKILLS_EXTRA_SOURCE=$(SKILLS_EXTRA_SOURCE)" \
-		"  SKILLS_EXTRA=$(SKILLS_EXTRA)"
+		"  SKILLS=$(SKILLS)"
 
 init: init-pre-commit init-skills
 
@@ -48,10 +44,6 @@ init-skills:
 		for skill in $(SKILLS); do \
 			echo "Installing $$skill"; \
 			npx skills add $(SKILLS_SOURCE) --skill "$$skill" $(SKILLS_AGENT_ARGS) --yes; \
-		done && \
-		for skill in $(SKILLS_EXTRA); do \
-			echo "Installing $$skill"; \
-			npx skills add $(SKILLS_EXTRA_SOURCE) --skill "$$skill" $(SKILLS_AGENT_ARGS) --yes; \
 		done
 
 verify: verify-pre-commit verify-skills
@@ -69,10 +61,6 @@ skills-update:
 		for skill in $(SKILLS); do \
 			echo "Updating $$skill"; \
 			npx skills add $(SKILLS_SOURCE) --skill "$$skill" $(SKILLS_AGENT_ARGS) --yes; \
-		done && \
-		for skill in $(SKILLS_EXTRA); do \
-			echo "Updating $$skill"; \
-			npx skills add $(SKILLS_EXTRA_SOURCE) --skill "$$skill" $(SKILLS_AGENT_ARGS) --yes; \
 		done
 
 skills-mount:
