@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DOC_SUFFIXES = {".md", ".mdc"}
 EXCLUDED_PARTS = {".git", "node_modules", "__pycache__", ".venv", "venv"}
 MAX_PROSE_LINE_LENGTH = 360
+MAX_SOFT_WRAP_LINE_LENGTH = 120
 MAX_PUNCTUATION_COUNT = 4
 MAX_TABLE_CELL_PUNCTUATION_COUNT = 1
 STRUCTURED_SPLIT_HINT = "拆分时先判断信息关系，并按段落与载体规则选择承载方式，不要只做源码硬换行"
@@ -304,13 +305,13 @@ def check_file(path: Path) -> list[Issue]:
                 )
             )
         raw_block = " ".join(line.strip() for line in source_lines).strip()
-        if len(source_lines) > 1 and len(raw_block) <= MAX_PROSE_LINE_LENGTH and end_punct_count <= 1:
+        if len(source_lines) > 1 and len(raw_block) <= MAX_SOFT_WRAP_LINE_LENGTH and end_punct_count <= 1:
             issues.append(
                 Issue(
                     rel_path,
                     line_no,
                     "single-sentence-soft-wrap",
-                    f"单句内容合并后不超过 {MAX_PROSE_LINE_LENGTH} 个字符时，不要拆成多行。需要拆分时使用结构化载体",
+                    f"单句内容合并后不超过 {MAX_SOFT_WRAP_LINE_LENGTH} 个字符时，不要拆成多行。需要拆分时使用结构化载体",
                 )
             )
 
