@@ -18,20 +18,8 @@
 
 ## 0x02 最近更新
 
-- 2026-06-20：更新
-  [bk-collector 自适应限流](./bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/README.md)
-  至 bkmonitor-datalink
-  （修正压测资源峰值 PromQL：限定 `container="collector"`，并补充 OOMKilled 复核指标）
-- 2026-06-17：更新
-  [APM Span 详情支持 Links 反向关联展示](./bkmonitor/issues/2026-06-04-apm-span-links-reverse-relation/README.md)
-  至 bkmonitor
-  （写回 PR #11110，记录符合预期的已知边界，并补充里程碑 2 前端展示方案）
-- 2026-06-16：新增
-  [为什么我又写了一个 Python 限流库：throttled-py](./throttled-py/articles/2026-06-16-throttled-py-intro/README.md)
-  至 throttled-py
-  （介绍限流的本质与现有 Python 库的不足，并给出 throttled-py 的核心功能与快速上手）
+- 2026-06-20：更新 [bk-collector 自适应限流](./bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/README.md) 至 bkmonitor-datalink（修正压测资源峰值 PromQL：限定 `container="collector"`，并补充 OOMKilled 与运行时长复核指标）
+- 2026-06-17：更新 [APM Span 详情支持 Links 反向关联展示](./bkmonitor/issues/2026-06-04-apm-span-links-reverse-relation/README.md) 至 bkmonitor（写回 PR #11110，记录符合预期的已知边界，并补充里程碑 2 前端展示方案）
+- 2026-06-16：新增 [为什么我又写了一个 Python 限流库：throttled-py](./throttled-py/articles/2026-06-16-throttled-py-intro/README.md) 至 throttled-py（介绍限流的本质与现有 Python 库的不足，并给出 throttled-py 的核心功能与快速上手）
 - 2026-06-12：新增 [crypto-python-sdk](./crypto-python-sdk/INDEX.md) 项目知识库（接入 BlueKing crypto-python-sdk 加密 SDK，建立项目知识库入口）
-- 2026-06-10：更新
-  [日志 UnifyQuery 环境变量白名单与 query_string 增强](./bkmonitor/issues/2026-03-05-log-uq-env-whitelist-and-query-string/README.md)
-  至 bkmonitor
-  （补充日志聚类表 `_clustered` 后缀统一走 UnifyQuery 的方案与验证结论）
+- 2026-06-10：更新 [日志 UnifyQuery 环境变量白名单与 query_string 增强](./bkmonitor/issues/2026-03-05-log-uq-env-whitelist-and-query-string/README.md) 至 bkmonitor（补充日志聚类表 `_clustered` 后缀统一走 UnifyQuery 的方案与验证结论）

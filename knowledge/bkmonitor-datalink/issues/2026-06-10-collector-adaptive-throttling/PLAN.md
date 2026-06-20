@@ -686,9 +686,11 @@ rules:
 | 容器 CPU 慢信号峰值 | 比例 | `max by (pod) (max_over_time(bkmonitor:bk_collector_throttle_water_level{bcs_cluster_id="<bcs_cluster_id>",kind="cpu_slow"}[<window>]))` |
 | 容器内存水位峰值 | 比例 | `max by (pod) (max_over_time(bkmonitor:bk_collector_throttle_water_level{bcs_cluster_id="<bcs_cluster_id>",kind="mem"}[<window>]))` |
 | Pod OOM 复核 *[2]* | `0/1` | `max by (pod) (max_over_time((increase(bkmonitor:kube_pod_container_status_terminated_reason{bcs_cluster_id=~"<bcs_cluster_id>",pod=~"<pod>",reason="OOMKilled"}[2m]))[<window>:30s])) > 0` |
+| Collector 运行时长 *[3]* | `s` | `min by (pod) (bkmonitor:bk_collector_uptime{bcs_cluster_id="<bcs_cluster_id>"})` |
 
 * *[1] `0` Normal、`1` Shedding、`2` Open，语义见 `0x02 d`。*
 * *[2] 内层 `[2m]` 识别 OOMKilled 增量，外层 `[<window>:30s]` 扫描整段压测窗口。*
+* *[3] 用压测结束后的查询点读取 `stat.last`，运行时长过小表示 collector 进程近期重启过。*
 
 ### e. 记录模板
 
