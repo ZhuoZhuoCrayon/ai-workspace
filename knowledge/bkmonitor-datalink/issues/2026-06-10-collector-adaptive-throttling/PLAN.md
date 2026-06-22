@@ -841,7 +841,7 @@ receiver:
 * *[3] B：`-c 32` 触发 OOMKilled，重启增量 `4`；burst 阶段大量连接拒绝，不能作为稳定参数。*
 * *[4] D：待压测。*
 * *[5] Span 总数 = Σ`阶段请求数 × spans`；丢弃率 = Σ`失败请求数 × spans` / Span 总数。*
-* *[6] loadgen 单请求包大小按 spans 数表示：warmup=`128`、burst=`512`、bigpayload=`128`。*
+* *[6] 单请求包大小估算：warmup=`16 KiB`（`128 spans × 128 B`），burst=`512 KiB`（`512 spans × 1,024 B`），bigpayload=`512 KiB`（`128 spans × 4,096 B`）。*
 
 ---
 
