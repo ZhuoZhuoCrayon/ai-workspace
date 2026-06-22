@@ -3,7 +3,7 @@ title: bk-collector 自适应限流
 tags: [collector, throttling, load-shedding, overload-protection, k8s]
 description: 以 CPU / 内存真实资源水位驱动按数据类型分级的有损降级，避免 collector 高负载下被压垮导致用户数据持续中断
 created: 2026-06-10
-updated: 2026-06-21
+updated: 2026-06-22
 ---
 
 # bk-collector 自适应限流

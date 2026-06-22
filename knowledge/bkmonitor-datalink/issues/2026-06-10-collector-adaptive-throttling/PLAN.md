@@ -329,6 +329,57 @@ CPU 使用率 = 300 ms / (250 ms × 1) = 1.2
 
 所以，短时看到 CPU 使用率大于 `1`，不表示 limit 失效，也不表示指标错了。它通常说明 CFS 配额仍在按周期生效，而采样窗口正好捕捉到了多个周期内集中消耗的 CPU 时间。复核时要同步看节流指标：如果 `container_cpu_cfs_throttled_seconds_total` 或 `cpu.stat.throttled_usec` 增加，说明 cgroup 正在把超额运行压回配额内。
 
+### b. 为什么提前限流返回能控制内存
+
+提前限流返回发生在入口：collector 判定过载后直接返回 `429`，业务 handler 不再主动读取 body。
+
+这条路径把内存账本从「请求体进入业务后继续放大」收回到「连接数 × 接收缓冲」。collector 不持续读空 socket receive buffer 后，TCP 接收窗口会收缩，发送端不能无限把 body 推进服务端。
+
+```mermaid
+flowchart LR
+    C["客户端发送 body"] --> S["服务端 socket receive buffer"]
+
+    S -->|放行：collector 持续读取| R["buffer 被读空<br/>TCP 窗口继续打开"]
+    R --> G["body 进入 Go"]
+    G --> P["解压 / 反序列化 / pipeline"]
+    P --> H["Go heap 与队列增长"]
+
+    S -->|提前限流返回| F["buffer 不再持续腾空"]
+    F --> W["TCP 窗口收缩或归零"]
+    W --> B["发送端背压<br/>只能发送在途数据或旧窗口内数据"]
+    F --> X["连接关闭后<br/>未读缓冲释放"]
+```
+
+Linux 用 [`tcp_rmem`](https://docs.kernel.org/networking/ip-sysctl.html) 控制 TCP receive buffer，格式是 `min default max`：
+
+| 字段 | 默认量级 | 含义 |
+| --- | --- | --- |
+| `min` | `4 KiB` | 每个 TCP socket 的最小接收缓冲，即使有内存压力也尽量保留。 |
+| `default` | `128 KiB` | TCP socket 初始接收缓冲。 |
+| `max` | `128 KiB`～`32 MiB` | 自动调节可增长到的上限，具体值按机器内存计算。 *[1]* |
+
+- *[1] [`tcp_moderate_rcvbuf`](https://docs.kernel.org/networking/ip-sysctl.html) 默认开启，内核会按链路吞吐自动调节 receive buffer，但不会超过 `tcp_rmem[2]`。*
+- *[2] 如果程序显式设置 [`SO_RCVBUF`](https://man7.org/linux/man-pages/man7/socket.7.html)，Linux 会为 bookkeeping 预留额外空间，所以实际观测值可能大于纯 payload 字节数。*
+
+并发场景下，提前限流返回后的内存上限可以按连接数估算：
+
+| 并发连接 | 单连接接收缓冲 *[2]* | 粗略占用 |
+| --- | --- | --- |
+| `32` | `128 KiB` | `4 MiB` |
+| `32` | `256 KiB` | `8 MiB` |
+| `100` | `256 KiB` | `25 MiB` |
+
+放行路径会换一个账本：
+
+| 路径 | 内存模型 | 风险 |
+| --- | --- | --- |
+| 放行 | 请求体 × 解压 / 反序列化放大系数 + pipeline 堆积 | 原始 body 进入 Go 后变成长期对象，等待 GC 和下游消费。 |
+| 提前限流返回 | 活跃连接数 × socket 接收缓冲 + Go / TLS / HTTP 连接缓冲 | 成本主要停在连接级缓冲，buffer 满后由 TCP 背压限制发送端。 |
+
+机制落在两步：不读 body，socket receive buffer 不再持续腾空；buffer 接近上限后，TCP 窗口收缩，发送端被背压。payload 没有继续进入解压、反序列化和 pipeline，也就不会在 Go heap 里放大和滞留。
+
+cgroup v2 的 [`memory.stat sock`](https://docs.kernel.org/admin-guide/cgroup-v2.html) 会统计 socket buffer，连接数过多仍然会推高容器内存。提前限流返回只能把单请求成本挡在连接级缓冲里；总量还要靠连接数、读超时、上游并发或 socket buffer 上限兜住。
+
 ---
 
 ## 0x05 开发方案
@@ -700,27 +751,32 @@ rules:
 | --- | --- | --- | --- | --- |
 | A | 关闭 | 未过载极值 | `-c 26 -d 240s -warmup-spans 128 -burst-spans 512 -bigpayload-spans 128` | 记关闭限流时的最大 QPM 与 P99 耗时。 |
 | B | 关闭 | 过载饱和 | `-c 32 -d 240s -warmup-spans 128 -burst-spans 512 -bigpayload-spans 128` | 看关闭限流时是否失稳，给 D 当对照。 |
-| C | 开启（默认参数） | 未过载极值 | 待补充 | 记开启限流后能保留多少 QPM，与 A 对比看开销。 |
-| D | 开启（默认参数） | 默认参数稳态 | 待补充 | 看 CPU 触到 `cpu_enter` 后的丢弃比例与 P99 耗时。 |
+| C | 开启（压测参数） | 未过载极值 | `-c 26 -d 240s -warmup-spans 128 -burst-spans 512 -bigpayload-spans 128` | 记开启限流后能保留多少 QPM，与 A 对比看开销。 |
+| D | 开启（压测参数） | 默认参数稳态 | 待补充 | 看 CPU 触到 `cpu_enter` 后的丢弃比例与 P99 耗时。 |
 
-C、D 使用默认限流配置：
+C、D 使用压测限流配置：
 
 ```yaml
 receiver:
   throttle:
     enabled: true
+    sample_interval: "250ms"
+    signal:
+      cpu_slow_beta: 0.95
+      cpu_fast_beta: 0.7
+      fallback_cores: 1
     thresholds:
-      cpu_enter: 0.80
-      cpu_exit: 0.70
-      cpu_hard: 0.90
-      mem_enter: 0.85
-      mem_exit: 0.78
-      mem_hard: 0.92
-      breach_n: 2
+      cpu_enter: 0.95
+      cpu_exit: 0.85
+      cpu_hard: 1.20
+      mem_enter: 0.70
+      mem_exit: 0.60
+      mem_hard: 0.80
+      breach_n: 3
     rules:
       default:
         drop_min: 0.0
-        drop_max: 1.0
+        drop_max: 0.3
       metrics:
         enabled: false
 ```
@@ -766,24 +822,26 @@ receiver:
 
 ### d. 记录
 
-| 指标 | A *[1]* | B *[2]* | C *[3]* | D *[4]* |
+| 指标 | A *[1]* | C *[2]* | B *[3]* | D *[4]* |
 | --- | --- | --- | --- | --- |
-| 持续时间 | `12 m` | `12 m` | 待压测 | 待压测 |
-| QPM 峰值 | `3,504 req/min` | `3,519 req/min` | 待压测 | 待压测 |
-| 总传输 Span 数（丢弃率） *[5]* | `2,444,928（0.00%）` | `4,632,320（53.46%）` | 待压测 | 待压测 |
-| 总请求数（失败率） *[6]* | `14,208（0.00%）` | `18,337（27.04%）` | 待压测 | 待压测 |
-| Receiver 字节速率峰值 | `5.94 MiB/s` | `5.93 MiB/s` | 待压测 | 待压测 |
-| Receiver 处理平均耗时峰值 | `1.122 s` | `0.947 s` | 待压测 | 待压测 |
-| Receiver 处理耗时 P99 峰值 | `6.896 s` | `8.572 s` | 待压测 | 待压测 |
-| CPU 使用率峰值（Limits） | `119.45%` | `111.13%` | 待压测 | 待压测 |
-| 内存使用率峰值（Limits） | `81.96%` | `73.55%` | 待压测 | 待压测 |
+| 开启限流 | ❌ | ✅ | ❌ | ✅ |
+| 并发 | `-c 26` | `-c 26` | `-c 32` | 待压测 |
+| 持续时间 | `12 m` | `12 m` | `12 m` | 待压测 |
+| QPM 峰值 | `3,504 req/min` | `3,789 req/min` | `3,519 req/min` | 待压测 |
+| 总传输 Span 数（丢弃率） *[5]* | `2,444,928（0.00%）` | `4,768,896（48.08%）` | `4,632,320（53.46%）` | 待压测 |
+| 总请求数（失败率） | `14,208（0.00%）` | `29,229（20.71%）` | `18,337（27.04%）` | 待压测 |
+| Receiver 字节速率峰值 | `5.94 MiB/s` | `6.02 MiB/s` | `5.93 MiB/s` | 待压测 |
+| Receiver 处理平均耗时峰值 | `1.122 s` | `1.134 s` | `0.947 s` | 待压测 |
+| Receiver 处理耗时 P99 峰值 | `6.896 s` | `7.148 s` | `8.572 s` | 待压测 |
+| CPU 使用率峰值（Limits） | `119.45%` | `119.97%` | `111.13%` | 待压测 |
+| 内存使用率峰值（Limits） | `81.96%` | `54.40%` | `73.55%` | 待压测 |
 
 * *[1] A：`-c 26` 在 `240s × 3` 下可稳定压满 CPU；内存峰值 `81.96%`，继续加压需重点观察 OOM 与重启。*
-* *[2] B：`-c 32` 触发 OOMKilled，重启增量 `4`；burst 阶段大量连接拒绝，不能作为稳定参数。*
-* *[3] C：待压测。*
+* *[2] C：`-c 26` 开启限流后稳定，最高态 `Shedding=1`；`other`、OOM、重启均为 `0`。*
+* *[3] B：`-c 32` 触发 OOMKilled，重启增量 `4`；burst 阶段大量连接拒绝，不能作为稳定参数。*
 * *[4] D：待压测。*
 * *[5] Span 总数 = Σ`阶段请求数 × spans`；丢弃率 = Σ`失败请求数 × spans` / Span 总数。*
-* *[6] 请求总数 = Σ`200 + 429 + 503 + other`；失败率 = Σ`429 + 503 + other` / 请求总数。*
+* *[6] loadgen 单请求包大小按 spans 数表示：warmup=`128`、burst=`512`、bigpayload=`128`。*
 
 ---
 
