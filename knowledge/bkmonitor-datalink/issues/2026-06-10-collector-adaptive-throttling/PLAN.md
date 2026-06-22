@@ -134,7 +134,7 @@ stateDiagram-v2
 
 - *[1] cpuSlow（慢信号）：CPU 使用率经 `cpu_slow_beta` EWMA 平滑后的水位，吸收单点抖动。*
 - *[2] cpuFast（快信号）：CPU 使用率经 `cpu_fast_beta` EWMA 平滑后的水位，更贴近突发尖刺。*
-- *[3] 内存只读原始水位，不做 EWMA：避免平滑掩盖逼近 OOM 的真实压力，原因见 `0x04 b`。*
+- *[3] 内存只读原始水位，不做 EWMA：避免平滑掩盖逼近 OOM 的真实压力，原因见 `0x05 b`。*
 
 把 CPU 三条阈值线、滞回带与快慢两路信号落到同一时间轴，对照状态机看转移时机：
 
@@ -293,7 +293,45 @@ for {
 
 ---
 
-## 0x04 开发方案
+## 0x04 负载基础
+
+### a. 为什么 CPU 使用率可以大于 1
+
+`CPU limit = 1` 限的是周期内可消耗的 CPU 时间，不是瞬时只能跑在 `1` 个核上。Kubernetes 通过 Linux cgroup 执行 CPU limit；在常见的 `100 ms` 周期下，`1` 核等价于每周期最多消费 `100 ms` CPU 时间。
+
+```text
+cpu.max = 100000 100000   # quota=100 ms, period=100 ms
+```
+
+上面是 cgroup v2 的写法，语义是 `quota=100 ms`、`period=100 ms`。
+
+CPU 使用率是速率量：
+
+```text
+CPU 使用率 = ΔCPU 时间 / (Δwall × effective_cores)
+```
+
+这里的 `ΔCPU 时间` 是容器内所有线程在所有 CPU 上累计出来的核秒（core-seconds）。只要 cpuset 允许访问多个核，多个 goroutine 就可以在同一个墙钟窗口内并行运行。cgroup 按累计 CPU 时间扣减配额；配额用完后，进程会被节流。
+
+采样窗口和 CFS 周期不一定对齐。假设采样周期是 `250 ms`，CFS 周期是 `100 ms`，一次采样可能覆盖 `3` 个 CFS 周期的部分配额：
+
+```text
+sample window |----------- 250 ms -----------|
+CFS period    |--100 ms--|--100 ms--|--100 ms--|
+CPU budget       100 ms     100 ms     100 ms
+```
+
+如果这 `3` 个周期的配额都在采样窗口内被集中消耗，窗口内看到的 `ΔCPU 时间` 可以接近 `300 ms`。按 `1` 核 limit 归一化：
+
+```text
+CPU 使用率 = 300 ms / (250 ms × 1) = 1.2
+```
+
+所以，短时看到 CPU 使用率大于 `1`，不表示 limit 失效，也不表示指标错了。它通常说明 CFS 配额仍在按周期生效，而采样窗口正好捕捉到了多个周期内集中消耗的 CPU 时间。复核时要同步看节流指标：如果 `container_cpu_cfs_throttled_seconds_total` 或 `cpu.stat.throttled_usec` 增加，说明 cgroup 正在把超额运行压回配额内。
+
+---
+
+## 0x05 开发方案
 
 0x02 的两个单例与解耦边界落到新包 `pkg/collector/internal/throttle/`，HTTP 与 gRPC 各加薄适配层，既有 receiver 只动两处，pipeline 与 processor 零改动。
 
@@ -598,7 +636,7 @@ rules:
 
 ---
 
-## 0x05 验收与验证
+## 0x06 验收与验证
 
 验证分三层：单测锁定取数与决策正确，压测在受限容器验证端到端丢弃，集成验证真实 collector 平稳运行。
 
@@ -652,7 +690,7 @@ rules:
 
 ---
 
-## 0x06 基准压测
+## 0x07 基准压测
 
 ### a. 配置
 
@@ -749,20 +787,26 @@ receiver:
 
 ---
 
-## 0x07 实施进展
+## 0x08 实施进展
 
 | 时间           | 结论性进展                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 |--------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `2026-06-21` | 内存信号补齐软线滞回带：<br />[a] thresholds 新增 `mem_enter` / `mem_exit`，与 `mem_hard` 形成 enter / exit / hard 三档，对齐 CPU 的滞回结构 <br />[b] `Normal` ↔ `Shedding` 内存路径沿用 `breach_n` 连续门控避免毛刺，`mem_hard` 仍单次即触发以抢内核 OOM 之前止血 <br />[c] 内存只读原始水位、不做 EWMA，避免平滑掩盖真实压力，理由落到 `0x04 b` <br />[d] 丢弃概率收敛为 `t = max(t_cpu, t_mem)` 喂同一组 `drop_min` / `drop_max`，CPU 与内存共用强度档位 <br />[e] 观测口径同步：`bk_collector_throttle_water_level{kind}` 增加 `mem_enter` / `mem_exit`，状态表与水位时间轴新增内存视图。 |
+| `2026-06-21` | 内存信号补齐软线滞回带：<br />[a] thresholds 新增 `mem_enter` / `mem_exit`，与 `mem_hard` 形成 enter / exit / hard 三档，对齐 CPU 的滞回结构 <br />[b] `Normal` ↔ `Shedding` 内存路径沿用 `breach_n` 连续门控避免毛刺，`mem_hard` 仍单次即触发以抢内核 OOM 之前止血 <br />[c] 内存只读原始水位、不做 EWMA，避免平滑掩盖真实压力，理由落到 `0x05 b` <br />[d] 丢弃概率收敛为 `t = max(t_cpu, t_mem)` 喂同一组 `drop_min` / `drop_max`，CPU 与内存共用强度档位 <br />[e] 观测口径同步：`bk_collector_throttle_water_level{kind}` 增加 `mem_enter` / `mem_exit`，状态表与水位时间轴新增内存视图。 |
 | `2026-06-18 16:00` | 完成代码落地与验收闭环：<br />[a] 指标实现对齐水位、状态机状态、请求量 `3` 类协议，保留 `allowed` / `denied` 请求量口径 <br />[b] `throttle.enabled=false` 时保留 HTTP / gRPC / admin 的 `throttle` 中间件，关闭状态下恒放行，并跳过限流单例与采样回路初始化 <br />[c] Endpoint 归类改为 receiver 侧注册，OTLP、RemoteWrite、Pyroscope 复用本地路由常量 <br />[d] 使用 Go `1.23.0` 执行限流定向测试、`go test ./internal/... ./receiver/...` 与 `go test ./...` 通过 <br />[e] `2` 位复核 Agent 按 throttle 白名单复查后同意合入，样例配置、`go.mod`、`go.sum` 等非本任务改动不纳入本次验收。 |
 | `2026-06-18 15:00` | 收敛观测指标协议：<br />[a] 水位统一用 `bk_collector_throttle_water_level{kind}` 承载原始 CPU / 内存水位、CPU 快慢信号和阈值线 <br />[b] 请求量统一用 `bk_collector_throttle_requests_total{decision}` 承载 `allowed` / `denied`，不再单独按 `shed` / `open` 拆丢弃量。 |
 | `2026-06-17` | 方案 B 定稿并收敛第一期范围 <br />[a] 确立「CPU 主限流、内存做熔断」，落到 `ResourceSampler` 与 `ThrottleManager` 两单例，cgroup 直读取数单一基准 VM `lib/cgroup`、EWMA 对齐 RFC 6298，go-zero `core/stat` 仅作 CPU 速率公式对齐 <br />[b] 移除 GOMEMLIMIT 软背压与配置热重载，内存只留硬熔断、配置仅启动期加载 <br />[c] 限流粒度由 Endpoint 改为数据类型（traces/metrics/logs/profiles）、每类一台状态机，端点用预先注册映射表归类（准确路径如 `/v1/traces`、`/prometheus/write`、`/pyroscope/ingest`） <br />[d] 配置收敛为 signal / thresholds / rules 三层：阈值全局共用（`cpu_enter`/`cpu_exit`/`cpu_hard`/`mem_hard`/`breach_n`），每类只调 `drop_min`/`drop_max`，丢弃概率在 `cpu_enter`～`cpu_hard` 线性插值，`enabled: false` 整类豁免，指标标签按 `record_type` <br />[e] 验收含单测门禁、Go 压测工具（collector example 目录、单独编译二进制）与 OrbStack 集成口径 |
 
 ---
 
-## 0x08 参考 & 版本锚点
+## 0x09 参考 & 版本锚点
 
 ### a. 参考
+
+基础口径：
+
+- CPU limit 与内核节流：[Kubernetes Resource Management for Pods and Containers](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/)
+- cgroup v2 CPU 配额：[Linux kernel cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html)
+- CFS 配额 / 周期模型：[Linux kernel CFS Bandwidth Control](https://docs.kernel.org/scheduler/sched-bwc.html)
 
 业界实现（算法与获取层借鉴出处）：
 
