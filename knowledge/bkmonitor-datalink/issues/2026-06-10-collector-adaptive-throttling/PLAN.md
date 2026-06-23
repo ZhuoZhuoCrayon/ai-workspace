@@ -737,21 +737,90 @@ rules:
 
 沿用 `bk_collector_*` 命名加 `promauto` 加 `metricMonitor` 模式（参照 [<源码> receiver/metrics.go](https://github.com/TencentBlueKing/bkmonitor-datalink/blob/master/pkg/collector/receiver/metrics.go)）。
 
-自适应限流只暴露水位、状态机状态和请求量 `3` 类指标。
+| 指标                                     | 类型      | 标签                                  | 用途                                                                                                                    |
+|----------------------------------------|---------|-------------------------------------|-----------------------------------------------------------------------------------------------------------------------|
+| `bk_collector_throttle_water_level`    | gauge   | `kind`                              | 水位与阈值线，`kind` 取 `cpu`、`cpu_slow`、`cpu_fast`、`mem`、`cpu_enter`、`cpu_exit`、`cpu_hard`、`mem_enter`、`mem_exit`、`mem_hard` |
+| `bk_collector_throttle_state`          | gauge   | `record_type`                       | 状态机当前态（`0` Normal、`1` Shedding、`2` Open）                                                                              |
+| `bk_collector_throttle_requests_total` | counter | `protocol`、`record_type`、`decision` | 请求量，`decision` 取 `allowed`、`denied`                                                                                   |
 
-| 指标                                      | 类型      | 标签                                  | 用途                                                                                                                              |
-|-----------------------------------------|---------|-------------------------------------|---------------------------------------------------------------------------------------------------------------------------------|
-| `bk_collector_throttle_water_level`     | gauge   | `kind`                              | 水位与阈值线，`kind` 取 `cpu`、`cpu_slow`、`cpu_fast`、`mem`、`cpu_enter`、`cpu_exit`、`cpu_hard`、`mem_enter`、`mem_exit`、`mem_hard` |
-| `bk_collector_throttle_state`           | gauge   | `record_type`                       | 状态机当前态（`0` Normal、`1` Shedding、`2` Open）                                                                                       |
-| `bk_collector_throttle_requests_total`  | counter | `protocol`、`record_type`、`decision` | 请求量，`decision` 取 `allowed`、`denied`                                                                                            |
-
-- `cpu` 与 `mem` 表示当前原始水位，`cpu_slow` 与 `cpu_fast` 表示 EWMA 平滑后的 CPU 慢、快信号；内存只暴露原始水位，不做 EWMA。
-- 阈值线的观测标签继续沿用 `cpu_enter`、`cpu_exit`、`cpu_hard`、`mem_enter`、`mem_exit`、`mem_hard` 扁平值。这些 label 只用于看板兼容；配置协议仍以 `receiver.throttle.thresholds.cpu` / `receiver.throttle.thresholds.mem` 为准。
-- `denied` 统一表示被自适应限流拒绝的请求，拒绝原因通过当时的 `bk_collector_throttle_state` 反查。
 
 ---
 
-## 0x06 验收与验证
+## 0x06 高可用保障方案
+
+### a. sampler 抗抢占改造
+
+CPU 满载场景下，sampler 上报的内存水位显著低于容器真实使用率。最劣样本里真实水位已经 `92%`、sampler 还报 `43%`，离 `mem.enter` 阈值还远。
+
+根因是 sampler goroutine 与请求路径共用 CPU 时间片：CPU 长时间触顶容器配置触发 CFS 节流后，采样任务执行延迟从 `250ms` 拉到秒级，感知不到内存突增。
+
+| 指标 | `10:00`～`11:00` CST *[1]* | `18:32`～`19:15` CST *[2]* |
+| --- | ---: | ---: |
+| Sampler 模块内存水位未及时更新次数 *[3]* | `11` 次 | `0` 次 |
+| 最劣样本（真实水位 → sampler 上报） | `92% → 43%` | — |
+
+- *[1] pod `bkm-collector-86c45f8899-vpsln`，CPU 熔断阈值未调，期间多次 OOMKilled。*
+- *[2] pod `bkm-collector-69cddbdcbc-tqwjl`，CPU 熔断阈值调低后，未触发 OOM。*
+- *[3] 将 CPU 熔断阈值下调后，采样卡顿从 `11` 次直接清 `0`。*
+
+**改造点**
+
+| 项 | 现状 | 改造 |
+| --- | --- | --- |
+| 独占 OS 线程 | sampler goroutine 与请求 goroutine 共享 P / M | `runtime.LockOSThread()` |
+| 周期补偿 | `time.NewTicker` 滴答事件可被合并丢失 | [a] `time.Until(next)` 显式自调度 <br />[b] 落后超过 `5 × interval` 时重置基线，避免连续追 tick |
+| 零分配 tick | `os.ReadFile` 每次分配新 slice，给 GC 加压 | [a] `Reader` 协议新增 `<Method>Into(buf []byte)` 零拷贝读法 <br />[b] 实现切换为 `os.OpenFile + Read(into buf)`，替换 `os.ReadFile` <br />[c] `usageBuf` / `statBuf` / `limitBuf` 在 `NewResourceSampler` 一次性分配复用 |
+
+[<源码> internal/throttle/sampler.go](https://github.com/TencentBlueKing/bkmonitor-datalink/blob/master/pkg/collector/internal/throttle/sampler.go) 的 `Start` 改写为：
+
+```go
+func (s *ResourceSampler) Start() {
+    go func() {
+        runtime.LockOSThread()
+        defer runtime.UnlockOSThread()
+        defer close(s.doneCh)
+
+        interval := s.config.SampleInterval
+        next := time.Now().Add(interval)
+        for {
+            select {
+            case <-s.stopCh:
+                return
+            default:
+            }
+
+            tickStart := time.Now()
+            s.tickAt(tickStart)
+            if !s.lastTickAt.IsZero() {
+                observeSamplerInterval(tickStart.Sub(s.lastTickAt))
+            }
+            observeSamplerDuration(time.Since(tickStart))
+            s.lastTickAt = tickStart
+
+            if sleep := time.Until(next); sleep > 0 {
+                time.Sleep(sleep)
+            }
+            next = next.Add(interval)
+            if behind := time.Since(next); behind > 5*interval {
+                next = time.Now().Add(interval)
+            }
+        }
+    }()
+}
+```
+
+**采样可观测**
+
+| 指标                                               | 类型        | 用途                                                                                                                        |
+|--------------------------------------------------|-----------|---------------------------------------------------------------------------------------------------------------------------|
+| `bk_collector_throttle_sampler_interval_seconds` | histogram | [a] 相邻两次采样的实际间隔 <br />[b] buckets `0.1` `0.25` `0.5` `1` `2` `5` `10` `30` 秒 <br />[c] p99 收敛在 `2 × sample_interval` 内为正常 |
+| `bk_collector_throttle_sampler_duration_seconds` | histogram | [a] 单次采样内 cgroup 读取与水位计算耗时 <br />[b] buckets `0.001` `0.005` `0.01` `0.05` `0.1` `0.25` `0.5` `1` 秒                       |
+
+* *[1] `sampler_interval_seconds` p99 超过 `5 × sample_interval` 视为 sampler 被严重抢占。*
+
+---
+
+## 0x07 验收与验证
 
 验证分三层：单测锁定取数与决策正确，压测在受限容器验证端到端丢弃，集成验证真实 collector 平稳运行。
 
@@ -807,7 +876,7 @@ rules:
 
 ---
 
-## 0x07 基准压测
+## 0x08 基准压测
 
 ### a. 配置
 
@@ -916,7 +985,7 @@ receiver:
 
 ---
 
-## 0x08 实施进展
+## 0x09 实施进展
 
 | 时间 | 结论性进展 |
 | --- | --- |
@@ -928,7 +997,7 @@ receiver:
 
 ---
 
-## 0x09 参考 & 版本锚点
+## 0x10 参考 & 版本锚点
 
 ### a. 参考
 
