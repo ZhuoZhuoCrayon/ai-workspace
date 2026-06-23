@@ -1,10 +1,10 @@
 ---
 title: bk-collector 自适应限流方案
 tags: [collector, throttling, load-shedding, overload-protection, cgroup, k8s]
-description: 以容器 cgroup 真实水位驱动按数据类型分级的有损降级，CPU 主限流，内存走软线分级与硬线熔断，落在 HTTP / gRPC 入口的统一限流器
+description: 以容器 cgroup 真实水位驱动按数据类型分级有损降级，CPU 与内存阈值计数收敛为通用信号 slot，落在 HTTP / gRPC 入口的统一限流器
 issue: knowledge/bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/README.md
 created: 2026-06-10
-updated: 2026-06-22
+updated: 2026-06-23
 ---
 
 # bk-collector 自适应限流方案
@@ -16,19 +16,17 @@ updated: 2026-06-22
 bk-collector 被突发流量打满 CPU、内存而崩溃，崩溃后重启又被堆积重试二次压垮，导致持续 OOM。
 
 现有限流（QPS、`maxconns`、`maxbytes`）效果不佳：
-* Traces 等数据类型攒批发送，单个包 5 MB、100 QPS 未超限仍然能产生 500 MB / s 的流量。
+* Traces 等数据类型攒批发送，单个包 5 MB、100 QPS 未超限仍然能产生 500 MB/s 的流量。
 * 限流不够精细，按数据类型（traces / metrics / logs / profiles）分级主动丢请求，主动拒绝部分数据，保障高优数据类型。
 
 ### b. 选型结论
 
-CPU 水位平滑分级丢弃为主体，内存软线分级保压、硬线熔断保命。
+CPU 水位平滑分级丢弃为主体，内存沿用同一套阈值 slot：CPU 提供慢、快两路信号，内存把同一个原始水位同时作为 slow 和 fast。
 
-| 信号              | 角色    | 触发动作                       |
-|-----------------|-------|----------------------------|
-| CPU 水位（慢信号）     | 主限流   | 按数据类型概率丢弃，优雅降级。            |
-| CPU 水位（快信号）     | CPU 跳闸 | 连续 N 次超过设定阈值熔断。            |
-| 内存使用率（不含 Cache） | 保压分级  | 连续 N 次越线参与按概率丢弃，提前给 Go 留 GC 空间。 |
-| 内存使用率（不含 Cache） | 保命熔断  | 单次越线即熔断，抢在内核 OOM 前止血。       |
+| 信号 slot | 输入 | 角色 | 触发动作 |
+| --- | --- | --- | --- |
+| `thresholds.cpu` | `slow=cpuSlow`、`fast=cpuFast` | 主限流与 CPU 跳闸 | `slow` 连续越 enter 线后分级丢弃，`fast` 连续越 hard 线后熔断。 |
+| `thresholds.mem` | `slow=mem`、`fast=mem` | 内存保压与保命 | 同样走 enter / exit / hard / `breach_n`，默认可把 `breach_n` 配成 `1`，抢在内核 OOM 前止血。 |
 
 
 ### c. 硬约束（来自现状代码）
@@ -67,20 +65,20 @@ CPU 水位平滑分级丢弃为主体，内存软线分级保压、硬线熔断�
 为什么内存要拆软、硬两条线？
 
 - 单纯依赖硬线追不上 Go runtime 的回收节奏，工作集冲到熔断线时往往已经晚了一拍。
-- 软线 `mem_enter` / `mem_exit` 让内存压力一抬头就开始按概率丢，给 GC 留出回收窗口。
-- 硬线 `mem_hard` 只做兜底，一旦命中就全拒，抢在内核 OOM 之前止血（参考 Envoy overload manager 的堆压力门控）。
+- 软线 `mem.enter` / `mem.exit` 让内存压力一抬头就开始按概率丢，给 GC 留出回收窗口。
+- 硬线 `mem.hard` 只做兜底，一旦命中就全拒，抢在内核 OOM 之前止血（参考 Envoy overload manager 的堆压力门控）。
 
 ### c. 核心对象模型
 
 采样慢回路与决策快回路解耦：背景每 `250 ms` 采样、原子发布水位，请求路径只做原子读与概率判定，每请求不碰 `/sys/fs/cgroup` 与 `/proc`。
 
 容量负载采样与限流决策解耦：
-* 采样：每 `250ms` 采样 CPU、内存容量负载，更新负载水位，并推动状态机更新。
+* 采样：每 `250 ms` 采样 CPU、内存容量负载，更新负载水位，并推动状态机更新。
 * 限流决策：根据状态按比例进行流控。
 
 ```mermaid
 flowchart LR
-    subgraph BG["容量负载采样（250ms）"]
+    subgraph BG["容量负载采样（250 ms）"]
         CG["cgroup.Reader<br/>读伪文件 + 按配额归一化"] --> S["ResourceSampler<br/>CPU%/Mem% + EWMA 快慢两路"]
         S -->|原子发布| WL["WaterLevel<br/>(cpu, cpuSlow, cpuFast, mem)"]
         S --> ST["更新每数据类型状态机<br/>Normal / Shedding / Open"]
@@ -104,75 +102,86 @@ flowchart LR
 | `ResourceSampler` | 按周期采样，预处理负载信号并推进状态机                                                                      |
 | `WaterLevel`      | 不可变水位快照，含原始 CPU / 内存水位、CPU 快慢信号；内存只暴露原始读数，软硬线判定都直接吃这一份                                  |
 | `classify`        | 维护「路由 → 数据类型」注册表，receiver 用本地路由常量声明参与限流的 HTTP 路径 / gRPC 全方法名，未命中放行                       |
-| `ThrottleManager` | 持有限流策略、状态机，负责决策当前请求是否执行流控                                                                |
+| `ThrottleManager` | 持有限流策略、每数据类型状态机与最新水位，负责决策当前请求是否执行流控                                                   |
 | `Rule`            | 单数据类型的丢弃强度（`drop_min` / `drop_max`、`enabled`），阈值全局共用                                     |
 | `Decision`        | 限流决策：通过、按比例流控降级、熔断                                                                       |
 
+`stateSlot` 与 `recordState` 是 `ThrottleManager` 的内部状态模型，不作为采样、路由、请求路径之间的独立协作组件。前者承载单个资源信号的连续计数，后者承载单个数据类型的三态机。
+
 ### d. 决策状态机
 
-按数据类型新建状态机，每次执行采样后推进状态转移：
+每个数据类型仍只有一台三态机。采样帧先被整理成若干有效信号槽，每个信号槽都有 `slow`、`fast`、`enter`、`exit`、`hard` 和 `breach_n`。状态机不关心信号来自 CPU 还是内存，只按 OR / AND 聚合这些槽的判断结果。
+
+CPU 与内存只在信号映射上不同：
+
+| 信号槽 | slow 输入 | fast 输入 | valid 语义 | 默认连续门控 |
+| --- | --- | --- | --- | --- |
+| `cpu` | `WaterLevel.CPUSlow` | `WaterLevel.CPUFast` | CPU 采样成功后持续有效 | `3` |
+| `mem` | `WaterLevel.Mem` | `WaterLevel.Mem` | `MemValid=false` 时跳过该 slot，视为安全 | `1` |
+
+禁用或无效信号槽不参与进入、熔断和丢弃概率计算，也不阻塞退出。这样内存读不到 cgroup limit 时，系统退化为纯 CPU 限流，不会因为无效内存值误丢。
 
 ```mermaid
-stateDiagram-v2
-    state "Normal 正常：只采样不丢" as Normal
-    state "Shedding 分级丢弃：按 p_drop 概率丢" as Shedding
-    state "Open 熔断：全拒，等回落" as Open
-    [*] --> Normal
-    Normal --> Shedding: cpuSlow > cpu_enter 连续 N 次<br />或 mem > mem_enter 连续 N 次
-    Shedding --> Normal: cpuSlow < cpu_exit 连续 N 次<br />且 mem < mem_exit 连续 N 次
-    Normal --> Open: cpuFast ≥ cpu_hard 连续 N 次<br />或 mem ≥ mem_hard
-    Shedding --> Open: cpuFast ≥ cpu_hard 连续 N 次<br />或 mem ≥ mem_hard
-    Open --> Shedding: (cpuFast < cpu_hard 且 mem < mem_hard) 连续 N 次<br />且 (cpuSlow > cpu_exit 或 mem > mem_exit)
-    Open --> Normal: (cpuFast < cpu_hard 且 mem < mem_hard) 连续 N 次<br />且 cpuSlow ≤ cpu_exit 且 mem ≤ mem_exit
+flowchart TD
+    Start((开始)) --> Normal["Normal 正常：只采样不丢"]
+    Normal -- "[OR] 连续 N 次：slow > enter（分级阈值）[1]" --> Shedding["Shedding 分级丢弃：按 p_drop 概率丢"]
+    Shedding -- "[AND] 连续 N 次：slow < exit（正常阈值）[2]" --> Normal
+    Normal -- "[OR] 连续 N 次：fast >= hard（熔断阈值）[3]" --> Open["Open 熔断：全拒，等 hard 回落"]
+    Shedding -- "[OR] 连续 N 次：fast >= hard（熔断阈值）[3]" --> Open
+    Open -- "[AND] 连续 N 次：fast < hard（熔断阈值）[4]" --> OpenExit{"退出判定"}
+    OpenExit -- "[OR] 当前帧：slow > exit（仍处于分级区间）[5]" --> Shedding
+    OpenExit -- "[AND] 当前帧：slow <= exit（正常阈值）[5]" --> Normal
 ```
 
-| 状态                       | 请求路径动作                            | 进入条件                                                                                                                                |
-|--------------------------|-----------------------------------|-------------------------------------------------------------------------------------------------------------------------------------|
-| `Normal（正常）`             | 全部放行                              | [a] 初始态 <br />[b] 自 `Shedding`：`cpuSlow` *[1]* 连续 `breach_n` 次跌回 `cpu_exit`，且 `mem` 连续 `breach_n` 次跌回 `mem_exit` <br />[c] 自 `Open`：`cpuFast` 与 `mem` 同时低于各自硬线连续 `breach_n` 次，且 `cpuSlow` ≤ `cpu_exit`、`mem` ≤ `mem_exit` |
-| `Shedding（Half-Open，半开）` | 按 `p_drop(max(t_cpu, t_mem))` 概率丢 | [a] `cpuSlow` 连续 `breach_n` 次越 `cpu_enter` <br />[b] `mem` 连续 `breach_n` 次越 `mem_enter` <br />[c] 自 `Open`：`cpuFast` 与 `mem` 同时低于各自硬线连续 `breach_n` 次，但仍有软线越 enter 线 |
-| `Open（跳闸）`               | 熔断                                | [a] `cpuFast` *[2]* 连续 `breach_n` 次越 `cpu_hard` <br />[b] `mem` 单次越 `mem_hard`                                                        |
+| 状态 | 请求路径动作 | 转移语义 |
+| --- | --- | --- |
+| `Normal（正常）` | 全部放行 | 初始态；任一有效信号槽满足分级阈值后进入 `Shedding`。 |
+| `Shedding（分级丢弃）` | 按 `p_drop(max(t_slot...))` 概率丢 | 只要任一有效信号槽满足熔断阈值，就进入 `Open`；全部有效信号槽满足正常阈值后回到 `Normal`。 |
+| `Open（跳闸）` | 熔断 | 先等待全部参与判定的信号槽满足熔断恢复阈值；离开 `Open` 后，再按 soft 水位落到 `Shedding` 或 `Normal`。 |
 
-- *[1] cpuSlow（慢信号）：CPU 使用率经 `cpu_slow_beta` EWMA 平滑后的水位，吸收单点抖动。*
-- *[2] cpuFast（快信号）：CPU 使用率经 `cpu_fast_beta` EWMA 平滑后的水位，更贴近突发尖刺。*
-- *[3] 内存只读原始水位，不做 EWMA：避免平滑掩盖逼近 OOM 的真实压力，原因见 `0x05 b`。*
+- *[1] 分级进入是 OR：任一有效信号槽的 `slow > enter` 连续达到自己的 `breach_n`，状态机进入 `Shedding`。*
+- *[2] `Shedding` 正常退出是 AND：全部有效信号槽的 `slow < exit` 连续达到各自 `breach_n`，状态机回到 `Normal`。*
+- *[3] 熔断进入是 OR：任一有效信号槽的 `fast >= hard` 连续达到自己的 `breach_n`，状态机进入 `Open`。*
+- *[4] 熔断恢复是 AND：全部参与判定的信号槽满足 `fast < hard`，且连续达到各自 `breach_n` 后才允许退出 `Open`；禁用或无效信号槽视为安全。*
+- *[5] `Open` 的落点判定只看当前 soft 水位：任一有效信号槽仍 `slow > exit` 则落到 `Shedding`，全部有效信号槽都 `slow <= exit` 才回 `Normal`。*
 
 把 CPU 三条阈值线、滞回带与快慢两路信号落到同一时间轴，对照状态机看转移时机：
 
 ```text
 水位
 0.95 |                  /\                  快信号 fast（β=0.7）：灵敏，抢先冲顶
-0.90 |=================/  \==============   硬线 cpu_hard：fast 越线且连续 N 次 → Open 全拒
+0.90 |=================/  \==============   硬线 cpu.hard：fast 越线且连续 cpu.breach_n 次 → Open 全拒
      |        ________/    \________        慢信号 slow（β=0.95）：平滑，不贴线抖
-0.80 |-------/----------------------\----   进入线 cpu_enter：slow 升过 → Shedding 按 p_drop 概率丢
-     |      /                        \      （0.70～0.80 为滞回带 [1]：升过 0.80 才丢、跌回 0.70 才停）
-0.70 |-----/--------------------------\--   退出线 cpu_exit：slow 跌回 → 停丢
+0.80 |-------/----------------------\----   进入线 cpu.enter：slow 升过 → Shedding 按 p_drop 概率丢
+     |      /                        \      （0.70～0.80 为滞回带：升过 0.80 才丢、跌回 0.70 才停）
+0.70 |-----/--------------------------\--   退出线 cpu.exit：slow 跌回 → 停丢
      |.:*:.                            .:*. 原始采样（抖）经 EWMA 平滑成上面两条曲线
      +----+----------+------+-----------+-→ 时间
         Normal    Shedding  Open    → Normal
 ```
 
-- *[1] CPU 滞回带（`0.70`～`0.80`）防抖，让分级进退不在单一阈值上横跳。*
+CPU 滞回带（`0.70`～`0.80`）防抖，让分级进退不在单一阈值上横跳。
 
 内存信号沿用同样的滞回带与连续门控，只是不做 EWMA：
 
 ```text
 水位
-0.92 |       /\                              硬线 mem_hard：原始水位单次越线 → Open 全拒
-0.85 |======/= \=============                进入线 mem_enter：连续 N 次越线 → Shedding 参与按概率丢
-     |     /    \________                    （0.78～0.85 为滞回带 [1]：升过 0.85 才丢、跌回 0.78 才停）
-0.78 |----/-------------\----                退出线 mem_exit：连续 N 次跌回 → 停丢
+0.92 |       /\                              硬线 mem.hard：fast=mem 越线且连续 mem.breach_n 次 → Open 全拒
+0.85 |======/= \=============                进入线 mem.enter：slow=mem 连续 mem.breach_n 次越线 → Shedding 参与按概率丢
+     |     /    \________                    （0.78～0.85 为滞回带：升过 0.85 才丢、跌回 0.78 才停）
+0.78 |----/-------------\----                退出线 mem.exit：slow=mem 连续 mem.breach_n 次跌回 → 停丢
      |.:*:.              .:*.                原始水位 mem（不做 EWMA，直接吃 working set）
      +----+----------+------+-→ 时间
         Normal   Shedding  Open → Normal
 ```
 
-- *[1] 内存滞回带（`0.78`～`0.85`）防抖，与 `breach_n` 配合避开毛刺触发误丢。*
+内存滞回带（`0.78`～`0.85`）防抖。`mem.breach_n` 同时控制内存软线、硬线和 hard clear；当前保命策略建议缺省 `1`，需要过滤毛刺时只调配置值，不改状态机。
 
 ### e. 限流位置
 
 1）HTTP：
 * 放在 `content_decompressor` 之前，不提前解压。
-* 按 `r.URL.Path` 归类数据类型后判定，丢弃返回 `429` 加 `Retry-After`、
+* 按 `r.URL.Path` 归类数据类型后判定，丢弃返回 `429`，并写入 `0`～`30` 秒随机 `Retry-After`。
 
 
 2）gRPC：
@@ -384,7 +393,7 @@ cgroup v2 的 [`memory.stat sock`](https://docs.kernel.org/admin-guide/cgroup-v2
 
 ## 0x05 开发方案
 
-0x02 的两个单例与解耦边界落到新包 `pkg/collector/internal/throttle/`，HTTP 与 gRPC 各加薄适配层，既有 receiver 只动两处，pipeline 与 processor 零改动。
+0x02 的采样回路、决策器和状态组合边界落到新包 `pkg/collector/internal/throttle/`，HTTP 与 gRPC 各加薄适配层，既有 receiver 只动两处，pipeline 与 processor 零改动。
 
 | 文件 · 位置                                      | 改动                                                                                        |
 |----------------------------------------------|-------------------------------------------------------------------------------------------|
@@ -465,7 +474,7 @@ s_t = (1 - β) · x_t + β · s_{t-1}
 
 - 内存是水位量、不是速率量，单次采样已可信，平滑反而会抹掉真实压力。
 - 平滑后的内存水位会把临近 OOM 的尖峰拉低，让硬线晚一拍才触发，错过止血窗口。
-- 软线 `mem_enter` / `mem_exit` 的抗毛刺由滞回带与 `breach_n` 承担，不需要再叠一层平滑。
+- 内存软线的抗毛刺由 `thresholds.mem` 的滞回带和 `breach_n` 承担，不需要再叠一层平滑。
 
 ### c. ResourceSampler：采样回路
 
@@ -476,13 +485,62 @@ s_t = (1 - β) · x_t + β · s_{t-1}
 协议骨架：
 
 ```go
-type WaterLevel struct{ CPU, CPUSlow, CPUFast, Mem float64 }
+type WaterLevel struct {
+    CPU      float64
+    CPUSlow  float64
+    CPUFast  float64
+    Mem      float64
+    MemValid bool
+}
 
 func (s *ResourceSampler) Level() *WaterLevel   // 原子读，请求路径用
 func (s *ResourceSampler) tick()                // 周期回调：采样 + EWMA + 状态机 + 发布
 ```
 
-### d. 决策
+### d. 状态计数
+
+`stateSlot` 只保存阈值配置和连续命中计数，不保存本帧信号。`valid`、`slow`、`fast` 是 `Tick` 的入参。
+
+```go
+type stateSlot struct {
+    enabled bool
+    enter   float64
+    exit    float64
+    hard    float64
+    breachN int
+
+    enterHits     int
+    exitHits      int
+    hardHits      int
+    hardClearHits int
+}
+
+func (s *stateSlot) Tick(slow, fast float64, valid bool)
+func (s *stateSlot) EnterReached() bool
+func (s *stateSlot) ExitReached() bool
+func (s *stateSlot) HardReached() bool
+func (s *stateSlot) HardCleared() bool
+func (s *stateSlot) Ratio(slow float64, valid bool) float64
+func (s *stateSlot) ResetEnterHits()
+func (s *stateSlot) ResetExitHits()
+```
+
+`ThrottleManager` 按数据类型持有 `recordState`，每个 `recordState` 只保存状态和信号槽集合：
+
+```go
+type ThrottleManager struct {
+    states map[define.RecordType]*recordState
+}
+
+type recordState struct {
+    state State
+    slots map[string]*stateSlot
+}
+```
+
+`Open` 退出直接复用全部参与判定信号槽的 `HardCleared()` 结果。禁用或无效信号槽在 `Tick` 中视为安全，不阻塞 hard 恢复门控。
+
+### e. 决策
 
 `ThrottleManager` 是单例决策者，HTTP 与 gRPC 适配层只把请求归类后调 `Decide`，自身不持有状态。
 
@@ -494,21 +552,20 @@ type Action uint8 // Admit / Shed / Open
 // rt 复用 collector 既有 define.RecordType，仅 traces/metrics/logs/profiles 四类参与限流
 func (m *ThrottleManager) Decide(rt define.RecordType) Action
 // Open      -> 全拒
-// Shed      -> 以 p_drop(max(t_cpu, t_mem)) 概率丢，否则放行（公式见下）
+// Shed      -> 以 p_drop(max(t_slot...)) 概率丢，否则放行（公式见下）
 // Admit     -> 放行（含该类型 enabled=false，恒放行）
 ```
 
-**丢弃概率**：`Shed` 态先把 CPU 与内存各自归一化到 `[0, 1]`，再取最大值喂给同一组 `drop_min`～`drop_max`。
+**丢弃概率**：`Shed` 态把每个有效 slot 的 slow 水位归一化到 `[0, 1]`，再取最大值喂给同一组 `drop_min`～`drop_max`。
 
 ```text
-t_cpu  = clamp((cpu_slow - cpu_enter) / (cpu_hard - cpu_enter), 0, 1)
-t_mem  = clamp((mem - mem_enter) / (mem_hard - mem_enter), 0, 1)
-t      = max(t_cpu, t_mem)
+t_slot = slot.Ratio(slow, valid)
+t      = max(t_slot...)
 p_drop = drop_min + (drop_max - drop_min) * t
 ```
 
-- 任一信号都没越线时 `t = 0`，按 `drop_min` 兜底（缺省 `0`，等价不丢）。
-- 任一信号顶到对应硬线时 `t = 1`，取 `drop_max`（缺省 `1`，等价 `Open` 前兆）。
+- 任一有效信号都没越线时 `t = 0`，按 `drop_min` 兜底（缺省 `0`，等价不丢）。
+- 任一有效信号顶到对应 hard 线时 `t = 1`，取 `drop_max`（缺省 `1`，等价 `Open` 前兆）。
 - 取最大值表示「谁更紧就听谁的」，避免单看 CPU 时内存先 OOM、单看内存时 CPU 先卡死。
 
 **端点归类**：`classify` 只维护「路由 → 数据类型」注册表，具体端点由对应 receiver 在 `init` 中用本地路由常量登记。
@@ -547,14 +604,14 @@ sequenceDiagram
 - `New` 早于 `Start`，单例在工厂执行前已就绪。
 - `enabled=false` 时仍保留中间件，`GlobalManager` 返回 disabled manager 后恒放行，不拉起负载采样回路。
 
-### e. HTTP 挂载
+### f. HTTP 挂载
 
 工厂忽略 optmap 串，绑定 `throttle.Manager()` 单例，按 `r.URL.Path` 归类后判定。
 
 ```go
 func Throttle(_ string) MiddlewareFunc
 // a := Manager().Decide(classify(r.URL.Path))
-//   Open / Shed 命中丢弃 -> 写 429 + Retry-After 后 return（不读 body）
+//   Open / Shed 命中丢弃 -> 写 429 + Retry-After(`0`～`30` 秒随机) 后 return（不读 body）
 //   Admit              -> next.ServeHTTP(w, r)
 ```
 
@@ -563,7 +620,7 @@ func Throttle(_ string) MiddlewareFunc
 - 列表末项裹在最外层、最先执行，`throttle` 列在 `content_decompressor` 之后即位于其外层。
 - 请求先过限流再解压，丢弃落在解压前，省掉无谓的解压与反序列化开销。
 
-### f. gRPC 挂载
+### g. gRPC 挂载
 
 工厂产出 `grpc.InTapHandle`，在读消息体前按 `info.FullMethodName` 判定。
 
@@ -578,9 +635,13 @@ func Throttle(_ string) grpc.ServerOption
 - `InTapHandle` 是 gRPC 最省 CPU 的拒绝点，unary 与 streaming 都在首帧判定，一处即覆盖。
 - grpc-go 限定每个 server 只一个 tap，重复注册会 panic，与既有 `maxbytes`（`grpc.MaxRecvMsgSize`）互不冲突。
 
-### g. 配置协议
+### h. 配置协议
 
 新增结构化 `receiver.throttle` 配置块，按 signal / thresholds / rules 三层承载，中间件列表里只放占位项 `throttle`，解决 optmap 装不下的矛盾。
+
+`thresholds` 采用资源名分组，每组都是同一个 threshold slot 协议。CPU 与内存的差异放在输入映射和默认值里，不在状态机里分叉。
+
+配置层只开放 `cpu`、`mem` 两个具名资源，不做任意信号插件注册；通用化只发生在实现层的 `stateSlot` 计数逻辑里。
 
 最小配置示例：
 
@@ -606,13 +667,18 @@ receiver:
       cpu_fast_beta: 0.7                 # 快信号 EWMA，熔断；内存不做 EWMA
       fallback_cores: 0                  # 0 取 define.CoreNum()
     thresholds:                          # 全局共用，不按类型区分
-      cpu_enter: 0.80                    # CPU 慢信号越线连续 N 次 → 开始分级丢
-      cpu_exit: 0.70                     # CPU 慢信号回落连续 N 次 → 停丢（与 cpu_enter 成滞回带）
-      cpu_hard: 0.90                     # CPU 快信号越线连续 N 次 → 全拒
-      mem_enter: 0.85                    # 内存原始水位越线连续 N 次 → 开始分级丢
-      mem_exit: 0.78                     # 内存原始水位回落连续 N 次 → 停丢（与 mem_enter 成滞回带）
-      mem_hard: 0.92                     # 内存原始水位单次越线 → 全拒
-      breach_n: 2                        # 仅作用于 enter / exit / cpu_hard，mem_hard 单次即触发
+      cpu:
+        enabled: true
+        enter: 0.80                      # slow=cpuSlow 连续 breach_n 次越线 → 开始分级丢
+        exit: 0.70                       # slow=cpuSlow 连续 breach_n 次回落 → 停丢
+        hard: 0.90                       # fast=cpuFast 连续 breach_n 次越线 → 全拒
+        breach_n: 3
+      mem:
+        enabled: true
+        enter: 0.85                      # slow=mem 连续 breach_n 次越线 → 开始分级丢
+        exit: 0.78                       # slow=mem 连续 breach_n 次回落 → 停丢
+        hard: 0.92                       # fast=mem 连续 breach_n 次越线 → 全拒；保命策略建议默认 1
+        breach_n: 1
     rules:                               # 按数据类型只调丢弃强度
       default: { drop_min: 0.0, drop_max: 1.0 }
       metrics: { enabled: false }        # metrics 永不限流（取舍见下）
@@ -625,7 +691,7 @@ receiver:
 | `throttle.enabled`         | `bool`     | 是  | 总开关，关闭则中间件直接放行                                                             |
 | `throttle.sample_interval` | `duration` | 否  | 采样周期，缺省 `250ms`                                                            |
 | `throttle.signal`          | `object`   | 否  | 信号采样参数，见 `signal` 子结构                                                      |
-| `throttle.thresholds`      | `object`   | 是  | 全局阈值，所有数据类型共用，见 `thresholds` 子结构                                           |
+| `throttle.thresholds`      | `object`   | 是  | 全局阈值，所有数据类型共用，按资源信号分组，见 `thresholds.<signal>` 子结构                             |
 | `throttle.rules`           | `object`   | 否  | 按数据类型调丢弃强度，键限 `default`、`traces`、`metrics`、`logs`、`profiles`，见 `rules` 子结构 |
 
 `throttle.signal` 子结构：
@@ -636,40 +702,38 @@ receiver:
 | `cpu_fast_beta`  | `float` | 否  | 快信号 EWMA 历史权重，缺省 `0.7`              |
 | `fallback_cores` | `float` | 否  | 配额未设时的有效核数，`0` 取 `define.CoreNum()` |
 
-`throttle.thresholds` 子结构（全局共用）：
+`throttle.thresholds.<signal>` 子结构（当前支持 `cpu`、`mem`）：
 
-| 字段          | 类型      | 必填 | 说明                                                |
-|-------------|---------|----|---------------------------------------------------|
-| `cpu_enter` | `float` | 是  | CPU 慢信号进入线，连续 `breach_n` 次越线进入 `Shedding`            |
-| `cpu_exit`  | `float` | 是  | CPU 慢信号退出线，连续 `breach_n` 次回落退出 `Shedding`，与 `cpu_enter` 成滞回带 |
-| `cpu_hard`  | `float` | 是  | CPU 快信号硬熔断线，连续 `breach_n` 次越线进入 `Open`               |
-| `mem_enter` | `float` | 是  | 内存软进入线，连续 `breach_n` 次越线进入 `Shedding`                 |
-| `mem_exit`  | `float` | 是  | 内存软退出线，连续 `breach_n` 次回落退出 `Shedding`，与 `mem_enter` 成滞回带 |
-| `mem_hard`  | `float` | 是  | 内存硬熔断线，单次越线即进入 `Open`，抢在内核 OOM 之前止血                 |
-| `breach_n`  | `int`   | 否  | 连续越界次数门控，缺省 `2`，仅作用于 enter / exit / `cpu_hard`，`mem_hard` 单次即触发 |
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `enabled` | `bool` | 否 | 缺省 `true`；置 `false` 后该信号不参与进入、退出、熔断和丢弃概率计算。 |
+| `enter` | `float` | 是 | slow 信号进入线，连续 `breach_n` 次越线进入 `Shedding`。 |
+| `exit` | `float` | 是 | slow 信号退出线，连续 `breach_n` 次回落才允许退出 `Shedding`，与 `enter` 形成滞回带。 |
+| `hard` | `float` | 是 | fast 信号硬熔断线，连续 `breach_n` 次越线进入 `Open`。 |
+| `breach_n` | `int` | 否 | 该信号的连续命中门控，同时作用于 enter、exit、hard 和 hard clear；CPU 缺省 `3`，内存缺省 `1`。 |
 
 `throttle.rules.<type>` 子结构（`default` 兜底，其余只写差异项）：
 
 | 字段         | 类型      | 必填 | 说明                                                          |
 |------------|---------|----|-------------------------------------------------------------|
 | `enabled`  | `bool`  | 否  | 缺省 `true`，置 `false` 则该类型完全不限流（含熔断），恒放行                      |
-| `drop_min` | `float` | 否  | 丢弃概率下界，`t = max(t_cpu, t_mem) = 0`（任一信号都没越 enter 线）时取此值，缺省 `0` |
+| `drop_min` | `float` | 否  | 丢弃概率下界，`t = max(t_slot...) = 0`（任一信号都没越 enter 线）时取此值，缺省 `0` |
 | `drop_max` | `float` | 否  | 丢弃概率上界，`t = 1`（任一信号顶到对应硬线）时取此值，缺省 `1`                       |
 
 **让某类数据永不丢（例：metrics）**，按是否保留熔断兜底二选一：
 
 - `enabled: false`：该类型完全不限流、连熔断也不作用，仅靠内核 OOM 兜底。
-- `drop_max: 0`：分级永不丢它，但仍受全局 `cpu_hard` / `mem_hard` 熔断，极端尖刺或内存悬崖时仍会被全拒。
+- `drop_max: 0`：分级永不丢它，但仍受全局 `cpu.hard` / `mem.hard` 熔断，极端尖刺或内存悬崖时仍会被全拒。
 
 ```yaml
 rules:
   metrics: { enabled: false }        # 完全豁免
-  # 或：metrics: { drop_max: 0.0 }   # 不分级丢，但保留 cpu_hard / mem_hard 熔断
+  # 或：metrics: { drop_max: 0.0 }   # 不分级丢，但保留 cpu.hard / mem.hard 熔断
 ```
 
 本期不涉及热重载，配置仅启动期加载、变更走重启生效。
 
-### h. 观测指标
+### i. 观测指标
 
 沿用 `bk_collector_*` 命名加 `promauto` 加 `metricMonitor` 模式（参照 [<源码> receiver/metrics.go](https://github.com/TencentBlueKing/bkmonitor-datalink/blob/master/pkg/collector/receiver/metrics.go)）。
 
@@ -682,7 +746,7 @@ rules:
 | `bk_collector_throttle_requests_total`  | counter | `protocol`、`record_type`、`decision` | 请求量，`decision` 取 `allowed`、`denied`                                                                                            |
 
 - `cpu` 与 `mem` 表示当前原始水位，`cpu_slow` 与 `cpu_fast` 表示 EWMA 平滑后的 CPU 慢、快信号；内存只暴露原始水位，不做 EWMA。
-- `cpu_enter` / `cpu_exit` / `cpu_hard` 与 `mem_enter` / `mem_exit` / `mem_hard` 各自暴露当前阈值线，便于看板叠加观察。
+- 阈值线的观测标签继续沿用 `cpu_enter`、`cpu_exit`、`cpu_hard`、`mem_enter`、`mem_exit`、`mem_hard` 扁平值。这些 label 只用于看板兼容；配置协议仍以 `receiver.throttle.thresholds.cpu` / `receiver.throttle.thresholds.mem` 为准。
 - `denied` 统一表示被自适应限流拒绝的请求，拒绝原因通过当时的 `bk_collector_throttle_state` 反查。
 
 ---
@@ -698,9 +762,11 @@ rules:
 | 测试文件               | 覆盖点                   | 断言重点                                                                         |
 |--------------------|-----------------------|------------------------------------------------------------------------------|
 | `cgroup_test.go`   | v1/v2 fixture 解析与回退分支 | 有效核数、CPU 累计耗时、工作集计算正确，含 v1 `-1`、v2 `max`、内存无限哨兵                              |
+| `config_test.go`   | 嵌套阈值配置解析与校验 | `thresholds.cpu` / `thresholds.mem` 解析正确，enabled slot 满足 `exit < enter < hard`，CPU 与内存默认 `breach_n` 独立。 |
 | `sampler_test.go`  | 两次采样 CPU%、EWMA 快慢两路   | 过载越 `1.0`、宿主核数分母被否决、β 越大越平滑                                                  |
 | `classify_test.go` | 注册表与端点 → 数据类型归类       | 注册后四类端点命中正确、重复注册同类幂等、冲突注册失败、未注册端点放行                                         |
-| `manager_test.go`  | 状态机转移与丢弃概率插值          | 滞回带不横跳、连续门控过滤毛刺、`p_drop` 在 `drop_min`～`drop_max` 线性插值与边界、`enabled=false` 恒放行 |
+| `manager_test.go`  | `stateSlot` 计数、`recordState` 组合与丢弃概率插值 | `slow` / `fast` 分别驱动 enter / hard，内存 `slow=fast`，`MemValid=false` 视为安全，OR 进入、AND 退出、`Open` 按 hard clear 的 AND 条件恢复，`p_drop` 取 `max(slot.Ratio())`。 |
+| `httpmiddleware/throttle_test.go` | HTTP 拒绝响应 | `Retry-After` 通过 `rand.Intn(31)` 生成，覆盖 `0`～`30` 秒随机退避范围 |
 
 ### b. 压测工具
 
@@ -731,7 +797,7 @@ rules:
 | 验收项     | 判定                                                                                         |
 |---------|--------------------------------------------------------------------------------------------|
 | 不崩溃     | 开启限流全程无 OOM、无重启（对照关闭限流应能复现崩溃或积压爆炸）                                                         |
-| CPU 收敛  | 容器 CPU 稳态压在配额下，`docker stats` 与进程自读 `cpu_slow` 收敛到 `cpu_enter` 线附近                         |
+| CPU 收敛  | 容器 CPU 稳态压在配额下，`docker stats` 与进程自读 `cpu_slow` 收敛到 `cpu.enter` 线附近                         |
 | 尾延迟受保护  | 大包阶段成功请求 p99 显著低于关闭限流                                                                      |
 | 早丢省 CPU | `429`、`503` 在解压、反序列化之前返回                                                                   |
 | 豁免类不丢   | `metrics` 配 `enabled: false` 时全程 `0` 丢弃，CPU、内存双高也不误伤                                       |
@@ -752,7 +818,7 @@ rules:
 | A | 关闭 | 未过载极值 | `-c 26 -d 240s -warmup-spans 128 -burst-spans 512 -bigpayload-spans 128` | 记关闭限流时的最大 QPM 与 P99 耗时。 |
 | B | 关闭 | 过载饱和 | `-c 32 -d 240s -warmup-spans 128 -burst-spans 512 -bigpayload-spans 128` | 看关闭限流时是否失稳，给 D 当对照。 |
 | C | 开启（压测参数） | 未过载极值 | `-c 26 -d 240s -warmup-spans 128 -burst-spans 512 -bigpayload-spans 128` | 记开启限流后能保留多少 QPM，与 A 对比看开销。 |
-| D | 开启（压测参数） | 默认参数稳态 | 待补充 | 看 CPU 触到 `cpu_enter` 后的丢弃比例与 P99 耗时。 |
+| D | 开启（压测参数） | 默认参数稳态 | 待补充 | 看 CPU 触到 `cpu.enter` 后的丢弃比例与 P99 耗时。 |
 
 C、D 使用压测限流配置：
 
@@ -766,13 +832,18 @@ receiver:
       cpu_fast_beta: 0.7
       fallback_cores: 1
     thresholds:
-      cpu_enter: 0.95
-      cpu_exit: 0.85
-      cpu_hard: 1.20
-      mem_enter: 0.70
-      mem_exit: 0.60
-      mem_hard: 0.80
-      breach_n: 3
+      cpu:
+        enabled: true
+        enter: 0.95
+        exit: 0.85
+        hard: 1.20
+        breach_n: 3
+      mem:
+        enabled: true
+        enter: 0.70
+        exit: 0.60
+        hard: 0.80
+        breach_n: 1
     rules:
       default:
         drop_min: 0.0
@@ -783,7 +854,7 @@ receiver:
 
 压测前把 `pipeline` 段的 `rate_limiter/token_bucket` 放宽到 `qps=100000 / burst=200000`，避免令牌桶先于 throttle 返 `429`。
 
-### c. 数据采集 PromQL
+### b. 数据采集 PromQL
 
 下表 PromQL 已在 `bk_biz_id=5000140`、`bcs_cluster_id=BCS-K8S-25973` 通过 bkte MCP 拉取验证。
 
@@ -820,13 +891,13 @@ receiver:
 * *[3] 取压测窗口内 `collector` 容器重启次数增量。*
 * *[4] 用压测结束后的查询点读取 `stat.last`，运行时长过小表示 collector 进程近期重启过。*
 
-### d. 记录
+### c. 记录
 
 | 指标 | A *[1]* | C *[2]* | B *[3]* | D *[4]* |
 | --- | --- | --- | --- | --- |
 | 开启限流 | ❌ | ✅ | ❌ | ✅ |
 | 并发 | `-c 26` | `-c 26` | `-c 32` | 待压测 |
-| 持续时间 | `12 m` | `12 m` | `12 m` | 待压测 |
+| 持续时间 | `12 min` | `12 min` | `12 min` | 待压测 |
 | QPM 峰值 | `3,504 req/min` | `3,789 req/min` | `3,519 req/min` | 待压测 |
 | 总传输 Span 数（丢弃率） *[5]* | `2,444,928（0.00%）` | `4,768,896（48.08%）` | `4,632,320（53.46%）` | 待压测 |
 | 总请求数（失败率） | `14,208（0.00%）` | `29,229（20.71%）` | `18,337（27.04%）` | 待压测 |
@@ -847,8 +918,9 @@ receiver:
 
 ## 0x08 实施进展
 
-| 时间           | 结论性进展                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-|--------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 时间 | 结论性进展 |
+| --- | --- |
+| `2026-06-23 00:00` | 当前方案收敛为「采样回路 + 通用 `stateSlot` + 每数据类型 `recordState`」：CPU 使用 `slow=cpuSlow`、`fast=cpuFast`，内存使用 `slow=fast=mem`；配置改为 `thresholds.cpu` / `thresholds.mem`，状态转移只做 OR / AND 聚合，限流仍落在 HTTP / gRPC 入口。 |
 | `2026-06-21` | 内存信号补齐软线滞回带：<br />[a] thresholds 新增 `mem_enter` / `mem_exit`，与 `mem_hard` 形成 enter / exit / hard 三档，对齐 CPU 的滞回结构 <br />[b] `Normal` ↔ `Shedding` 内存路径沿用 `breach_n` 连续门控避免毛刺，`mem_hard` 仍单次即触发以抢内核 OOM 之前止血 <br />[c] 内存只读原始水位、不做 EWMA，避免平滑掩盖真实压力，理由落到 `0x05 b` <br />[d] 丢弃概率收敛为 `t = max(t_cpu, t_mem)` 喂同一组 `drop_min` / `drop_max`，CPU 与内存共用强度档位 <br />[e] 观测口径同步：`bk_collector_throttle_water_level{kind}` 增加 `mem_enter` / `mem_exit`，状态表与水位时间轴新增内存视图。 |
 | `2026-06-18 16:00` | 完成代码落地与验收闭环：<br />[a] 指标实现对齐水位、状态机状态、请求量 `3` 类协议，保留 `allowed` / `denied` 请求量口径 <br />[b] `throttle.enabled=false` 时保留 HTTP / gRPC / admin 的 `throttle` 中间件，关闭状态下恒放行，并跳过限流单例与采样回路初始化 <br />[c] Endpoint 归类改为 receiver 侧注册，OTLP、RemoteWrite、Pyroscope 复用本地路由常量 <br />[d] 使用 Go `1.23.0` 执行限流定向测试、`go test ./internal/... ./receiver/...` 与 `go test ./...` 通过 <br />[e] `2` 位复核 Agent 按 throttle 白名单复查后同意合入，样例配置、`go.mod`、`go.sum` 等非本任务改动不纳入本次验收。 |
 | `2026-06-18 15:00` | 收敛观测指标协议：<br />[a] 水位统一用 `bk_collector_throttle_water_level{kind}` 承载原始 CPU / 内存水位、CPU 快慢信号和阈值线 <br />[b] 请求量统一用 `bk_collector_throttle_requests_total{decision}` 承载 `allowed` / `denied`，不再单独按 `shed` / `open` 拆丢弃量。 |
@@ -886,4 +958,4 @@ collector 锚点（优先读本地代码库）：
 
 | 状态 | 分支              | 里程碑     | PR  |
 |----|-----------------|---------|-----|
-| 🔄 | `<branch_name>` | 支持自适应限流 | 待创建 |
+| 🔄 | `feat/throttle/#1010158081135346316` | 支持自适应限流 | 待创建 |
