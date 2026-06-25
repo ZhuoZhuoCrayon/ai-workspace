@@ -18,7 +18,7 @@
 
 ## 0x02 最近更新
 
-- 2026-06-26：迁移 [collector from_record 空 net.host.ip 占位排查](./bkmonitor-datalink/troubleshooting/collector-from-record-empty-net-host-ip.md) 至 bkmonitor-datalink troubleshooting（改用 mock 数据，并从 issue / plan 形态收敛为排查记录）
+- 2026-06-26：迁移 [collector 空资源维度占位排查](./bkmonitor-datalink/troubleshooting/collector-from-record-empty-net-host-ip.md) 至 bkmonitor-datalink troubleshooting（改用 mock 数据，记录 from_record 与 from_cache 的空串占位修复）
 - 2026-06-25：更新 [APM Span 详情支持 Links 反向关联展示](./bkmonitor/issues/2026-06-04-apm-span-links-reverse-relation/README.md) 至 bkmonitor（写回 PR #11217，标记里程碑 2 done）
 - 2026-06-22：更新 [bk-collector 自适应限流](./bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/README.md) 至 bkmonitor-datalink（记录 C 场景 `-c 26` 压测结果，补充本轮限流参数与 PromQL 口径结果）
 - 2026-06-17：更新 [APM Span 详情支持 Links 反向关联展示](./bkmonitor/issues/2026-06-04-apm-span-links-reverse-relation/README.md) 至 bkmonitor（写回 PR #11110，记录符合预期的已知边界，并补充里程碑 2 前端展示方案）

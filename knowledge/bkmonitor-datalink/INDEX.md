@@ -15,7 +15,7 @@
 
 | 排障记录 | 标签 | 更新日期 |
 |------|------|----------|
-| [collector from_record 空 net.host.ip 占位排查](./troubleshooting/collector-from-record-empty-net-host-ip.md) | `collector` `apm` `resource` `k8s` `fill-dimensions` `troubleshooting` | 2026-06-26 |
+| [collector 空资源维度占位排查](./troubleshooting/collector-from-record-empty-net-host-ip.md) | `collector` `apm` `resource` `k8s` `fill-dimensions` `troubleshooting` | 2026-06-26 |
 
 ### c. Snippets
 
