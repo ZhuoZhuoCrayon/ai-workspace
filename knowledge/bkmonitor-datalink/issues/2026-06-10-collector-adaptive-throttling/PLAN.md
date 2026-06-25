@@ -4,7 +4,7 @@ tags: [collector, throttling, load-shedding, overload-protection, cgroup, k8s]
 description: 以容器 cgroup 真实水位驱动按数据类型分级有损降级，CPU 与内存阈值计数收敛为通用信号 slot，落在 HTTP / gRPC 入口的统一限流器
 issue: knowledge/bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/README.md
 created: 2026-06-10
-updated: 2026-06-23
+updated: 2026-06-25
 ---
 
 # bk-collector 自适应限流方案
@@ -55,18 +55,18 @@ CPU 水位平滑分级丢弃为主体，内存沿用同一套阈值 slot：CPU �
 - Endpoint 粒度过细会让配置爆炸、状态机数量不可控。
 - 数据类型才是运营想区分的维度（如「保 metrics、可丢 traces」），且与 collector 既有 `define.RecordType` 对得上。
 
-### b. 信号职责：CPU 主限流，内存兼做软线与硬线
+### b. 信号职责：CPU 主限流，内存兼做降级线与熔断线
 
 为什么 CPU 当主信号？
 
 - CPU 超限只触发 CFS 节流，处理变慢但进程仍在；内存超限会被 OOM Killer 直接终止，不可逆。
 - CPU 节流能保护吞吐又不积压内存，业界主信号都用 CPU：go-zero、Kratos 的自适应丢弃以 CPU 为准。
 
-为什么内存要拆软、硬两条线？
+为什么内存要拆降级、熔断两条线？
 
-- 单纯依赖硬线追不上 Go runtime 的回收节奏，工作集冲到熔断线时往往已经晚了一拍。
-- 软线 `mem.enter` / `mem.exit` 让内存压力一抬头就开始按概率丢，给 GC 留出回收窗口。
-- 硬线 `mem.hard` 只做兜底，一旦命中就全拒，抢在内核 OOM 之前止血（参考 Envoy overload manager 的堆压力门控）。
+- 单纯依赖熔断线追不上 Go runtime 的回收节奏，工作集冲到这条线时往往已经晚了一拍。
+- 降级线 `mem.enter` / `mem.exit` 让内存压力一抬头就开始按概率丢，给 GC 留出回收窗口。
+- 熔断线 `mem.hard` 只做兜底，一旦命中就全拒，抢在内核 OOM 之前止血（参考 Envoy overload manager 的堆压力门控）。
 
 ### c. 核心对象模型
 
@@ -96,15 +96,15 @@ flowchart LR
     CFG -.-> M
 ```
 
-| 对象                | 职责                                                                                       |
-|-------------------|------------------------------------------------------------------------------------------|
-| `cgroup.Reader`   | 读取容量（CPU、内存限额），当前负载（CPU 使用率、内存使用率（不含 Cache））                                             |
-| `ResourceSampler` | 按周期采样，预处理负载信号并推进状态机                                                                      |
-| `WaterLevel`      | 不可变水位快照，含原始 CPU / 内存水位、CPU 快慢信号；内存只暴露原始读数，软硬线判定都直接吃这一份                                  |
-| `classify`        | 维护「路由 → 数据类型」注册表，receiver 用本地路由常量声明参与限流的 HTTP 路径 / gRPC 全方法名，未命中放行                       |
-| `ThrottleManager` | 持有限流策略、每数据类型状态机与最新水位，负责决策当前请求是否执行流控                                                   |
-| `Rule`            | 单数据类型的丢弃强度（`drop_min` / `drop_max`、`enabled`），阈值全局共用                                     |
-| `Decision`        | 限流决策：通过、按比例流控降级、熔断                                                                       |
+| 对象                | 职责                                                                 |
+|-------------------|--------------------------------------------------------------------|
+| `cgroup.Reader`   | 读取容量（CPU、内存限额），当前负载（CPU 使用率、内存使用率（不含 Cache））                       |
+| `ResourceSampler` | 按周期采样，预处理负载信号并推进状态机                                                |
+| `WaterLevel`      | 不可变水位快照，含原始 CPU / 内存水位、CPU 快慢信号；内存只暴露原始读数，降级线与熔断线判定都直接吃这一份         |
+| `classify`        | 维护「路由 → 数据类型」注册表，receiver 用本地路由常量声明参与限流的 HTTP 路径 / gRPC 全方法名，未命中放行 |
+| `ThrottleManager` | 持有限流策略、每数据类型状态机与最新水位，负责决策当前请求是否执行流控                                |
+| `Rule`            | 单数据类型的丢弃强度（`drop_min` / `drop_max`、`enabled`），阈值全局共用               |
+| `Decision`        | 限流决策：通过、按比例流控降级、熔断                                                 |
 
 `stateSlot` 与 `recordState` 是 `ThrottleManager` 的内部状态模型，不作为采样、路由、请求路径之间的独立协作组件。前者承载单个资源信号的连续计数，后者承载单个数据类型的三态机。
 
@@ -114,10 +114,10 @@ flowchart LR
 
 CPU 与内存只在信号映射上不同：
 
-| 信号槽 | slow 输入 | fast 输入 | valid 语义 | 默认连续门控 |
-| --- | --- | --- | --- | --- |
-| `cpu` | `WaterLevel.CPUSlow` | `WaterLevel.CPUFast` | CPU 采样成功后持续有效 | `3` |
-| `mem` | `WaterLevel.Mem` | `WaterLevel.Mem` | `MemValid=false` 时跳过该 slot，视为安全 | `1` |
+| 信号槽   | slow 输入              | fast 输入              |   | valid 语义                        | 默认连续门控 |
+|-------|----------------------|----------------------|---|---------------------------------|--------|
+| `cpu` | `WaterLevel.CPUSlow` | `WaterLevel.CPUFast` |   | CPU 采样成功后持续有效                   | `3`    |
+| `mem` | `WaterLevel.Mem`     | `WaterLevel.Mem`     |   | `MemValid=false` 时跳过该 slot，视为安全 | `1`    |
 
 禁用或无效信号槽不参与进入、熔断和丢弃概率计算，也不阻塞退出。这样内存读不到 cgroup limit 时，系统退化为纯 CPU 限流，不会因为无效内存值误丢。
 
@@ -133,49 +133,33 @@ flowchart TD
     OpenExit -- "[AND] 当前帧：slow <= exit（正常阈值）[5]" --> Normal
 ```
 
-| 状态 | 请求路径动作 | 转移语义 |
-| --- | --- | --- |
-| `Normal（正常）` | 全部放行 | 初始态；任一有效信号槽满足分级阈值后进入 `Shedding`。 |
-| `Shedding（分级丢弃）` | 按 `p_drop(max(t_slot...))` 概率丢 | 只要任一有效信号槽满足熔断阈值，就进入 `Open`；全部有效信号槽满足正常阈值后回到 `Normal`。 |
-| `Open（跳闸）` | 熔断 | 先等待全部参与判定的信号槽满足熔断恢复阈值；离开 `Open` 后，再按 soft 水位落到 `Shedding` 或 `Normal`。 |
+| 状态               | 请求路径动作         | 下一状态                                                                                           |
+|------------------|----------------|------------------------------------------------------------------------------------------------|
+| `Normal（正常）`     | 全部放行           | [a] 降级（`→ Shedding`）：某个信号连续 N 次超过 enter（降级阈值）。 <br />[b] 熔断（`→ Open`）：某个信号连续 N 次超过 hard（熔断阈值）。 |
+| `Shedding（分级丢弃）` | 降级，按设定概率范围限流拒绝 | [a] 正常（`→ Normal`）： 所有信号连续 N 次低于 exit（正常阈值）。<br />[b] 熔断（`→ Open`）：某个信号连续 N 次超过 hard（熔断阈值）。    |
+| `Open（跳闸）`       | 熔断             | [a] 降级（`→ Shedding`）：所有信号连续 N 次低于 hard（熔断阈值）。                                                  |
 
-- *[1] 分级进入是 OR：任一有效信号槽的 `slow > enter` 连续达到自己的 `breach_n`，状态机进入 `Shedding`。*
-- *[2] `Shedding` 正常退出是 AND：全部有效信号槽的 `slow < exit` 连续达到各自 `breach_n`，状态机回到 `Normal`。*
-- *[3] 熔断进入是 OR：任一有效信号槽的 `fast >= hard` 连续达到自己的 `breach_n`，状态机进入 `Open`。*
-- *[4] 熔断恢复是 AND：全部参与判定的信号槽满足 `fast < hard`，且连续达到各自 `breach_n` 后才允许退出 `Open`；禁用或无效信号槽视为安全。*
-- *[5] `Open` 的落点判定只看当前 soft 水位：任一有效信号槽仍 `slow > exit` 则落到 `Shedding`，全部有效信号槽都 `slow <= exit` 才回 `Normal`。*
+* *[1] 恢复阶段：CPU、内存「同时满足」设定条件。*
+* *[2] 恶化阶段：CPU、内存「单个满足」设定条件，即可进入下一个状态（降级或熔断）。*
 
-把 CPU 三条阈值线、滞回带与快慢两路信号落到同一时间轴，对照状态机看转移时机：
-
-```text
-水位
-0.95 |                  /\                  快信号 fast（β=0.7）：灵敏，抢先冲顶
-0.90 |=================/  \==============   硬线 cpu.hard：fast 越线且连续 cpu.breach_n 次 → Open 全拒
-     |        ________/    \________        慢信号 slow（β=0.95）：平滑，不贴线抖
-0.80 |-------/----------------------\----   进入线 cpu.enter：slow 升过 → Shedding 按 p_drop 概率丢
-     |      /                        \      （0.70～0.80 为滞回带：升过 0.80 才丢、跌回 0.70 才停）
-0.70 |-----/--------------------------\--   退出线 cpu.exit：slow 跌回 → 停丢
-     |.:*:.                            .:*. 原始采样（抖）经 EWMA 平滑成上面两条曲线
-     +----+----------+------+-----------+-→ 时间
-        Normal    Shedding  Open    → Normal
-```
-
-CPU 滞回带（`0.70`～`0.80`）防抖，让分级进退不在单一阈值上横跳。
-
-内存信号沿用同样的滞回带与连续门控，只是不做 EWMA：
+水位图如下（CPU 与内存共用这套结构，差异只在信号来源）：
+- CPU：原始水位经 EWMA 平滑成两条曲线，`fast` 用 β=`0.7` 抢早一步，`slow` 用 β=`0.95` 滤毛刺。
+- 内存：直接计算使用率（不含 Cache）。
 
 ```text
 水位
-0.92 |       /\                              硬线 mem.hard：fast=mem 越线且连续 mem.breach_n 次 → Open 全拒
-0.85 |======/= \=============                进入线 mem.enter：slow=mem 连续 mem.breach_n 次越线 → Shedding 参与按概率丢
-     |     /    \________                    （0.78～0.85 为滞回带：升过 0.85 才丢、跌回 0.78 才停）
-0.78 |----/-------------\----                退出线 mem.exit：slow=mem 连续 mem.breach_n 次跌回 → 停丢
-     |.:*:.              .:*.                原始水位 mem（不做 EWMA，直接吃 working set）
-     +----+----------+------+-→ 时间
-        Normal   Shedding  Open → Normal
+     |                       /\                       
+hard |======================/  \======================
+     |             ________/    \________               
+enter|------------/----------------------\------------
+     |           /                        \
+exit |----------/--------------------------\----------
+     |.:*:.                              .:*.   
+     +------+------------+--------+--------------+-→ 时间
+          Normal      Shedding    Open       → Normal
 ```
-
-内存滞回带（`0.78`～`0.85`）防抖。`mem.breach_n` 同时控制内存软线、硬线和 hard clear；当前保命策略建议缺省 `1`，需要过滤毛刺时只调配置值，不改状态机。
+* *[1] 防抖：设定 `exit -> enter` 缓冲带，支持配置条件连续命中次数，避免毛刺影响。*
+* *[2] 内存建议单次越过阈值便熔断，避免 OOMKilled。*
 
 ### e. 限流位置
 
@@ -473,8 +457,8 @@ s_t = (1 - β) · x_t + β · s_{t-1}
 为什么内存不做 EWMA？
 
 - 内存是水位量、不是速率量，单次采样已可信，平滑反而会抹掉真实压力。
-- 平滑后的内存水位会把临近 OOM 的尖峰拉低，让硬线晚一拍才触发，错过止血窗口。
-- 内存软线的抗毛刺由 `thresholds.mem` 的滞回带和 `breach_n` 承担，不需要再叠一层平滑。
+- 平滑后的内存水位会把临近 OOM 的尖峰拉低，让熔断线晚一拍才触发，错过止血窗口。
+- 内存降级线的抗毛刺由 `thresholds.mem` 的滞回带和 `breach_n` 承担，不需要再叠一层平滑。
 
 ### c. ResourceSampler：采样回路
 
@@ -691,7 +675,7 @@ receiver:
 | `throttle.enabled`         | `bool`     | 是  | 总开关，关闭则中间件直接放行                                                             |
 | `throttle.sample_interval` | `duration` | 否  | 采样周期，缺省 `250ms`                                                            |
 | `throttle.signal`          | `object`   | 否  | 信号采样参数，见 `signal` 子结构                                                      |
-| `throttle.thresholds`      | `object`   | 是  | 全局阈值，所有数据类型共用，按资源信号分组，见 `thresholds.<signal>` 子结构                             |
+| `throttle.thresholds`      | `object`   | 是  | 全局阈值，所有数据类型共用，按资源信号分组，见 `thresholds.<signal>` 子结构                          |
 | `throttle.rules`           | `object`   | 否  | 按数据类型调丢弃强度，键限 `default`、`traces`、`metrics`、`logs`、`profiles`，见 `rules` 子结构 |
 
 `throttle.signal` 子结构：
@@ -704,13 +688,13 @@ receiver:
 
 `throttle.thresholds.<signal>` 子结构（当前支持 `cpu`、`mem`）：
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `enabled` | `bool` | 否 | 缺省 `true`；置 `false` 后该信号不参与进入、退出、熔断和丢弃概率计算。 |
-| `enter` | `float` | 是 | slow 信号进入线，连续 `breach_n` 次越线进入 `Shedding`。 |
-| `exit` | `float` | 是 | slow 信号退出线，连续 `breach_n` 次回落才允许退出 `Shedding`，与 `enter` 形成滞回带。 |
-| `hard` | `float` | 是 | fast 信号硬熔断线，连续 `breach_n` 次越线进入 `Open`。 |
-| `breach_n` | `int` | 否 | 该信号的连续命中门控，同时作用于 enter、exit、hard 和 hard clear；CPU 缺省 `3`，内存缺省 `1`。 |
+| 字段         | 类型      | 必填 | 说明                                                                 |
+|------------|---------|----|--------------------------------------------------------------------|
+| `enabled`  | `bool`  | 否  | 缺省 `true`；置 `false` 后该信号不参与进入、退出、熔断和丢弃概率计算。                        |
+| `enter`    | `float` | 是  | slow 信号进入线，连续 `breach_n` 次越线进入 `Shedding`。                         |
+| `exit`     | `float` | 是  | slow 信号退出线，连续 `breach_n` 次回落才允许退出 `Shedding`，与 `enter` 形成滞回带。      |
+| `hard`     | `float` | 是  | fast 信号硬熔断线，连续 `breach_n` 次越线进入 `Open`。                            |
+| `breach_n` | `int`   | 否  | 该信号的连续命中门控，同时作用于 enter、exit、hard 和 hard clear；CPU 缺省 `3`，内存缺省 `1`。 |
 
 `throttle.rules.<type>` 子结构（`default` 兜底，其余只写差异项）：
 
@@ -718,7 +702,7 @@ receiver:
 |------------|---------|----|-------------------------------------------------------------|
 | `enabled`  | `bool`  | 否  | 缺省 `true`，置 `false` 则该类型完全不限流（含熔断），恒放行                      |
 | `drop_min` | `float` | 否  | 丢弃概率下界，`t = max(t_slot...) = 0`（任一信号都没越 enter 线）时取此值，缺省 `0` |
-| `drop_max` | `float` | 否  | 丢弃概率上界，`t = 1`（任一信号顶到对应硬线）时取此值，缺省 `1`                       |
+| `drop_max` | `float` | 否  | 丢弃概率上界，`t = 1`（任一信号顶到对应熔断线）时取此值，缺省 `1`                      |
 
 **让某类数据永不丢（例：metrics）**，按是否保留熔断兜底二选一：
 
@@ -731,92 +715,18 @@ rules:
   # 或：metrics: { drop_max: 0.0 }   # 不分级丢，但保留 cpu.hard / mem.hard 熔断
 ```
 
-本期不涉及热重载，配置仅启动期加载、变更走重启生效。
-
 ### i. 观测指标
 
 沿用 `bk_collector_*` 命名加 `promauto` 加 `metricMonitor` 模式（参照 [<源码> receiver/metrics.go](https://github.com/TencentBlueKing/bkmonitor-datalink/blob/master/pkg/collector/receiver/metrics.go)）。
 
-| 指标                                     | 类型      | 标签                                  | 用途                                                                                                                    |
-|----------------------------------------|---------|-------------------------------------|-----------------------------------------------------------------------------------------------------------------------|
-| `bk_collector_throttle_water_level`    | gauge   | `kind`                              | 水位与阈值线，`kind` 取 `cpu`、`cpu_slow`、`cpu_fast`、`mem`、`cpu_enter`、`cpu_exit`、`cpu_hard`、`mem_enter`、`mem_exit`、`mem_hard` |
-| `bk_collector_throttle_state`          | gauge   | `record_type`                       | 状态机当前态（`0` Normal、`1` Shedding、`2` Open）                                                                              |
-| `bk_collector_throttle_requests_total` | counter | `protocol`、`record_type`、`decision` | 请求量，`decision` 取 `allowed`、`denied`                                                                                   |
+| 指标                                               | 类型        | 标签                                  | 用途                                                                                                                    |
+|--------------------------------------------------|-----------|-------------------------------------|-----------------------------------------------------------------------------------------------------------------------|
+| `bk_collector_throttle_water_level`              | Gauge     | `kind`                              | 水位与阈值线，`kind` 取 `cpu`、`cpu_slow`、`cpu_fast`、`mem`、`cpu_enter`、`cpu_exit`、`cpu_hard`、`mem_enter`、`mem_exit`、`mem_hard` |
+| `bk_collector_throttle_state`                    | Gauge     | `record_type`                       | 状态机当前态（`0` Normal、`1` Shedding、`2` Open）                                                                              |
+| `bk_collector_throttle_requests_total`           | Counter   | `protocol`、`record_type`、`decision` | 请求量，`decision` 取 `allowed`、`denied`                                                                                   |
+| `bk_collector_throttle_sampler_interval_seconds` | Histogram |                                     | 相邻两次采样的实际间隔，和 `bk_collector_throttle_sampler_duration_seconds` 一并用于观测容器负载采样是否正常                                       |
+| `bk_collector_throttle_sampler_duration_seconds` | Histogram |                                     | 单次采样内 cgroup 读取与水位计算耗时                                                                                                |
 
-
----
-
-## 0x06 高可用保障方案
-
-### a. sampler 抗抢占改造
-
-CPU 满载场景下，sampler 上报的内存水位显著低于容器真实使用率。最劣样本里真实水位已经 `92%`、sampler 还报 `43%`，离 `mem.enter` 阈值还远。
-
-根因是 sampler goroutine 与请求路径共用 CPU 时间片：CPU 长时间触顶容器配置触发 CFS 节流后，采样任务执行延迟从 `250ms` 拉到秒级，感知不到内存突增。
-
-| 指标 | `10:00`～`11:00` CST *[1]* | `18:32`～`19:15` CST *[2]* |
-| --- | ---: | ---: |
-| Sampler 模块内存水位未及时更新次数 *[3]* | `11` 次 | `0` 次 |
-| 最劣样本（真实水位 → sampler 上报） | `92% → 43%` | — |
-
-- *[1] pod `bkm-collector-86c45f8899-vpsln`，CPU 熔断阈值未调，期间多次 OOMKilled。*
-- *[2] pod `bkm-collector-69cddbdcbc-tqwjl`，CPU 熔断阈值调低后，未触发 OOM。*
-- *[3] 将 CPU 熔断阈值下调后，采样卡顿从 `11` 次直接清 `0`。*
-
-**改造点**
-
-| 项 | 现状 | 改造 |
-| --- | --- | --- |
-| 独占 OS 线程 | sampler goroutine 与请求 goroutine 共享 P / M | `runtime.LockOSThread()` |
-| 周期补偿 | `time.NewTicker` 滴答事件可被合并丢失 | [a] `time.Until(next)` 显式自调度 <br />[b] 落后超过 `5 × interval` 时重置基线，避免连续追 tick |
-| 零分配 tick | `os.ReadFile` 每次分配新 slice，给 GC 加压 | [a] `Reader` 协议新增 `<Method>Into(buf []byte)` 零拷贝读法 <br />[b] 实现切换为 `os.OpenFile + Read(into buf)`，替换 `os.ReadFile` <br />[c] `usageBuf` / `statBuf` / `limitBuf` 在 `NewResourceSampler` 一次性分配复用 |
-
-[<源码> internal/throttle/sampler.go](https://github.com/TencentBlueKing/bkmonitor-datalink/blob/master/pkg/collector/internal/throttle/sampler.go) 的 `Start` 改写为：
-
-```go
-func (s *ResourceSampler) Start() {
-    go func() {
-        runtime.LockOSThread()
-        defer runtime.UnlockOSThread()
-        defer close(s.doneCh)
-
-        interval := s.config.SampleInterval
-        next := time.Now().Add(interval)
-        for {
-            select {
-            case <-s.stopCh:
-                return
-            default:
-            }
-
-            tickStart := time.Now()
-            s.tickAt(tickStart)
-            if !s.lastTickAt.IsZero() {
-                observeSamplerInterval(tickStart.Sub(s.lastTickAt))
-            }
-            observeSamplerDuration(time.Since(tickStart))
-            s.lastTickAt = tickStart
-
-            if sleep := time.Until(next); sleep > 0 {
-                time.Sleep(sleep)
-            }
-            next = next.Add(interval)
-            if behind := time.Since(next); behind > 5*interval {
-                next = time.Now().Add(interval)
-            }
-        }
-    }()
-}
-```
-
-**采样可观测**
-
-| 指标                                               | 类型        | 用途                                                                                                                        |
-|--------------------------------------------------|-----------|---------------------------------------------------------------------------------------------------------------------------|
-| `bk_collector_throttle_sampler_interval_seconds` | histogram | [a] 相邻两次采样的实际间隔 <br />[b] buckets `0.1` `0.25` `0.5` `1` `2` `5` `10` `30` 秒 <br />[c] p99 收敛在 `2 × sample_interval` 内为正常 |
-| `bk_collector_throttle_sampler_duration_seconds` | histogram | [a] 单次采样内 cgroup 读取与水位计算耗时 <br />[b] buckets `0.001` `0.005` `0.01` `0.05` `0.1` `0.25` `0.5` `1` 秒                       |
-
-* *[1] `sampler_interval_seconds` p99 超过 `5 × sample_interval` 视为 sampler 被严重抢占。*
 
 ---
 
@@ -828,14 +738,14 @@ func (s *ResourceSampler) Start() {
 
 新增包 `pkg/collector/internal/throttle/`，门禁 `cd pkg/collector && go test ./internal/throttle/...`。
 
-| 测试文件               | 覆盖点                   | 断言重点                                                                         |
-|--------------------|-----------------------|------------------------------------------------------------------------------|
-| `cgroup_test.go`   | v1/v2 fixture 解析与回退分支 | 有效核数、CPU 累计耗时、工作集计算正确，含 v1 `-1`、v2 `max`、内存无限哨兵                              |
-| `config_test.go`   | 嵌套阈值配置解析与校验 | `thresholds.cpu` / `thresholds.mem` 解析正确，enabled slot 满足 `exit < enter < hard`，CPU 与内存默认 `breach_n` 独立。 |
-| `sampler_test.go`  | 两次采样 CPU%、EWMA 快慢两路   | 过载越 `1.0`、宿主核数分母被否决、β 越大越平滑                                                  |
-| `classify_test.go` | 注册表与端点 → 数据类型归类       | 注册后四类端点命中正确、重复注册同类幂等、冲突注册失败、未注册端点放行                                         |
-| `manager_test.go`  | `stateSlot` 计数、`recordState` 组合与丢弃概率插值 | `slow` / `fast` 分别驱动 enter / hard，内存 `slow=fast`，`MemValid=false` 视为安全，OR 进入、AND 退出、`Open` 按 hard clear 的 AND 条件恢复，`p_drop` 取 `max(slot.Ratio())`。 |
-| `httpmiddleware/throttle_test.go` | HTTP 拒绝响应 | `Retry-After` 通过 `rand.Intn(31)` 生成，覆盖 `0`～`30` 秒随机退避范围 |
+| 测试文件                              | 覆盖点                                    | 断言重点                                                                                                                                               |
+|-----------------------------------|----------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
+| `cgroup_test.go`                  | v1/v2 fixture 解析与回退分支                  | 有效核数、CPU 累计耗时、工作集计算正确，含 v1 `-1`、v2 `max`、内存无限哨兵                                                                                                    |
+| `config_test.go`                  | 嵌套阈值配置解析与校验                            | `thresholds.cpu` / `thresholds.mem` 解析正确，enabled slot 满足 `exit < enter < hard`，CPU 与内存默认 `breach_n` 独立。                                            |
+| `sampler_test.go`                 | 两次采样 CPU%、EWMA 快慢两路                    | 过载越 `1.0`、宿主核数分母被否决、β 越大越平滑                                                                                                                        |
+| `classify_test.go`                | 注册表与端点 → 数据类型归类                        | 注册后四类端点命中正确、重复注册同类幂等、冲突注册失败、未注册端点放行                                                                                                                |
+| `manager_test.go`                 | `stateSlot` 计数、`recordState` 组合与丢弃概率插值 | `slow` / `fast` 分别驱动 enter / hard，内存 `slow=fast`，`MemValid=false` 视为安全，OR 进入、AND 退出、`Open` 按 hard clear 的 AND 条件恢复，`p_drop` 取 `max(slot.Ratio())`。 |
+| `httpmiddleware/throttle_test.go` | HTTP 拒绝响应                              | `Retry-After` 通过 `rand.Intn(31)` 生成，覆盖 `0`～`30` 秒随机退避范围                                                                                            |
 
 ### b. 压测工具
 
@@ -863,13 +773,13 @@ func (s *ResourceSampler) Start() {
 
 平稳运行的验收口径如下，全部满足即达标。
 
-| 验收项     | 判定                                                                                         |
-|---------|--------------------------------------------------------------------------------------------|
-| 不崩溃     | 开启限流全程无 OOM、无重启（对照关闭限流应能复现崩溃或积压爆炸）                                                         |
-| CPU 收敛  | 容器 CPU 稳态压在配额下，`docker stats` 与进程自读 `cpu_slow` 收敛到 `cpu.enter` 线附近                         |
-| 尾延迟受保护  | 大包阶段成功请求 p99 显著低于关闭限流                                                                      |
-| 早丢省 CPU | `429`、`503` 在解压、反序列化之前返回                                                                   |
-| 豁免类不丢   | `metrics` 配 `enabled: false` 时全程 `0` 丢弃，CPU、内存双高也不误伤                                       |
+| 验收项     | 判定                                                                                                                    |
+|---------|-----------------------------------------------------------------------------------------------------------------------|
+| 不崩溃     | 开启限流全程无 OOM、无重启（对照关闭限流应能复现崩溃或积压爆炸）                                                                                    |
+| CPU 收敛  | 容器 CPU 稳态压在配额下，`docker stats` 与进程自读 `cpu_slow` 收敛到 `cpu.enter` 线附近                                                    |
+| 尾延迟受保护  | 大包阶段成功请求 p99 显著低于关闭限流                                                                                                 |
+| 早丢省 CPU | `429`、`503` 在解压、反序列化之前返回                                                                                              |
+| 豁免类不丢   | `metrics` 配 `enabled: false` 时全程 `0` 丢弃，CPU、内存双高也不误伤                                                                  |
 | 可观测     | `bk_collector_throttle_requests_total`、`bk_collector_throttle_water_level`、`bk_collector_throttle_state` 随负载与数据类型如实变化 |
 
 原型快路径（可选）：把 `throttle` 包嵌入最小 `loadserver` 加合成 CPU 处理，先在受限容器快速验证决策行为，再做真实 collector 集成（原型评估见 [PREPLAN 0x11e](./PREPLAN.md)）。
@@ -882,14 +792,14 @@ func (s *ResourceSampler) Start() {
 
 单容器跑 4 个场景，覆盖「throttle 开关 × 是否过载」四种组合，看限流上线后能扛多少、降级怎么走、关了会不会雪崩。
 
-| 场景 | throttle | 工况 | 压测参数 | 观察重点 |
-| --- | --- | --- | --- | --- |
-| A | 关闭 | 未过载极值 | `-c 26 -d 240s -warmup-spans 128 -burst-spans 512 -bigpayload-spans 128` | 记关闭限流时的最大 QPM 与 P99 耗时。 |
-| B | 关闭 | 过载饱和 | `-c 32 -d 240s -warmup-spans 128 -burst-spans 512 -bigpayload-spans 128` | 看关闭限流时是否失稳，给 D 当对照。 |
-| C | 开启（压测参数） | 未过载极值 | `-c 26 -d 240s -warmup-spans 128 -burst-spans 512 -bigpayload-spans 128` | 记开启限流后能保留多少 QPM，与 A 对比看开销。 |
-| D | 开启（压测参数） | 默认参数稳态 | 待补充 | 看 CPU 触到 `cpu.enter` 后的丢弃比例与 P99 耗时。 |
+| 场景 | throttle | 工况    | 压测参数                                                                     | 观察重点                                                 |
+|----|----------|-------|--------------------------------------------------------------------------|------------------------------------------------------|
+| A  | 关闭       | 未过载极值 | `-c 26 -d 240s -warmup-spans 128 -burst-spans 512 -bigpayload-spans 128` | 记关闭限流时的最大 QPM 与 P99 耗时。                              |
+| B  | 关闭       | 过载饱和  | `-c 32 -d 240s -warmup-spans 128 -burst-spans 512 -bigpayload-spans 128` | 看关闭限流时是否失稳，给 D 当对照。                                  |
+| C  | 开启（压测参数） | 未过载极值 | `-c 26 -d 240s -warmup-spans 128 -burst-spans 512 -bigpayload-spans 128` | 记开启限流后能保留多少 QPM，与 A 对比看开销。                           |
+| D  | 开启（压测参数） | 过载饱和  | `-c 32 -d 240s -warmup-spans 128 -burst-spans 512 -bigpayload-spans 128` | 看 CPU 触到 `cpu.enter` 后的丢弃比例与 P99 耗时，对照 B 验证限流避开 OOM。 |
 
-C、D 使用压测限流配置：
+C、D 共用以下限流配置（多轮调参后收敛的最佳效果）：
 
 ```yaml
 receiver:
@@ -903,8 +813,8 @@ receiver:
     thresholds:
       cpu:
         enabled: true
-        enter: 0.95
-        exit: 0.85
+        enter: 0.85
+        exit: 0.70
         hard: 1.20
         breach_n: 3
       mem:
@@ -916,7 +826,7 @@ receiver:
     rules:
       default:
         drop_min: 0.0
-        drop_max: 0.3
+        drop_max: 0.2
       metrics:
         enabled: false
 ```
@@ -934,26 +844,26 @@ receiver:
 
 **主表**：
 
-| 指标 | 单位 | PromQL |
-| --- | --- | --- |
-| QPM 峰值 | `req/min` | [a] 未开启限流：`max_over_time((sum by (pod) (rate(bkmonitor:bk_collector_receiver_handled_total{bcs_cluster_id="<bcs_cluster_id>"}[1m])) * 60)[<window>:30s])` <br />[b] 开启限流：`max_over_time((sum by (pod) (rate(bkmonitor:bk_collector_throttle_requests_total{bcs_cluster_id="<bcs_cluster_id>"}[1m])) * 60)[<window>:30s])` |
-| Receiver 字节速率峰值 | `B/s` | `max_over_time((sum by (pod) (rate(bkmonitor:bk_collector_receiver_received_bytes_total{bcs_cluster_id="<bcs_cluster_id>"}[1m])))[<window>:30s])` |
-| Receiver 处理平均耗时峰值 | `s` | `max_over_time((sum by (pod) (rate(bkmonitor:bk_collector_receiver_handled_duration_seconds_sum{bcs_cluster_id="<bcs_cluster_id>"}[1m])) / sum by (pod) (rate(bkmonitor:bk_collector_receiver_handled_duration_seconds_count{bcs_cluster_id="<bcs_cluster_id>"}[1m])))[<window>:30s])` |
-| Receiver 处理耗时 P99 峰值 | `s` | `max_over_time((histogram_quantile(0.99, sum by (le, pod) (rate(bkmonitor:bk_collector_receiver_handled_duration_seconds_bucket{bcs_cluster_id="<bcs_cluster_id>"}[1m]))))[<window>:30s])` |
-| CPU 使用率峰值（Limits） | 比例 | `max_over_time((sum by (pod) (rate(container_cpu_usage_seconds_total{bcs_cluster_id="<bcs_cluster_id>",container="collector"}[1m])) / sum by (pod) (bkmonitor:kube_pod_container_resource_limits_cpu_cores{bcs_cluster_id="<bcs_cluster_id>",container="collector"}))[<window>:30s])` |
-| 内存使用率峰值（Limits） | 比例 | `max_over_time((sum by (pod) (container_memory_working_set_bytes{bcs_cluster_id="<bcs_cluster_id>",container="collector"}) / sum by (pod) (bkmonitor:kube_pod_container_resource_limits_memory_bytes{bcs_cluster_id="<bcs_cluster_id>",container="collector"}))[<window>:30s])` |
+| 指标                   | 单位        | PromQL                                                                                                                                                                                                                                                                                                                    |
+|----------------------|-----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| QPM 峰值               | `req/min` | [a] 未开启限流：`max_over_time((sum by (pod) (rate(bkmonitor:bk_collector_receiver_handled_total{bcs_cluster_id="<bcs_cluster_id>"}[1m])) * 60)[<window>:30s])` <br />[b] 开启限流：`max_over_time((sum by (pod) (rate(bkmonitor:bk_collector_throttle_requests_total{bcs_cluster_id="<bcs_cluster_id>"}[1m])) * 60)[<window>:30s])` |
+| Receiver 字节速率峰值      | `B/s`     | `max_over_time((sum by (pod) (rate(bkmonitor:bk_collector_receiver_received_bytes_total{bcs_cluster_id="<bcs_cluster_id>"}[1m])))[<window>:30s])`                                                                                                                                                                         |
+| Receiver 处理平均耗时峰值    | `s`       | `max_over_time((sum by (pod) (rate(bkmonitor:bk_collector_receiver_handled_duration_seconds_sum{bcs_cluster_id="<bcs_cluster_id>"}[1m])) / sum by (pod) (rate(bkmonitor:bk_collector_receiver_handled_duration_seconds_count{bcs_cluster_id="<bcs_cluster_id>"}[1m])))[<window>:30s])`                                    |
+| Receiver 处理耗时 P99 峰值 | `s`       | `max_over_time((histogram_quantile(0.99, sum by (le, pod) (rate(bkmonitor:bk_collector_receiver_handled_duration_seconds_bucket{bcs_cluster_id="<bcs_cluster_id>"}[1m]))))[<window>:30s])`                                                                                                                                |
+| CPU 使用率峰值（Limits）    | 比例        | `max_over_time((sum by (pod) (rate(container_cpu_usage_seconds_total{bcs_cluster_id="<bcs_cluster_id>",container="collector"}[1m])) / sum by (pod) (bkmonitor:kube_pod_container_resource_limits_cpu_cores{bcs_cluster_id="<bcs_cluster_id>",container="collector"}))[<window>:30s])`                                     |
+| 内存使用率峰值（Limits）      | 比例        | `max_over_time((sum by (pod) (container_memory_working_set_bytes{bcs_cluster_id="<bcs_cluster_id>",container="collector"}) / sum by (pod) (bkmonitor:kube_pod_container_resource_limits_memory_bytes{bcs_cluster_id="<bcs_cluster_id>",container="collector"}))[<window>:30s])`                                           |
 
 **辅助表**：throttle 行为指标仅 C、D 场景有效，稳定性复核指标适用于全部场景。
 
-| 指标 | 单位 | PromQL |
-| --- | --- | --- |
-| Throttle 丢弃总占比 | 比例 | `sum by (pod) (increase(bkmonitor:bk_collector_throttle_requests_total{bcs_cluster_id="<bcs_cluster_id>",decision="denied"}[<window>])) / sum by (pod) (increase(bkmonitor:bk_collector_throttle_requests_total{bcs_cluster_id="<bcs_cluster_id>"}[<window>]))` |
-| Throttle 状态机最高态 *[1]* | `0/1/2` | `max by (pod, record_type) (max_over_time(bkmonitor:bk_collector_throttle_state{bcs_cluster_id="<bcs_cluster_id>"}[<window>]))` |
-| 容器 CPU 慢信号峰值 | 比例 | `max by (pod) (max_over_time(bkmonitor:bk_collector_throttle_water_level{bcs_cluster_id="<bcs_cluster_id>",kind="cpu_slow"}[<window>]))` |
-| 容器内存水位峰值 | 比例 | `max by (pod) (max_over_time(bkmonitor:bk_collector_throttle_water_level{bcs_cluster_id="<bcs_cluster_id>",kind="mem"}[<window>]))` |
-| Pod OOM 复核 *[2]* | `0/1` | `max by (pod) (max_over_time((increase(bkmonitor:kube_pod_container_status_terminated_reason{bcs_cluster_id=~"<bcs_cluster_id>",pod=~"<pod>",reason="OOMKilled"}[2m]))[<window>:30s])) > 0` |
-| Collector 重启增量 *[3]* | 次 | `max by (pod) (increase(kube_pod_container_status_restarts_total{bcs_cluster_id=~"<bcs_cluster_id>",pod=~"<pod>",container="collector"}[<window>]))` |
-| Collector 运行时长 *[4]* | `s` | `min by (pod) (bkmonitor:bk_collector_uptime{bcs_cluster_id="<bcs_cluster_id>"})` |
+| 指标                    | 单位      | PromQL                                                                                                                                                                                                                                                          |
+|-----------------------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Throttle 丢弃总占比        | 比例      | `sum by (pod) (increase(bkmonitor:bk_collector_throttle_requests_total{bcs_cluster_id="<bcs_cluster_id>",decision="denied"}[<window>])) / sum by (pod) (increase(bkmonitor:bk_collector_throttle_requests_total{bcs_cluster_id="<bcs_cluster_id>"}[<window>]))` |
+| Throttle 状态机最高态 *[1]* | `0/1/2` | `max by (pod, record_type) (max_over_time(bkmonitor:bk_collector_throttle_state{bcs_cluster_id="<bcs_cluster_id>"}[<window>]))`                                                                                                                                 |
+| 容器 CPU 慢信号峰值          | 比例      | `max by (pod) (max_over_time(bkmonitor:bk_collector_throttle_water_level{bcs_cluster_id="<bcs_cluster_id>",kind="cpu_slow"}[<window>]))`                                                                                                                        |
+| 容器内存水位峰值              | 比例      | `max by (pod) (max_over_time(bkmonitor:bk_collector_throttle_water_level{bcs_cluster_id="<bcs_cluster_id>",kind="mem"}[<window>]))`                                                                                                                             |
+| Pod OOM 复核 *[2]*      | `0/1`   | `max by (pod) (max_over_time((increase(bkmonitor:kube_pod_container_status_terminated_reason{bcs_cluster_id=~"<bcs_cluster_id>",pod=~"<pod>",reason="OOMKilled"}[2m]))[<window>:30s])) > 0`                                                                     |
+| Collector 重启增量 *[3]*  | 次       | `max by (pod) (increase(kube_pod_container_status_restarts_total{bcs_cluster_id=~"<bcs_cluster_id>",pod=~"<pod>",container="collector"}[<window>]))`                                                                                                            |
+| Collector 运行时长 *[4]*  | `s`     | `min by (pod) (bkmonitor:bk_collector_uptime{bcs_cluster_id="<bcs_cluster_id>"})`                                                                                                                                                                               |
 
 * *[1] `0` Normal、`1` Shedding、`2` Open，语义见 `0x02 d`。*
 * *[2] 内层 `[2m]` 识别 OOMKilled 增量，外层 `[<window>:30s]` 扫描整段压测窗口。*
@@ -962,38 +872,43 @@ receiver:
 
 ### c. 记录
 
-| 指标 | A *[1]* | C *[2]* | B *[3]* | D *[4]* |
-| --- | --- | --- | --- | --- |
-| 开启限流 | ❌ | ✅ | ❌ | ✅ |
-| 并发 | `-c 26` | `-c 26` | `-c 32` | 待压测 |
-| 持续时间 | `12 min` | `12 min` | `12 min` | 待压测 |
-| QPM 峰值 | `3,504 req/min` | `3,789 req/min` | `3,519 req/min` | 待压测 |
-| 总传输 Span 数（丢弃率） *[5]* | `2,444,928（0.00%）` | `4,768,896（48.08%）` | `4,632,320（53.46%）` | 待压测 |
-| 总请求数（失败率） | `14,208（0.00%）` | `29,229（20.71%）` | `18,337（27.04%）` | 待压测 |
-| Receiver 字节速率峰值 | `5.94 MiB/s` | `6.02 MiB/s` | `5.93 MiB/s` | 待压测 |
-| Receiver 处理平均耗时峰值 | `1.122 s` | `1.134 s` | `0.947 s` | 待压测 |
-| Receiver 处理耗时 P99 峰值 | `6.896 s` | `7.148 s` | `8.572 s` | 待压测 |
-| CPU 使用率峰值（Limits） | `119.45%` | `119.97%` | `111.13%` | 待压测 |
-| 内存使用率峰值（Limits） | `81.96%` | `54.40%` | `73.55%` | 待压测 |
+| 指标                      | A *[1]*         | C *[2]*          | B *[3]*            | D *[4]*             |
+|-------------------------|-----------------|------------------|--------------------|---------------------|
+| 开启限流                    | ❌               | ✅                | ❌                  | ✅                   |
+| 并发                      | `-c 26`         | `-c 26`          | `-c 32`            | `-c 32`             |
+| 持续时间                    | `12 min`        | `12 min`         | `12 min`           | `12 min`            |
+| QPM 峰值                  | `3,504 req/min` | `3,563 req/min`  | `3,519 req/min`    | `3,810 req/min`     |
+| 成功接收 Span 数 *[5]*       | `2,444,928`     | `2,466,816`      | `2,156,042`        | `2,441,728`         |
+| 成功放行数（`200`） *[6]*      | `14,208`        | `14,373`         | `13,377`           | `14,288`            |
+| 限流主动拒绝请求数（Span 数） *[7]* | `0（0）`          | `2,727（857,472）` | `0（0）`             | `11,397（4,352,256）` |
+| OOM 请求超时丢失（Span 数）      | `0（0）`          | `0（0）`           | `4,960（2,476,278）` | `0（0）`              |
+| Receiver 字节速率峰值         | `5.94 MiB/s`    | `5.83 MiB/s`     | `5.93 MiB/s`       | `5.91 MiB/s`        |
+| Receiver 处理平均耗时峰值       | `1.122 s`       | `1.184 s`        | `0.947 s`          | `1.487 s`           |
+| Receiver 处理耗时 P99 峰值    | `6.896 s`       | `6.518 s`        | `8.572 s`          | `9.363 s`           |
+| CPU 使用率峰值（Limits）       | `119.45%`       | `117.54%`        | `111.13%`          | `120.93%`           |
+| 内存使用率峰值（Limits）         | `81.96%`        | `78.14%`         | `73.55%`           | `79.43%`            |
 
-* *[1] A：`-c 26` 在 `240s × 3` 下可稳定压满 CPU；内存峰值 `81.96%`，继续加压需重点观察 OOM 与重启。*
-* *[2] C：`-c 26` 开启限流后稳定，最高态 `Shedding=1`；`other`、OOM、重启均为 `0`。*
-* *[3] B：`-c 32` 触发 OOMKilled，重启增量 `4`；burst 阶段大量连接拒绝，不能作为稳定参数。*
-* *[4] D：待压测。*
-* *[5] Span 总数 = Σ`阶段请求数 × spans`；丢弃率 = Σ`失败请求数 × spans` / Span 总数。*
+* *[1] A：已稳定压满 CPU、内存，再增加并发、持续时间将触发 OOM。*
+* *[2] C：开启限流不损失吞吐（请求量、Span 成功处理数多于 A 组），耗时 P99 / 容器 & CPU 峰值均低于 A 组。*
+* *[3] C：连续触发 4 次 OOMKilled，持续加压将会更严重。*
+* *[4] D：开启限流后稳定运行，请求量、Span 成功处理数多于 C 组。*
+* *[5] 成功接收 Span 数 = Σ`阶段 200 请求数 × 单请求 spans`。*
 * *[6] 单请求包大小估算：warmup=`16 KiB`（`128 spans × 128 B`），burst=`512 KiB`（`512 spans × 1,024 B`），bigpayload=`512 KiB`（`128 spans × 4,096 B`）。*
+* *[7] 快速返回限流（429）相比于 OOMKilled 导致的超时，将给压测程序更多机会进行请求轰炸，所以会看到限流组处理请求总数会更多，系统压力更大，在真实场景下，触发限流后将使得 CPU 使用率回落。*
 
 ---
 
 ## 0x09 实施进展
 
-| 时间 | 结论性进展 |
-| --- | --- |
-| `2026-06-23 00:00` | 当前方案收敛为「采样回路 + 通用 `stateSlot` + 每数据类型 `recordState`」：CPU 使用 `slow=cpuSlow`、`fast=cpuFast`，内存使用 `slow=fast=mem`；配置改为 `thresholds.cpu` / `thresholds.mem`，状态转移只做 OR / AND 聚合，限流仍落在 HTTP / gRPC 入口。 |
-| `2026-06-21` | 内存信号补齐软线滞回带：<br />[a] thresholds 新增 `mem_enter` / `mem_exit`，与 `mem_hard` 形成 enter / exit / hard 三档，对齐 CPU 的滞回结构 <br />[b] `Normal` ↔ `Shedding` 内存路径沿用 `breach_n` 连续门控避免毛刺，`mem_hard` 仍单次即触发以抢内核 OOM 之前止血 <br />[c] 内存只读原始水位、不做 EWMA，避免平滑掩盖真实压力，理由落到 `0x05 b` <br />[d] 丢弃概率收敛为 `t = max(t_cpu, t_mem)` 喂同一组 `drop_min` / `drop_max`，CPU 与内存共用强度档位 <br />[e] 观测口径同步：`bk_collector_throttle_water_level{kind}` 增加 `mem_enter` / `mem_exit`，状态表与水位时间轴新增内存视图。 |
-| `2026-06-18 16:00` | 完成代码落地与验收闭环：<br />[a] 指标实现对齐水位、状态机状态、请求量 `3` 类协议，保留 `allowed` / `denied` 请求量口径 <br />[b] `throttle.enabled=false` 时保留 HTTP / gRPC / admin 的 `throttle` 中间件，关闭状态下恒放行，并跳过限流单例与采样回路初始化 <br />[c] Endpoint 归类改为 receiver 侧注册，OTLP、RemoteWrite、Pyroscope 复用本地路由常量 <br />[d] 使用 Go `1.23.0` 执行限流定向测试、`go test ./internal/... ./receiver/...` 与 `go test ./...` 通过 <br />[e] `2` 位复核 Agent 按 throttle 白名单复查后同意合入，样例配置、`go.mod`、`go.sum` 等非本任务改动不纳入本次验收。 |
-| `2026-06-18 15:00` | 收敛观测指标协议：<br />[a] 水位统一用 `bk_collector_throttle_water_level{kind}` 承载原始 CPU / 内存水位、CPU 快慢信号和阈值线 <br />[b] 请求量统一用 `bk_collector_throttle_requests_total{decision}` 承载 `allowed` / `denied`，不再单独按 `shed` / `open` 拆丢弃量。 |
-| `2026-06-17` | 方案 B 定稿并收敛第一期范围 <br />[a] 确立「CPU 主限流、内存做熔断」，落到 `ResourceSampler` 与 `ThrottleManager` 两单例，cgroup 直读取数单一基准 VM `lib/cgroup`、EWMA 对齐 RFC 6298，go-zero `core/stat` 仅作 CPU 速率公式对齐 <br />[b] 移除 GOMEMLIMIT 软背压与配置热重载，内存只留硬熔断、配置仅启动期加载 <br />[c] 限流粒度由 Endpoint 改为数据类型（traces/metrics/logs/profiles）、每类一台状态机，端点用预先注册映射表归类（准确路径如 `/v1/traces`、`/prometheus/write`、`/pyroscope/ingest`） <br />[d] 配置收敛为 signal / thresholds / rules 三层：阈值全局共用（`cpu_enter`/`cpu_exit`/`cpu_hard`/`mem_hard`/`breach_n`），每类只调 `drop_min`/`drop_max`，丢弃概率在 `cpu_enter`～`cpu_hard` 线性插值，`enabled: false` 整类豁免，指标标签按 `record_type` <br />[e] 验收含单测门禁、Go 压测工具（collector example 目录、单独编译二进制）与 OrbStack 集成口径 |
+| 时间                 | 结论性进展                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+|--------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `2026-06-25`       | C、D 用收敛后的最佳配置（`cpu.enter=0.85`、`cpu.hard=1.20`、`mem.enter=0.70`、`mem.hard=0.80`、`drop_max=0.2`）重测，得出两条关键结论：<br />[a] 限流不损失吞吐——C 成功放行 `14,373` 与不限流的 A `14,208` 持平，P99 反而降 `0.4 s`、内存峰值低 `4pp`。<br />[b] 限流保住过载下的可用性——D 在 `-c 32` 过载下成功放行 `14,288` 仍与 A 持平，B 同压力因 `4` 次 OOMKilled 仅放行 `13,377`，多出来的请求由 `429` 主动拒绝兜底。<br />0x08 a/c 同步收敛为单一配置。                                                                                                                                                                                                                                                                                                                               |
+| `2026-06-24`       | 集群压测首次验证限流目标达成：同压力 `-c 32` 下 D 全程无 OOM 无重启，对照 B 同压力的 `4` 次 OOMKilled，限流避开内核 OOM 的设计目标落地。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `2026-06-23 00:00` | 当前方案收敛为「采样回路 + 通用 `stateSlot` + 每数据类型 `recordState`」：CPU 使用 `slow=cpuSlow`、`fast=cpuFast`，内存使用 `slow=fast=mem`；配置改为 `thresholds.cpu` / `thresholds.mem`，状态转移只做 OR / AND 聚合，限流仍落在 HTTP / gRPC 入口。                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `2026-06-21`       | 内存信号补齐降级线滞回带：<br />[a] thresholds 新增 `mem_enter` / `mem_exit`，与 `mem_hard` 形成 enter / exit / hard 三档，对齐 CPU 的滞回结构 <br />[b] `Normal` ↔ `Shedding` 内存路径沿用 `breach_n` 连续门控避免毛刺，`mem_hard` 仍单次即触发以抢内核 OOM 之前止血 <br />[c] 内存只读原始水位、不做 EWMA，避免平滑掩盖真实压力，理由落到 `0x05 b` <br />[d] 丢弃概率收敛为 `t = max(t_cpu, t_mem)` 喂同一组 `drop_min` / `drop_max`，CPU 与内存共用强度档位 <br />[e] 观测口径同步：`bk_collector_throttle_water_level{kind}` 增加 `mem_enter` / `mem_exit`，状态表与水位时间轴新增内存视图。                                                                                                                                                                                                               |
+| `2026-06-18 16:00` | 完成代码落地与验收闭环：<br />[a] 指标实现对齐水位、状态机状态、请求量 `3` 类协议，保留 `allowed` / `denied` 请求量口径 <br />[b] `throttle.enabled=false` 时保留 HTTP / gRPC / admin 的 `throttle` 中间件，关闭状态下恒放行，并跳过限流单例与采样回路初始化 <br />[c] Endpoint 归类改为 receiver 侧注册，OTLP、RemoteWrite、Pyroscope 复用本地路由常量 <br />[d] 使用 Go `1.23.0` 执行限流定向测试、`go test ./internal/... ./receiver/...` 与 `go test ./...` 通过 <br />[e] `2` 位复核 Agent 按 throttle 白名单复查后同意合入，样例配置、`go.mod`、`go.sum` 等非本任务改动不纳入本次验收。                                                                                                                                                                                                                           |
+| `2026-06-18 15:00` | 收敛观测指标协议：<br />[a] 水位统一用 `bk_collector_throttle_water_level{kind}` 承载原始 CPU / 内存水位、CPU 快慢信号和阈值线 <br />[b] 请求量统一用 `bk_collector_throttle_requests_total{decision}` 承载 `allowed` / `denied`，不再单独按 `shed` / `open` 拆丢弃量。                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `2026-06-17`       | 方案 B 定稿并收敛第一期范围 <br />[a] 确立「CPU 主限流、内存做熔断」，落到 `ResourceSampler` 与 `ThrottleManager` 两单例，cgroup 直读取数单一基准 VM `lib/cgroup`、EWMA 对齐 RFC 6298，go-zero `core/stat` 仅作 CPU 速率公式对齐 <br />[b] 移除 GOMEMLIMIT 软背压与配置热重载，内存只留硬熔断、配置仅启动期加载 <br />[c] 限流粒度由 Endpoint 改为数据类型（traces/metrics/logs/profiles）、每类一台状态机，端点用预先注册映射表归类（准确路径如 `/v1/traces`、`/prometheus/write`、`/pyroscope/ingest`） <br />[d] 配置收敛为 signal / thresholds / rules 三层：阈值全局共用（`cpu_enter`/`cpu_exit`/`cpu_hard`/`mem_hard`/`breach_n`），每类只调 `drop_min`/`drop_max`，丢弃概率在 `cpu_enter`～`cpu_hard` 线性插值，`enabled: false` 整类豁免，指标标签按 `record_type` <br />[e] 验收含单测门禁、Go 压测工具（collector example 目录、单独编译二进制）与 OrbStack 集成口径 |
 
 ---
 
@@ -1025,6 +940,6 @@ collector 锚点（优先读本地代码库）：
 
 ### b. 版本锚点
 
-| 状态 | 分支              | 里程碑     | PR  |
-|----|-----------------|---------|-----|
+| 状态 | 分支                                   | 里程碑     | PR  |
+|----|--------------------------------------|---------|-----|
 | 🔄 | `feat/throttle/#1010158081135346316` | 支持自适应限流 | 待创建 |
