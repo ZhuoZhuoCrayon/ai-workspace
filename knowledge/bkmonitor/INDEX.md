@@ -8,7 +8,7 @@
 
 | 需求 | 标签 | 状态 | 更新日期 |
 |------|------|------|----------|
-| [APM Span 详情支持 Links 反向关联展示](./issues/2026-06-04-apm-span-links-reverse-relation/README.md) | `apm` `span` `trace` `links` `relation` `otlp` | PR Review 中 | 2026-06-17 |
+| [APM Span 详情支持 Links 反向关联展示](./issues/2026-06-04-apm-span-links-reverse-relation/README.md) | `apm` `span` `trace` `links` `relation` `otlp` | 已完成 | 2026-06-25 |
 | [日志数据源切换前后保持原始日志结构一致](./issues/2026-06-08-log-uq-object-structure-restore/README.md) | `log` `unify-query` `data-source` `object-field` | 新建 | 2026-06-08 |
 | [主机场景容器事件关联准确性提升](./issues/2026-06-03-alert-host-k8s-event-relation-accuracy/README.md) | `alert` `k8s-event` `host-target` `k8s-node` `scene-view` `unify-query` | 待合入 | 2026-06-04 |
 | [【告警中心】优化关联日志条件构造不准确的问题](./issues/2026-06-04-alert-log-search-condition-accuracy/README.md) | `alert` `log` `log-relation` `query-string` `alert-drilling` `lucene` | 新建 | 2026-06-04 |
