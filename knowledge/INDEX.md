@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-06-26
+> 最后更新：2026-06-27
 
 ## 0x01 项目知识
 
@@ -18,6 +18,7 @@
 
 ## 0x02 最近更新
 
+- 2026-06-27：更新 [优化告警详情主机日志关联准确性](./bkmonitor/issues/2026-04-15-alert-detail-host-collector-log-relation/README.md) 至 bkmonitor（拆分两个里程碑：先修复日志类 HOST 告警原始日志关联优先级，再接入主机关联采集项日志）
 - 2026-06-26：迁移 [collector 空资源维度占位排查](./bkmonitor-datalink/troubleshooting/collector-from-record-empty-net-host-ip.md) 至 bkmonitor-datalink troubleshooting（改用 mock 数据，记录 from_record 与 from_cache 的空串占位修复）
 - 2026-06-25：更新 [APM Span 详情支持 Links 反向关联展示](./bkmonitor/issues/2026-06-04-apm-span-links-reverse-relation/README.md) 至 bkmonitor（写回 PR #11217，标记里程碑 2 done）
 - 2026-06-22：更新 [bk-collector 自适应限流](./bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/README.md) 至 bkmonitor-datalink（记录 C 场景 `-c 26` 压测结果，补充本轮限流参数与 PromQL 口径结果）

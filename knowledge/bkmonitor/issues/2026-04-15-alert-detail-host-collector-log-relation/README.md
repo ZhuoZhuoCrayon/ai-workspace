@@ -1,28 +1,27 @@
 ---
-title: 新版告警详情支持查看主机关联采集项日志
-tags: [alert, log, host-target, collector, log-relation]
-description: 在新版告警详情后端聚合主机关联采集项日志索引，复用旧版 listIndexByHost 逻辑并扩展 HostTarget 与 BaseK8STarget
+title: 优化告警详情主机日志关联准确性
+tags: [alert, log, host-target, collector, log-relation, accuracy]
+description: 先修复日志类 HOST 告警的原始日志关联优先级，再接入主机关联采集项日志索引
 created: 2026-04-15
-updated: 2026-04-15
+updated: 2026-06-27
 ---
 
-# 新版告警详情支持查看主机关联采集项日志
+# 优化告警详情主机日志关联准确性
 
 ## 0x01 背景
 
 ### a. Why
 
-旧版告警详情在前端通过 `listIndexByHost`
-动态查询主机关联采集项日志索引，并据此展示日志入口。
+新版告警详情的主机日志关联需要同时解决准确性和完整性问题。
 
-新版告警详情已经切换为后端统一返回关联日志目标的模式。
-但当前 `alert_v2`
-的目标聚合逻辑尚未覆盖“主机关联采集项日志”这一能力。
-这会导致主机类告警，以及具备 `bk_host_id + ip + bk_cloud_id`
-维度的 K8S 告警，在新版详情中无法稳定看到对应采集项日志。
+准确性问题来自日志类 HOST 告警：日志策略按 `ip` 聚合后，告警对象会被建模为主机，但关联日志入口仍应优先回到原始日志策略配置。
+
+完整性问题来自新版详情的目标聚合层：旧版告警详情通过 `listIndexByHost` 动态查询主机关联采集项日志索引，
+新版 `alert_v2` 还没有把这类日志纳入 `HostTarget` 和 `BaseK8STarget` 的关联日志结果。
 
 ### b. 目标
 
+- 优化日志类 HOST 告警的关联日志准确性。
 - 在新版告警详情中支持查看主机关联采集项日志。
 - 复用旧版 `listIndexByHost` 查询能力，避免重复造轮子。
 - 将主机关联采集项日志能力纳入 `alert_v2` 目标聚合体系。
@@ -33,17 +32,16 @@ updated: 2026-04-15
 
 ### a. 建议的方案
 
-以 `fta_web.alert_v2.target` 为统一收口层。
-直接依赖 `monitor_web.scene_view.resources.log.HostIndexQueryMixin`
-查询主机关联采集项索引，再通过 `get_biz_index_sets_with_cache`
-补全索引集元信息，最终并入 `list_related_log_targets()`
-返回结果。
+以 `fta_web.alert_v2.target` 为统一收口层，分两个里程碑落地。
 
-`BaseK8STarget` 基于 `list_related_host_targets()`
-反查关联主机，再并发查询主机关联采集项日志。
+里程碑 1：`HostTarget.list_related_log_targets()` 先复用 `DefaultTarget.list_related_log_targets()`。
+日志类 HOST 告警命中原始日志策略时，直接返回策略内的索引集、查询语句和维度过滤条件。
 
-`HostTarget` 在现有“关系图反查日志”能力之外，
-再补一路“主机关联采集项日志”查询，并通过统一的去重合并策略输出。
+里程碑 2：直接依赖 `monitor_web.scene_view.resources.log.HostIndexQueryMixin` 查询主机关联采集项索引，再通过 `get_biz_index_sets_with_cache` 补全索引集元信息，最终并入 `list_related_log_targets()` 返回结果。
+
+`BaseK8STarget` 基于 `list_related_host_targets()` 反查关联主机，再并发查询主机关联采集项日志。
+
+`HostTarget` 在现有“关系图反查日志”能力之外，再补一路“主机关联采集项日志”查询，并通过统一的去重合并策略输出。
 
 ### b. 约束
 
