@@ -13,13 +13,11 @@ updated: 2026-06-28
 
 ## 0x01 背景与约束
 
-主机日志关联有两个独立问题，需要分阶段收敛。
+主机日志关联需要同时解决准确性和完整性。
 
-第一类问题是准确性：日志策略按 `ip` 聚合后，告警事件会被抽取成 `target_type=HOST`。这是正确的告警对象语义，
-但 `HostTarget.list_related_log_targets()` 会覆盖 `DefaultTarget` 的日志策略回溯逻辑，导致日志类 HOST 告警没有优先使用原始
-`index_set_id`、`query_string` 和告警维度构造日志入口。
+准确性问题来自日志类 HOST 告警：日志策略按 `ip` 聚合后，事件目标会建模为 `target_type=HOST`，但日志入口仍应优先使用策略原始的 `index_set_id`、`query_string` 和告警维度。
 
-第二类问题是完整性：旧版告警详情通过 `ListIndexByHost` 查询主机关联采集项日志；新版告警详情切到后端统一返回关联日志目标后，`HostTarget` 和 `BaseK8STarget` 还没有接入这类采集项日志。
+完整性问题来自新版详情的统一后端聚合：旧版告警详情通过 `ListIndexByHost` 动态查询主机关联采集项日志，新版 `HostTarget` 和 `BaseK8STarget` 还没有纳入这路来源。
 
 约束：
 
@@ -32,7 +30,7 @@ updated: 2026-06-28
 
 ## 0x02 架构设计
 
-### a. 扩展结构
+### a. 日志来源合并结构
 
 ```mermaid
 flowchart LR
@@ -42,7 +40,7 @@ flowchart LR
     B --> K["BaseK8STarget.list_related_log_targets()"]
 
     subgraph HostTargetPlan["HostTarget"]
-        H1{"DefaultTarget.list_related_log_targets() 命中? [1]"}
+        H1{"DefaultTarget 命中原始日志策略? [1]"}
         H2["DefaultTarget.list_related_log_targets"]
         H3["KEEP HostTarget._host_relation_log_targets()"]
         H4["ADD BaseTarget._list_related_host_collector_log_targets(host_targets)"]
@@ -79,17 +77,17 @@ flowchart LR
 
 | 约束 | 规则 |
 | --- | --- |
-| 合法入参 | `bk_biz_id + bk_host_id`，或 `bk_biz_id + bk_host_innerip + bk_cloud_id` *[1]* |
+| 合法入参 | `bk_biz_id + bk_host_id`，或 `bk_biz_id + bk_host_innerip + bk_cloud_id` *[3]* |
 | 入参不完整 | 返回空列表，防止 `HostIndexQueryMixin.query_indexes()` 抛错。 |
 | 返回信息 | 仅使用 `infos[].index_set_id`，再从 `_biz_index_set_map[str(index_set_id)]` 获取索引集。 |
 
-- *[1] `bk_cloud_id=0` 是合法值，校验时仅排除 `None`。*
+- *[3] `bk_cloud_id=0` 是合法值，校验时仅排除 `None`。*
 
 ## 0x03 开发方案
 
-### a. 日志类 HOST 告警原始日志优先
+主要改动文件：[<源码> bkmonitor/bkmonitor/packages/fta_web/alert_v2/target.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/fta_web/alert_v2/target.py)
 
-改动文件：[<源码> bkmonitor/bkmonitor/packages/fta_web/alert_v2/target.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/fta_web/alert_v2/target.py)
+### a. 日志类 HOST 告警原始日志优先
 
 核心伪代码：
 
@@ -105,18 +103,16 @@ if not self._alert.event.ip:
 return merge_log_targets(host_relation_targets, host_collector_targets)
 ```
 
-- *[1] `super().list_related_log_targets()` 必须先于 `event.ip` 判空执行：日志类 HOST 告警命中原策略日志配置后直接返回，非日志 HOST 目标再使用 `event.ip` 继续反查主机关系日志和主机关联采集项日志。*
+- *[1] 这一步必须先于 `event.ip` 判空：日志类 HOST 告警命中策略日志配置后直接返回，非日志 HOST 目标再用 `event.ip` 反查主机关系日志和主机关联采集项日志。*
 
 ### b. BaseTarget 公共能力
 
-改动文件：[<源码> bkmonitor/bkmonitor/packages/fta_web/alert_v2/target.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/fta_web/alert_v2/target.py)
-
 | 变更点 | 目标 |
 | --- | --- |
-| **[Add]** `BaseTarget._biz_index_set_map` | 基于 `get_biz_index_sets_with_cache()` 构建 `str(index_set_id) -> index_set_info` 映射。 |
+| **[Add]** `BaseTarget._biz_index_set_map` | 缓存业务索引集映射：`str(index_set_id) -> index_set_info`。 |
 | **[Add]** `BaseTarget._query_host_collector_log_targets(host_target)` | [a] 复用 `HostIndexQueryMixin.query_indexes()` 查询主机关联采集项索引，再补齐 `list[dict[str, Any]]` 返回项。<br />[b] 有 `bk_target_ip` 时增加 `{"field": "serverIp", "operator": "=", "value": [bk_target_ip]}` 作为过滤条件。 |
 | **[Add]** `BaseTarget._list_related_host_collector_log_targets(host_targets)` | 对多个主机目标并发查询采集项日志，并按 `host_targets` 输入顺序汇总结果。 |
-| **[Add]** `merge_log_targets(*target_groups)` | [a] 参数从左到右表示来源优先级。<br />[b] 当前按 `str(index_set_id)` 判重，保留最左侧来源。 |
+| **[Add]** `merge_log_targets(*target_groups)` | 按参数顺序合并日志来源，相同 `str(index_set_id)` 保留靠左来源。 |
 
 #### `_list_related_host_collector_log_targets` 内并发请求
 
@@ -133,13 +129,11 @@ return merge_log_targets(*targets_iter)
 
 ### c. HostTarget 接入
 
-改动文件：[<源码> bkmonitor/bkmonitor/packages/fta_web/alert_v2/target.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/fta_web/alert_v2/target.py)
-
 | 变更点 | 目标 |
 | --- | --- |
-| **[Add]** `HostTarget._host_relation_log_targets()` | 平移改造前的 `HostTarget.list_related_log_targets()` 逻辑，保留现有告警关联日志返回。 |
-| **[Change]** `HostTarget.list_related_log_targets()` | [a] 先执行日志类 HOST 告警原始日志优先分支。<br />[b] 原始日志未命中后，保留 `if not self._alert.event.ip: return []`，`event.ip` 为空时不查询两类主机日志。<br />[c] 前置判断通过后，并发执行 `HostTarget._host_relation_log_targets()` 和 `BaseTarget._list_related_host_collector_log_targets(...)`。 |
-| **[Use]** `merge_log_targets(host_relation_targets, host_collector_targets)` | [a] 改造前：现有告警关联日志。<br />[b] 改造后：现有告警关联日志 > 主机关联采集项日志。 |
+| **[Add]** `HostTarget._host_relation_log_targets()` | 承载现有主机关系反查日志逻辑，供回退分支复用。 |
+| **[Change]** `HostTarget.list_related_log_targets()` | [a] 先执行日志类 HOST 告警原始日志优先分支。<br />[b] 原始日志未命中后再判断 `event.ip`，为空时不查询两类主机日志。<br />[c] `event.ip` 有值时，并发执行 `HostTarget._host_relation_log_targets()` 和 `BaseTarget._list_related_host_collector_log_targets(...)`。 |
+| **[Use]** `merge_log_targets(host_relation_targets, host_collector_targets)` | 合并优先级：主机关系日志 > 主机关联采集项日志。 |
 
 #### `HostTarget.list_related_log_targets`
 
@@ -164,12 +158,10 @@ with ThreadPool(2) as pool:
 
 ### d. BaseK8STarget 接入
 
-改动文件：[<源码> bkmonitor/bkmonitor/packages/fta_web/alert_v2/target.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/fta_web/alert_v2/target.py)
-
 | 变更点 | 目标 |
 | --- | --- |
 | **[Change]** `BaseK8STarget.list_related_log_targets()` | 线程池从 `2` 路扩展为 `3` 路，新增主机关联采集项日志查询。 |
-| **[Use]** `merge_log_targets(k8s_targets, apm_targets, host_collector_targets)` | [a] 改造前：K8S 关联日志 > APM 日志。<br />[b] 改造后：K8S 关联日志 > APM 日志 > 主机关联采集项日志。 |
+| **[Use]** `merge_log_targets(k8s_targets, apm_targets, host_collector_targets)` | 合并优先级：K8S 关联日志 > APM 日志 > 主机关联采集项日志。 |
 
 #### `BaseK8STarget.list_related_log_targets`
 
@@ -210,14 +202,13 @@ with ThreadPool(3) as pool:
 pytest packages/fta_web/tests/alert_v2/test_target.py
 ```
 
-若实现改动触及旧版主机采集项查询或接口序列化，再补充旧版接口回归测试。
-本方案默认不触碰旧版接口。
+本方案默认不触碰旧版接口。若实现改动触及旧版主机采集项查询或接口序列化，再补充旧版接口回归测试。
 
 ## 0x05 实施进展
 
 | 时间 | 结论性进展 |
 | --- | --- |
-| `2026-06-27 12:00` | [a] 方案拆成两个里程碑：先优化日志类 HOST 告警的原始日志关联准确性，再支持主机关联采集项日志。<br />[b] 将 `_query_host_collector_log_targets(host_target)` 职责调整为查询协议，并补齐 `bk_cloud_id=0`、`addition` 初始化、去重类型归一和 fallback 测试。 |
+| `2026-06-27 12:00` | [a] 方案拆成两个里程碑：先优化日志类 HOST 告警的原始日志关联准确性，再支持主机关联采集项日志。<br />[b] 将 `_query_host_collector_log_targets(host_target)` 职责调整为查询协议，并补齐 `bk_cloud_id=0`、`addition` 初始化、去重类型归一和回退测试。 |
 | `2026-06-27 11:00` | 重写方案结构：明确 `HostTarget`、`BaseK8STarget` 的主机关联采集项日志接入方式、来源优先级、失败隔离和测试落点。 |
 | `2026-04-15 18:00` | 初版方案确定后端接入方向：不改前端，复用旧版 `HostIndexQueryMixin`，在 `alert_v2` 内补齐主机关联采集项日志。 |
 
