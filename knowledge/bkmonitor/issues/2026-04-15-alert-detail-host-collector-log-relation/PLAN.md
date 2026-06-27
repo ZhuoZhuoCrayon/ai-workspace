@@ -4,7 +4,7 @@ tags: [alert, log, host-target, collector, log-relation, accuracy]
 issue: ./README.md
 description: 先修复日志类 HOST 告警的原始日志关联优先级，再支持新版告警详情返回主机关联采集项日志
 created: 2026-04-15
-updated: 2026-06-27
+updated: 2026-06-28
 ---
 
 # 优化告警详情主机日志关联准确性 —— 实施方案
@@ -32,21 +32,7 @@ updated: 2026-06-27
 
 ## 0x02 架构设计
 
-### a. 方案边界
-
-本方案按两个里程碑优化主机日志关联：
-
-- 里程碑 1：日志类 HOST 告警优先返回原始日志策略关联结果。
-- 里程碑 2：新版告警详情支持查看主机关联采集项日志。
-
-实现保持现有入口，按以下顺序收敛：
-
-- `HostTarget` 先判断原始日志策略是否可构造日志目标，命中时直接返回该结果。
-- 未命中时，再进入主机关系反查和主机关联采集项日志聚合。
-- `BaseTarget` 封装主机采集项查询和索引集补全。
-- `HostTarget`、`BaseK8STarget` 在各自的 `list_related_log_targets()` 内接入该结果，并按来源优先级合并。
-
-### b. 扩展结构
+### a. 扩展结构
 
 ```mermaid
 flowchart LR
@@ -56,7 +42,7 @@ flowchart LR
     B --> K["BaseK8STarget.list_related_log_targets()"]
 
     subgraph HostTargetPlan["HostTarget"]
-        H1{"DefaultTarget.list_related_log_targets() 命中?"}
+        H1{"DefaultTarget.list_related_log_targets() 命中? [1]"}
         H2["DefaultTarget.list_related_log_targets"]
         H3["KEEP HostTarget._host_relation_log_targets()"]
         H4["ADD BaseTarget._list_related_host_collector_log_targets(host_targets)"]
@@ -71,7 +57,7 @@ flowchart LR
         K1["KEEP BaseK8STarget._k8s_related_log_targets()"]
         K2["KEEP BaseK8STarget._apm_related_log_targets()"]
         K3["ADD BaseTarget._list_related_host_collector_log_targets(host_targets)"]
-        K4["merge_log_targets(k8s_targets, apm_targets, host_collector_targets)"]
+        K4["merge_log_targets(k8s_targets, apm_targets, host_collector_targets) [2]"]
         K1 --> K4
         K2 --> K4
         K3 --> K4
@@ -84,10 +70,10 @@ flowchart LR
     K4 --> R
 ```
 
-下图展示两层收敛点：`HostTarget` 先处理日志类 HOST 告警的原始日志策略优先级，再处理非日志策略的主机关系日志和主机采集项日志。
-`BaseK8STarget` 仍按 K8S 关联、APM 关联、主机采集项日志的优先级合并。
+- *[1] 命中时直接返回原始日志策略结果，`event.ip`、主机关系和采集项日志都不参与。*
+- *[2] K8S 目标只新增主机关联采集项日志，合并优先级保持 `K8S > APM > host_collector`。*
 
-### c. 主机采集项查询协议
+### b. 主机采集项查询协议
 
 `BaseTarget._query_host_collector_log_targets(host_target)` 负责把 `host_target` 转成 `query_indexes()` 支持的主机标识，并补全命中的日志目标：
 
