@@ -84,6 +84,76 @@ function extractLinks(markdown) {
   return links
 }
 
+function extractImageLinks(markdown) {
+  const links = []
+  const re = /!\[[^\]]*]\(([^)]+)\)/g
+  let m = re.exec(markdown)
+  while (m) {
+    links.push(m[1])
+    m = re.exec(markdown)
+  }
+  return links
+}
+
+function isInsidePath(basePath, targetPath) {
+  const rel = path.relative(basePath, targetPath)
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
+}
+
+function normalizeLocalAssetTarget(rawTarget) {
+  const target = String(rawTarget).trim()
+  if (
+    !target
+    || target.startsWith('#')
+    || target.startsWith('/')
+    || /^https?:\/\//i.test(target)
+    || target.startsWith('mailto:')
+    || target.startsWith('tel:')
+  ) {
+    return ''
+  }
+
+  const [pathWithQuery] = target.split('#', 1)
+  const [pathPart] = pathWithQuery.split('?', 1)
+  if (!pathPart || /\.(md|html)$/i.test(pathPart) || !path.extname(pathPart)) {
+    return ''
+  }
+
+  try {
+    return decodeURIComponent(pathPart)
+  } catch {
+    return pathPart
+  }
+}
+
+function copyLocalAssets(sourceAbsPath, destAbsPath, rawLinks, copiedAssets, warnings) {
+  for (const rawLink of rawLinks) {
+    const assetTarget = normalizeLocalAssetTarget(rawLink)
+    if (!assetTarget) continue
+
+    const sourceAsset = path.resolve(path.dirname(sourceAbsPath), assetTarget)
+    const destAsset = path.resolve(path.dirname(destAbsPath), assetTarget)
+    if (!isInsidePath(WORKSPACE_ROOT, sourceAsset) || !isInsidePath(KNOWLEDGE_DEST, destAsset)) {
+      warnings.push(`资源路径越界，已跳过：${rawLink}（引用：${normalizeRelPath(sourceAbsPath)}）`)
+      continue
+    }
+
+    if (copiedAssets.has(destAsset)) continue
+    copiedAssets.add(destAsset)
+
+    if (!fs.existsSync(sourceAsset)) {
+      warnings.push(`资源文件不存在：${normalizeRelPath(sourceAsset)}（引用：${normalizeRelPath(sourceAbsPath)}）`)
+      continue
+    }
+
+    const stat = fs.statSync(sourceAsset)
+    if (!stat.isFile()) continue
+
+    fs.mkdirSync(path.dirname(destAsset), { recursive: true })
+    fs.copyFileSync(sourceAsset, destAsset)
+  }
+}
+
 function pickTitle(data, content, fallback) {
   if (typeof data.title === 'string' && data.title.trim()) return data.title.trim()
   const heading = content.match(/^#\s+(.+)$/m)
@@ -314,6 +384,7 @@ function copyKnowledgeDocs(docAbsPaths, warnings) {
   fs.rmSync(KNOWLEDGE_DEST, { recursive: true, force: true })
 
   const entries = []
+  const copiedAssets = new Set()
   for (const absPath of docAbsPaths) {
     const sourceRel = normalizeRelPath(absPath)
     const raw = safeRead(absPath)
@@ -340,6 +411,8 @@ function copyKnowledgeDocs(docAbsPaths, warnings) {
       route,
       sourceKind,
       issueKey,
+      sourceAbsPath: absPath,
+      assetLinks: extractImageLinks(parsed.content),
       data: parsed.data,
       content: rewriteMarkdownLinks(parsed.content),
       title: pickTitle(parsed.data, parsed.content, path.posix.basename(sourceRel, '.md')),
@@ -376,6 +449,7 @@ function copyKnowledgeDocs(docAbsPaths, warnings) {
     const destPath = path.join(DOCS_DIR, entry.outputRelMd)
     fs.mkdirSync(path.dirname(destPath), { recursive: true })
     fs.writeFileSync(destPath, cleanMd, 'utf-8')
+    copyLocalAssets(entry.sourceAbsPath, destPath, entry.assetLinks, copiedAssets, warnings)
 
     docs.push({
       route: entry.route,
