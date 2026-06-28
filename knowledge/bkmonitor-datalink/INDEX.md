@@ -19,4 +19,6 @@
 
 ### c. Snippets
 
-暂无
+| 代码片段 | 标签 | 更新日期 |
+|------|------|----------|
+| [采集器排障常用命令](./snippets/collector-troubleshooting-basic-commands.md) | `collector` `tcpdump` `packet-capture` `pcap` `otlp` `traces` | 2026-06-28 |
