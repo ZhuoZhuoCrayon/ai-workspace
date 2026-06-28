@@ -14,7 +14,7 @@
 | [【告警中心】优化关联日志条件构造不准确的问题](./issues/2026-06-04-alert-log-search-condition-accuracy/README.md) | `alert` `log` `log-relation` `query-string` `alert-drilling` `lucene` | 新建 | 2026-06-04 |
 | [错误视图 tRPC 场景适配](./issues/2026-05-31-apm-error-view-trpc-adaptation/README.md) | `apm` `error-view` `trpc` `rpc` `exception-type` `scene-view` `code-remark` | 设计中 | 2026-06-08 |
 | [APM 预计算适配共享数据源](./issues/2026-05-14-apm-precalc-shared-multi-app/README.md) | `apm` `pre-calculate` `shared-datasource` `multi-app` `bmw` | 实现中 | 2026-05-22 |
-| [APM 支持跨应用共享数据源](./issues/2026-03-03-apm-shared-datasource/README.md) | `apm` `datasource` `es` `shared-storage` | 设计中 | 2026-05-14 |
+| [APM 支持跨应用共享数据源](./issues/2026-03-03-apm-shared-datasource/README.md) | `apm` `datasource` `es` `shared-storage` `migration` | 设计中 | 2026-06-29 |
 | [APM Span 内置指标支持声明式引用](./issues/2026-05-07-apm-span-builtin-metric-declarative-reference/README.md) | `apm` `span` `metric-group` `trace` `unify-query` `declarative` | 新建 | 2026-05-07 |
 | [优化 APM 日志关联列表关系查询长耗时](./issues/2026-05-06-apm-log-relation-list-uq-latency/README.md) | `apm` `log-relation` `relation-query` `unify-query` `latency` | 方案已确认 | 2026-05-08 |
 | [优化首页 TraceID 全局搜索的预计算延迟](./issues/2026-05-02-overview-trace-id-low-latency-search/README.md) | `overview` `search` `apm` `trace` `pre-calculate` `low-latency` | PR Review 中 | 2026-05-06 |

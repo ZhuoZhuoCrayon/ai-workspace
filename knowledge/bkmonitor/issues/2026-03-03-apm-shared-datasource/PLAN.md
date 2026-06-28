@@ -1,10 +1,10 @@
 ---
 title: APM 跨应用共享数据源 —— 实施方案
-tags: [apm, datasource, es, shared-storage, architecture]
+tags: [apm, datasource, es, shared-storage, architecture, migration]
 issue: knowledge/bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md
 description: APM 跨应用共享数据源的实现方案与开发方案
 created: 2026-03-03
-updated: 2026-05-14
+updated: 2026-06-29
 ---
 
 # APM 跨应用共享数据源 —— 实施方案
@@ -288,14 +288,18 @@ SHARED_DS_REGISTRY = {
 | 变更点                                       | 目标                                                         |
 | -------------------------------------------- | ------------------------------------------------------------ |
 | **[Field]** `shared_datasource_id`           | 新增字段。                                                   |
+| **[Field]** `backup_link_info`               | 新增字段，记录迁入共享前的原独占链路字段 *[1]*。<br />[a] `bk_data_id`：原独占 DataID。<br />[b] `result_table_id`：原独占 RT。<br />[c] `bkdata_datalink_config`：原独占 Trace 链路配置。 |
 | **[Method]** `apply_datasource`              | 增加共享数据源处理逻辑，并在进入共享 / 独占分支前收口迁入、迁出判断。 |
 | **[Method]** `create_data_id`                | 增加 `global_mode` 、`data_name[可选]` 参数。                |
 | **[Method]** `create_or_update_result_table` | 增加 `global_mode` `result_table_id[可选]` 参数。            |
 | **[Method]** `to_link_info`                  | 导出链路元数据字典（bk_data_id、result_table_id 等），子类覆写追加特有字段。 |
 | **[Method]**  `set_from_shared`              | 由子类覆写，从共享链路信息字典提取各自字段并赋值。           |
 | **[Method]** `reset_link_info`               | 重置当前数据源链路信息为未创建状态，用于迁入 / 迁出后复用原有创建流程。 |
+| **[Method]** `recover_link_info`             | 根据目标模式处理备份链路。<br />[a] 迁入共享：保留 `backup_link_info`，不恢复活动链路字段。<br />[b] 迁出独占：从 `backup_link_info` 恢复原独占链路字段。 |
 | **[Method]** `is_shared`                     | 是否共享，通过 `shared_datasource_id` 判断。                 |
 | **[Method]** `start / stop`                  | 共享模式下不执行结果表启停，但每次应用启停需调整共享池占用计数。<br />应用层需保证 `start_trace()` / `stop_trace()` 幂等，避免重复占用或重复释放。<br />独占模式保持原有启停行为。 |
+
+- *[1] `index_set_id`、`index_set_name` 不备份：`delete_index_set` 成功后，同名 indexset 可重建。*
 
 **共享模式下创建参数结论**：
 
@@ -329,10 +333,11 @@ flowchart TD
 
     E --> F["ApmDataSourceConfigBase.apply_datasource"]
     F --> M{"模式变化？"}
-    M -->|是| N["按旧模式 stop"]
-    N --> O["reset_link_info"]
-    M -->|否| B2{"options.is_shared？"}
-    O --> B2
+    M -->|是| N["stop()"]
+    N --> O["reset_link_info()"]
+    O --> P["recover_link_info(options.is_shared)"]
+    P --> B2{"options.is_shared？"}
+    M -->|否| B2
 
     B2 -->|是| S1["<共享> allocate"]
     S1 -->|有可用| S2["set_from_shared"]
@@ -353,38 +358,40 @@ flowchart TD
     classDef shared fill:#1b5e20,stroke:#81c784,color:#c8e6c9
     classDef dedicated fill:#0d47a1,stroke:#64b5f6,color:#bbdefb
 
-    class N,O migrate
+    class N,O,P migrate
     class S1,S2,S3,S4,S5,S6,S7 shared
     class D1,D2 dedicated
 ```
 
-图中「模式变化」等价于 `ds.is_shared != options.is_shared`。
+图中「模式变化」沿用当前代码触发条件：`obj.result_table_id != "" and obj.is_shared != options.is_shared`。
 
 - `ds.is_shared`：数据库中当前数据源状态。
 - `options.is_shared`：本次 apply 的目标状态。
 
-迁移状态判断只需放在 `apply_datasource` 获取 / 创建 `obj` 后、进入现有共享 / 独占分支前：
+迁移状态判断仍放在 `apply_datasource` 获取 / 创建 `obj` 后、进入共享 / 独占分支前。满足上述条件时执行迁入 / 迁出前置动作；新建应用不产生迁移语义，直接进入目标模式分支。
 
 ```python
-if obj.is_shared != options.get("is_shared", False):
+is_shared = options.get("is_shared", False)
+
+if obj.result_table_id != "" and obj.is_shared != is_shared:
+    if is_shared:
+        obj.backup_exclusive_link_info()
     obj.stop(bk_biz_id, app_name)
     obj.reset_link_info()
+    # 迁入：保留 reset 前写入的 backup_link_info；迁出：从 backup_link_info 恢复链路信息。
+    obj.recover_link_info(is_shared)
 ```
-
-随后沿用既有分支，不需要为迁入 / 迁出拆出第二套创建流程：
 
 | 状态变化 | 语义 | 前置动作 | 后续动作 |
 | --- | --- | --- | --- |
-| `True → False` | 迁出：共享改独占 | 走 `stop()` 释放共享源占用，再 `reset_link_info()` | `is_shared=False`，进入 `_apply_exclusive_datasource`。 |
-| `False → True` | 迁入：独占改共享 | 走 `stop()` 停用独占资源，再 `reset_link_info()` | `is_shared=True`，进入 `_apply_shared_datasource`。 |
-| 未变化 | 保持现状 | 不执行迁移清理 | 按目标状态进入原有共享或独占分支。 |
+| `True → False` | 迁出：共享改独占 | [a] `stop()`：释放共享池占用。<br />[b] `reset_link_info()`：清空当前共享链路。<br />[c] `recover_link_info(False)`：从 `backup_link_info` 恢复独占链路字段 *[3]*。 | `is_shared=False`，进入 `_apply_exclusive_datasource` 复用独占流程 *[1]*。 |
+| `False → True` | 迁入：独占改共享 | [a] `backup_exclusive_link_info()`：备份原独占链路。<br />[b] `stop()`：停用原独占 RT，并删除 indexset *[2]*。<br />[c] `reset_link_info()`：清空活动链路字段。<br />[d] `recover_link_info(True)`：保留 `backup_link_info`，不恢复活动链路字段 *[3]*。 | `is_shared=True`，进入 `_apply_shared_datasource` *[1]*。 |
+| 未变化 | 保持现状 | 不执行迁移清理 | 仍按目标状态进入原有共享或独占分支，支持同模式存储配置更新 *[4]*。 |
 
-**补充约束**：
-
-- `API 失败回滚`：`create_data_id` 或 `create_or_update_result_table` 抛异常时，删除草稿（`reserved.delete()`）并向上传播。
-- `Trace 索引集边界`：共享 Trace 的 `stop()` 不删除日志索引集，独占 Trace 保留现有删除逻辑。
-
-
+- *[1] `API` 失败回滚：`create_data_id` 或 `create_or_update_result_table` 抛异常时，删除草稿（`reserved.delete()`）并向上传播。*
+- *[2] `Trace` 索引集边界：共享 Trace 的 `stop()` 不删除日志索引集，独占 Trace 保留现有删除逻辑。*
+- *[3] `DataID` 边界：本期迁入 / 迁出不启停 metadata `DataSource`，只备份和恢复 `bk_data_id` 字段。*
+- *[4] `start_trace` 幂等边界：应用层需在已启用 Trace 时直接返回，避免共享模式重复 `acquire()`。*
 
 ### c. 共享判定机制
 
@@ -507,7 +514,7 @@ Trace 原始表查询隔离只对 `apm_global.shared` 前缀结果表生效。
 
 #### 查询目标
 
-新增 `bkmonitor/data_source/utils/apm.py`：
+新增 `bkmonitor/data_source/utils/apm.py` *[1]* *[2]* *[3]*：
 
 ```python
 @dataclass(frozen=True)
@@ -526,15 +533,9 @@ class TraceDatasourceTarget:
         return cls(table_id=table_id, app=APMAppTarget(bk_biz_id=bk_biz_id, app_name=app_name))
 ```
 
-`TraceDatasourceTarget` 表示一条 `table_id -> APM 应用` 绑定关系。
-
-工厂方法统一命名为 `build()`：`from` 是 Python 关键字，不能作为方法名。
-
-`from_` 语义不稳定，容易被误认为误输入。
-
-查询隔离必须保留 `table_id -> APM 应用` 的绑定关系，禁止把 `bk_biz_id` 与 `app_name` 拆成两个独立列表。
-
-这样可以避免跨业务或跨应用误匹配。
+- *[1] `TraceDatasourceTarget` 表示一条 `table_id -> APM 应用` 绑定关系。*
+- *[2] 工厂方法统一命名为 `build()`：`from` 是 Python 关键字，不能作为方法名；`from_` 语义不稳定，容易被误认为误输入。*
+- *[3] 查询隔离必须保留 `table_id -> APM 应用` 的绑定关系，禁止把 `bk_biz_id` 与 `app_name` 拆成两个独立列表，避免跨业务或跨应用误匹配。*
 
 #### 隔离入口
 
@@ -611,6 +612,48 @@ rg "DataSourceLabel\.BK_APM"
 
 如需暂停整池写入，后续应提供共享池级操作，并在接口层明确影响范围。
 
+### i. 迁入迁出 command
+
+#### 迁入迁出
+
+新增位置：`bkmonitor/apm/management/commands/migrate_apm_trace_datasource.py`。
+
+```bash
+python manage.py migrate_apm_trace_datasource \
+  --target shared \
+  --apps "2:app_a" "2:app_b"
+```
+
+参数协议：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `--target` | 是 | `shared` 表示迁入共享，`exclusive` 表示迁出独占 *[1]*。 |
+| `--apps` | 是 | 接收多个应用，格式为 `<bk_biz_id>:<app_name>` *[2]*。 |
+| `--dry-run` | 否 | 输出当前状态、目标状态、是否有备份和预计动作。 |
+
+- *[1] 命令调用 `bkmonitor.apm.resources.ApplyDatasourceResource`，目标状态转换遵循 `0x02.b` 的入参表。*
+- *[2] 命令按 `--apps` 查询 `Application`，并通过 `ApplicationHelper.get_default_storage_config(bk_biz_id, app_name)` 补齐 `trace_datasource_option`。*
+
+#### SaaS APM 元数据同步
+
+迁入 / 迁出后 RT 会变化，需调用 `apm_web.models.application.Application.sync_datasource()` 同步 SaaS APM 元数据。
+
+在 Django shell 执行：
+
+```python
+from apm_web.models.application import Application
+
+apps = [
+    (2, "app_a"),
+    (2, "app_b"),
+]
+
+for bk_biz_id, app_name in apps:
+    app = Application.objects.get(bk_biz_id=bk_biz_id, app_name=app_name)
+    app.sync_datasource()
+```
+
 ## 0x03 实施进展
 
 | 时间 | 对应设计片段 | 结论调整概要 | 改动 / 验证 |
@@ -624,6 +667,19 @@ rg "DataSourceLabel\.BK_APM"
 | `2026-04-23 17:00` | `0x01.e` `0x02.b` `0x02.c` `0x02.e` `0x02.h` | [1] PR review 收口更新路径共享判定、启停边界与 DataID 运维边界<br />[2] 将 `SharedDatasourceRuleFactory` 抽成 `is_shared` 独立决策机制，并按协议文档补充 JSON 示例与字段表<br />[3] 明确查询隔离保留为共享 Trace 正式开放前必须补齐的后续 PR | [1] 已更新方案主干约束、共享判定机制小节与协议字段说明<br />[2] 已复查 PR #10415 最新 head `80e070f`<br />[3] 待开发修复 `ApplyDatasourceResource`、共享启停、`OperateApmDataIdResource` 与 migration LF |
 | `2026-04-16 15:00` | `0x01.b` `0x01.d` `0x02.a` `0x02.b` | [1] 合并同日重复文案迭代，只保留最终有效方案结论<br />[2] 明确 `bk_biz_id_alias` 固定传字符串 `bk_biz_id`，用于查询阶段业务隔离<br />[3] 保留共享模型接口约定与 DataID / 结果表创建口径分层 | [1] 已更新关键决策、命名规则、共享模型与方法级参数约束<br />[2] 已统一 `SharedTraceDataSource` 接口说明和单句续行表达<br />[3] 本次仅更新方案文档，未改代码 |
 | `2026-04-16 10:00` | `0x01.b` `0x01.d` `0x02.a` `0x02.b` | [1] 合并同小时方案结论与文档结构迭代<br />[2] 共享模式下 DataID 与结果表创建口径拆分<br />[3] `create_data_id` 使用特权业务 ID，`create_or_update_result_table` 使用 `GLOBAL_CONFIG_BK_BIZ_ID=0` 并透传 `bk_biz_id_alias` | [1] 已更新关键决策、命名规则与方法级参数约束<br />[2] 已拆分共享模型、表格后说明与迁移备注<br />[3] 本次仅更新方案文档，未改代码 |
+
+## 0x04 版本锚点
+
+| 状态 | 分支 | 里程碑 | PR |
+| --- | --- | --- | --- |
+| ✅ | `feat/apm_application_share_datasource/#1010158081133297794` | APM 支持跨应用共享数据源 | [TencentBlueKing/bk-monitor #10415](https://github.com/TencentBlueKing/bk-monitor/pull/10415) |
+| ✅ | `feat/apm_meta/#1010158081134003037` | 优化 APM 共享数据源索引集注册 | [TencentBlueKing/bk-monitor #10485](https://github.com/TencentBlueKing/bk-monitor/pull/10485) |
+| ✅ | `feat/apm_shared_data_resource_rules_opt/#1010158081134024228` | 优化 APM 共享数据源规则配置默认值 | [TencentBlueKing/bk-monitor #10488](https://github.com/TencentBlueKing/bk-monitor/pull/10488) |
+| ✅ | `feat/trace_query_shared_datasource/#1010158081134138352` | 调用链检索支持共享数据源场景 | [TencentBlueKing/bk-monitor #10583](https://github.com/TencentBlueKing/bk-monitor/pull/10583) |
+| ✅ | `feat/apm_meta/#1010158081134345764` | APM 共享数据源增加空间路由 | [TencentBlueKing/bk-monitor #10656](https://github.com/TencentBlueKing/bk-monitor/pull/10656) |
+| ✅ | `feat/apm_shared_datasource_opt/#1010158081134381477` | APM 跨应用共享数据源功能完善 | [TencentBlueKing/bk-monitor #10671](https://github.com/TencentBlueKing/bk-monitor/pull/10671) |
+| ✅ | `feat/apm_meta/#1010158081134528860` | APM 预计算任务调度支持共享数据源场景 | [TencentBlueKing/bk-monitor #10725](https://github.com/TencentBlueKing/bk-monitor/pull/10725) |
+| 🔄 | `<branch_name>` | APM 共享数据源迁入迁出支持可重入 | 待创建 |
 
 ---
 

@@ -1,9 +1,9 @@
 ---
 title: APM 支持跨应用共享数据源
-tags: [apm, datasource, es, shared-storage]
+tags: [apm, datasource, es, shared-storage, migration]
 description: 支持多 APM 应用复用同一数据源，压缩 ES 索引数量，降低数据链路资源消耗
 created: 2026-03-03
-updated: 2026-05-14
+updated: 2026-06-29
 ---
 
 # APM 支持跨应用共享数据源
@@ -60,7 +60,7 @@ updated: 2026-05-14
 ### b. 约束
 
 - 本期仅覆盖 Trace 数据类型，日志和指标的共享支持后续迭代
-- 不支持存量应用从独占模式迁移到共享模式，仅对新建应用生效
+- 规则命中不自动迁移存量应用，存量应用迁入或迁出必须通过显式操作入口触发
 - 元数据路由层对全局结果表按业务过滤的能力为跨团队依赖项，需与 metadata 团队确认
 - 共享数据源本期不创建日志索引集
 
