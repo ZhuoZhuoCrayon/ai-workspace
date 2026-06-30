@@ -4,7 +4,7 @@ tags: [alert, log, host-target, collector, log-relation, accuracy]
 issue: ./README.md
 description: 先修复日志类 HOST 告警的原始日志关联优先级，再支持新版告警详情返回主机关联采集项日志
 created: 2026-04-15
-updated: 2026-06-28
+updated: 2026-06-30
 ---
 
 # 优化告警详情主机日志关联准确性 —— 实施方案
@@ -208,6 +208,7 @@ pytest packages/fta_web/tests/alert_v2/test_target.py
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-06-30 19:00` | [a] ✅ [TencentBlueKing/bk-monitor #11276](https://github.com/TencentBlueKing/bk-monitor/pull/11276) 已合入，合入提交为 `f26e539b`。<br />[b] 实现范围为日志类 HOST 告警原始日志优先，里程碑 2 主机关联采集项日志接入继续待创建。 |
 | `2026-06-27 12:00` | [a] 方案拆成两个里程碑：先优化日志类 HOST 告警的原始日志关联准确性，再支持主机关联采集项日志。<br />[b] 将 `_query_host_collector_log_targets(host_target)` 职责调整为查询协议，并补齐 `bk_cloud_id=0`、`addition` 初始化、去重类型归一和回退测试。 |
 | `2026-06-27 11:00` | 重写方案结构：明确 `HostTarget`、`BaseK8STarget` 的主机关联采集项日志接入方式、来源优先级、失败隔离和测试落点。 |
 | `2026-04-15 18:00` | 初版方案确定后端接入方向：不改前端，复用旧版 `HostIndexQueryMixin`，在 `alert_v2` 内补齐主机关联采集项日志。 |
@@ -228,5 +229,5 @@ pytest packages/fta_web/tests/alert_v2/test_target.py
 
 | 状态 | 分支 | 里程碑 | PR |
 | --- | --- | --- | --- |
-| 🔄 | `<branch_name>` | 里程碑 1：优化告警详情主机日志关联准确性 | 待创建 |
+| ✅ | `feat/host_alert_log_relation_accuracy/#1010158081135660831` | 里程碑 1：优化告警详情主机日志关联准确性 | [TencentBlueKing/bk-monitor #11276](https://github.com/TencentBlueKing/bk-monitor/pull/11276) |
 | 🔄 | `<branch_name>` | 里程碑 2：告警详情支持查看主机关联采集项日志 | 待创建 |

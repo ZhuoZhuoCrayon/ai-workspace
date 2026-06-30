@@ -3,7 +3,7 @@ title: 优化告警详情主机日志关联准确性
 tags: [alert, log, host-target, collector, log-relation, accuracy]
 description: 先修复日志类 HOST 告警的原始日志关联优先级，再接入主机关联采集项日志索引
 created: 2026-04-15
-updated: 2026-06-27
+updated: 2026-06-30
 ---
 
 # 优化告警详情主机日志关联准确性

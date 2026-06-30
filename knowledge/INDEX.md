@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-06-29
+> 最后更新：2026-06-30
 
 ## 0x01 项目知识
 
@@ -18,6 +18,7 @@
 
 ## 0x02 最近更新
 
+- 2026-06-30：更新 [优化告警详情主机日志关联准确性](./bkmonitor/issues/2026-04-15-alert-detail-host-collector-log-relation/README.md) 至 bkmonitor（写回 [TencentBlueKing/bk-monitor #11276](https://github.com/TencentBlueKing/bk-monitor/pull/11276) 已合入，标记 ✅ 里程碑 1 已合入，里程碑 2 待创建）
 - 2026-06-29：更新 [APM 支持跨应用共享数据源](./bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md) 至 bkmonitor（补充迁入 / 迁出可重入方案，明确独占链路备份、恢复和命令入口）
 - 2026-06-28：下架 bkmonitor-datalink troubleshooting `collector-from-record-empty-net-host-ip.md`（沉淀价值不高，对应修复逻辑已在源码与测试中固化）
 - 2026-06-28：迁移 [采集器排障常用命令](./bkmonitor-datalink/snippets/collector-troubleshooting-basic-commands.md) 至 bkmonitor-datalink snippets（从 bkmonitor troubleshooting 改归 datalink snippets，追加 OTLP HTTP traces 探针命令，标注 busybox 时间戳陷阱）
