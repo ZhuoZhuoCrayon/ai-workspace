@@ -1,0 +1,78 @@
+{
+  "skill_name": "knowledge-mgr",
+  "evals": [
+    {
+      "id": 0,
+      "name": "state-migration-reentrant-plan",
+      "prompt": "基于一个已有 PLAN，为某个已有系统补充迁入 / 迁出可重入方案。用户提供了候选方案、目标入口、重复执行要求和若干待确认边界。请先回归源码和现有 PLAN，复原当前状态表达、现有流程、复用能力和缺口，再把结论融入原方案。禁止直接根据用户草稿写结论。",
+      "expected_output": "输出应先复原现状并形成结构判断，再把迁移语义融入架构设计、开发方案和验收章节。不得把已有能力改写成新的判断节点，不得另起一套迁移流程。",
+      "files": [
+        "knowledge/bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md",
+        "knowledge/bkmonitor/issues/2026-03-03-apm-shared-datasource/PLAN.md"
+      ],
+      "expectations": [
+        "在写架构结论前，先说明当前系统如何表达状态、目标状态、现有流程、复用能力和缺口，并给出可追溯依据。",
+        "架构设计必须围绕状态表达、迁移前置动作、后续收敛流程和边界形成结构判断，不能只列操作步骤。",
+        "开发方案必须承接架构结论，说明新增能力在哪里声明、谁来调用、如何回到既有流程。",
+        "方案应区分已有能力、可复用能力、新增缺口和本期不做范围。",
+        "验收与验证章节应集中描述重复执行、状态未变化、失败路径和回归门禁。"
+      ]
+    },
+    {
+      "id": 1,
+      "name": "query-object-boundary-plan",
+      "prompt": "基于已有知识对象，为 bkmonitor 日志 UnifyQuery 查询链路补充“查询对象结构收敛”方案。用户提供了候选方向：把散落在查询条件、query_string、env 白名单和结果适配里的对象语义收敛到统一查询对象。请先回归现有 PLAN、README、相关 snippet 和可定位源码，复原当前查询入口、条件构造、路由边界、结果处理和异常语义，再输出可融入 PLAN 的架构设计、开发方案和验收与验证章节。禁止直接把用户候选方向改写成任务清单。",
+      "expected_output": "输出应先给出可追溯事实清单，复原现有查询结构，区分已有能力、可复用能力、新增缺口和不做范围。架构设计应围绕查询对象、条件协议、边界和收敛点形成结构判断；开发方案应承接这些架构结论；验收标准应集中在验收与验证章节。",
+      "files": [
+        "knowledge/bkmonitor/issues/2026-06-08-log-uq-object-structure-restore/README.md",
+        "knowledge/bkmonitor/issues/2026-06-08-log-uq-object-structure-restore/PLAN.md",
+        "knowledge/bkmonitor/snippets/unify-query.md"
+      ],
+      "expectations": [
+        "在写架构结论前，先列出查询入口、条件构造、路由边界、结果处理和异常语义等可追溯事实。",
+        "复原当前查询结构，说明新增查询对象插入在现有流程哪个位置，不能另起一套独立查询流程。",
+        "架构设计必须表达查询对象、条件协议、边界和收敛点之间的关系，不能只列新增字段、文件或待办事项。",
+        "开发方案必须逐项承接架构设计中的对象模型或协议结论，回答在哪声明、谁来调用、在哪收敛。",
+        "测试门禁、必测断言和回归口径只放在验收与验证章节。"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "skill-eval-governance-plan",
+      "prompt": "为 knowledge-mgr 的 plan-writing eval 体系补充一份“eval 治理与 schema 收敛”方案。背景：当前 evals.json 只有一个强绑定特定项目的样例，且字段使用上可能与 skill-creator schemas.md 存在口径差异。请先阅读 skill-creator 的 eval 工作流、schemas.md、knowledge-mgr plan-writing 规则和当前 evals.json，复原当前 eval 生产、运行、grading、viewer 展示链路，再设计一个可迁移的 eval 治理方案。不要修改文件，只输出方案草案。",
+      "expected_output": "输出应说明当前 eval 体系的真实现状、schema 差异、运行链路和过拟合风险。架构设计应把 eval case、expectation、grader、benchmark 和 viewer 之间的协议关系讲清；开发方案应承接该协议，说明字段收敛、命名、覆盖矩阵和轻量验证方式；验收与验证章节应单独定义如何判断治理方案生效。",
+      "files": [
+        ".agents/skills/skill-creator/SKILL.md",
+        ".agents/skills/skill-creator/references/schemas.md",
+        ".agents/skills/knowledge-mgr/references/plan-writing.md",
+        ".agents/skills/knowledge-mgr/evals/evals.json"
+      ],
+      "expectations": [
+        "先复原当前 eval 链路：evals.json 字段、skill-creator 运行流程、grading 结构、benchmark 或 viewer 依赖字段。",
+        "明确指出单一案例过拟合和 schema 口径差异，并区分已有能力、缺口与本期不做范围。",
+        "架构设计必须描述 eval case、expectation、grader、benchmark 或 viewer 的协议关系和覆盖矩阵。",
+        "开发方案必须承接架构协议，说明字段如何收敛、case 如何命名、覆盖矩阵如何维护、旧 eval 如何兼容或迁移。",
+        "验收标准必须放在验收与验证章节，包括 schema 静态检查、抽样 grading、viewer 字段兼容和至少两类非同项目场景覆盖。"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "reliability-feedback-loop-plan",
+      "prompt": "基于 bkmonitor-datalink 的 collector adaptive throttling 资料，补充“过载保护与恢复反馈环”方案。用户已有 PREPLAN、PLAN、REPORT 和压测记录，希望把压测结论沉淀为可开发方案。请先复原当前采集链路、限流入口、反馈信号、降级路径、恢复路径和失败补偿，再设计可靠性架构与开发方案。不要把压测现象直接写成任务清单，也不要把测试结果塞进架构设计。",
+      "expected_output": "输出应基于现有文档和报告复原 collector 自适应限流现状，识别已有保护、可复用机制、新增缺口和不做范围。架构设计应围绕反馈控制环、过载判定、降级策略、恢复条件和稳定入口展开；开发方案应承接这些设计结论；验收与验证章节单独定义压测、长稳、故障注入和回归门禁。",
+      "files": [
+        "knowledge/bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/README.md",
+        "knowledge/bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/PREPLAN.md",
+        "knowledge/bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/PLAN.md",
+        "knowledge/bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/REPORT.md"
+      ],
+      "expectations": [
+        "先复原当前采集链路、限流入口、反馈信号、降级路径、恢复路径和失败补偿，并说明依据来自文档、报告或源码待确认点。",
+        "明确区分已有保护、可复用机制、新增缺口和本期不做范围，不能把压测发现直接改写成新增功能列表。",
+        "架构设计必须表达反馈控制环、过载判定、降级策略、恢复条件和稳定入口之间的关系，不能只罗列优化项。",
+        "开发方案必须承接架构设计中的反馈环和协议边界，说明在哪声明信号、谁消费信号、策略在哪里收敛。",
+        "压测门禁、长稳门禁、故障注入和回归断言必须集中放在验收与验证章节。"
+      ]
+    }
+  ]
+}
