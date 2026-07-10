@@ -215,7 +215,6 @@ uv run pytest -n auto tests/packages/apm_web/
 
 ## 0x06 参考
 
-- 前序 issue：[优化 APM 日志关联列表关系查询长耗时](../2026-05-06-apm-log-relation-list-uq-latency/README.md)
 - 参考实现：[源码 fta_web/alert_v2/target.py · BaseK8STarget._k8s_related_log_targets](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/fta_web/alert_v2/target.py)
 - [源码 apm_web/handlers/log_handler.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/apm_web/handlers/log_handler.py)
 - [源码 apm_web/log/resources.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/apm_web/log/resources.py)

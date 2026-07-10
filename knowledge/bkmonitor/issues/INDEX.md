@@ -12,7 +12,6 @@
 | [APM 预计算适配共享数据源](./2026-05-14-apm-precalc-shared-multi-app/README.md) | `apm` `pre-calculate` `shared-datasource` `multi-app` `bmw` | 让单 BMW 预计算任务感知共享 data_id 下的多个应用，不破坏现有任务模型与持久化键 | 2026-05-22 |
 | [APM 支持跨应用共享数据源](./2026-03-03-apm-shared-datasource/README.md)                                         | `apm` `datasource` `es` `shared-storage` `migration`      | 支持多 APM 应用复用同一数据源，压缩 ES 索引数量，降低数据链路资源消耗                 | 2026-06-29 |
 | [APM Span 内置指标支持声明式引用](./2026-05-07-apm-span-builtin-metric-declarative-reference/README.md) | `apm` `span` `metric-group` `trace` `unify-query` `declarative` | 将 Trace 概览图的 Span 指标查询从手工参数拼接收敛为可复用的声明式指标算子 | 2026-05-07 |
-| [优化 APM 日志关联列表关系查询长耗时](./2026-05-06-apm-log-relation-list-uq-latency/README.md) | `apm` `log-relation` `relation-query` `unify-query` `latency` | 通过 `EntitySet.get_workloads(service_name)` 前置短路无 workload 服务，收敛 APM 日志关联列表长耗时 | 2026-05-08 |
 | [优化首页 TraceID 全局搜索的预计算延迟](./2026-05-02-overview-trace-id-low-latency-search/README.md) | `overview` `search` `apm` `trace` `pre-calculate` `low-latency` | 在预计算路径之外补一条直查 APM 应用原始 Trace 的快速通道，解决新 Trace 在预计算未落盘时搜不到的问题 | 2026-05-06 |
 | [优化 APM 接口统计偶现查询报错](./2026-04-21-apm-endpoint-stat-hot-window-divide-by-zero/README.md) | `apm` `endpoint-stat` `hot-window` `aggregation` `bucket-inconsistency` | 修复 APM endpoint 统计在热时间窗口内因聚合分桶不一致导致的接口报错 | 2026-04-21 |
 | [优化告警详情主机日志关联准确性](./2026-04-15-alert-detail-host-collector-log-relation/README.md) | `alert` `log` `host-target` `collector` `log-relation` `accuracy` | 先修复日志类 HOST 告警的原始日志关联优先级，再接入主机关联采集项日志索引 | 2026-06-30 |
