@@ -95,10 +95,10 @@ flowchart TD
 | 变更点                                                                          | 返回类型                          | 目标                                                                                                                                                                                                                                                                        |
 |------------------------------------------------------------------------------|-------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **[Add]** `get_k8s_related_log_indexes(bk_biz_id: int, app_name: str)`       | `dict[str, list[dict]]`       | 返回 `{service_name: [{"index_set_id": int, "bk_biz_id": int}, ...]}`                                                                                                                                                                                                       |
-| **[Add]** `_fetch_app_workloads(entity_set, service_names)`                  | `list[dict]`                  | 遍历 `service_names` 调用 `entity_set.get_workloads(svc)` 收集全量 workload，按 `(bcs_cluster_id, namespace, kind, name)` 去重。`kind` 决定查询使用的 Source 类型                                                                                                                               |
+| **[Add]** `_fetch_app_workloads(entity_set, service_names)`                  | `list[dict]`                  | [a] 遍历 `service_names`，调用 `entity_set.get_workloads(svc)` 收集全量 workload。<br />[b] 按 `(bcs_cluster_id, namespace, kind, name)` 去重。<br />[c] `kind` 决定后续查询使用的 Source 类型 |
 | **[Add]** `_query_workload_related_indexes(bk_biz_id, workloads)`            | `dict[frozenset, list[dict]]` | Workload 路径：内部按 `chunk_size=5` 分片并发查 UQ。<br />[a] 根据 `kind` 选择 `SourceK8sDeployment` / `SourceK8sDaemonSet` / `SourceK8sStatefulSet` 构造 `source_info`，查 `SourceDatasource`。<br />[b] 通过 `relation.source_info` 还原回 workload。<br />[c] Key 为 `frozenset(workload.items())`。<br />[d] `workloads` 为空时直接返回空字典，跳过 UQ 查询 |
 | **[Add]** `_query_service_related_indexes(bk_biz_id, service_names)`         | `dict[str, list[dict]]`       | Service 路径：内部按 `chunk_size=5` 分片并发查 UQ，覆盖自定义 CRD。<br />[a] 以 `service_name` 构造 `SourceService`，查 `SourceDatasource`。<br />[b] 通过 `relation.source_info` 还原回 `service_name`。<br />[c] Key 为 `service_name`                                                                 |
-| **[Add]** `_merge_by_service(entity_set, workload_indexes, service_indexes)` | `dict[str, list[dict]]`       | 按服务合并两路索引并去重                                                                                                                                                                                                                                                              |
+| **[Add]** `_merge_by_service(entity_set, workload_indexes, service_indexes)` | `dict[str, list[dict]]`       | [a] 遍历 `entity_set.service_names`，调用 `entity_set.get_workloads(svc)` 获取服务关联的 workloads。<br />[b] 构造 `frozenset` key，从 `workload_indexes` 取回对应索引。<br />[c] 合并 `service_indexes`，按 `index_set_id` 去重 |
 
 #### `get_k8s_related_log_indexes`
 
@@ -134,7 +134,8 @@ pool.close()
 ```
 
 - 关联关系查询时间范围固定为 `30` 分钟，避免长时间范围导致慢查询阻塞。
-- `bk_data_id → index_set_id` 通过已有方法 `list_tables_by_data_ids` + `get_biz_index_sets_with_cache`（`apm_web/handlers/log_handler.py`）转换。
+- `bk_data_id → index_set_id` 转换复用 `list_tables_by_data_ids` 和 `get_biz_index_sets_with_cache`。
+- RelationQ 调用链参考 `BaseK8STarget._k8s_related_log_targets`。
 
 ### b. 缓存写入 —— `cache_application_k8s_related_indexes`
 
@@ -148,7 +149,7 @@ pool.close()
 **调度配置**：
 
 - 频率：每 2 小时执行一次。
-- 注册方式：使用 `@shared_task(ignore_result=True)` 装饰器声明任务，在 `apm_web/celery_tasks.py`（或项目 beat schedule 配置文件）中注册到 Celery Beat。
+- 注册方式：使用 `@shared_task(ignore_result=True)` 装饰器声明任务，在 `config/celery/config.py` 的 `beat_schedule` 中注册。
 - `set_local_tenant_id(app.bk_tenant_id)`：多租户上下文切换，确保后续查询在正确的租户空间内执行。参数来自 `Application.bk_tenant_id`。
 
 **任务流程**：
@@ -181,12 +182,10 @@ flowchart TD
 |-----------------------------------------------------------|-----------------------------------|--------------------------------------------|
 | **[Change]** `ServiceLogHandler.list_indexes_by_relation` | `apm_web/handlers/log_handler.py` | 改为从 Redis 缓存查询，未命中返回空列表                    |
 | **[Keep]** `LogInfoResource.perform_request`              | `apm_web/log/resources.py`        | 保持现有逻辑，直接调用 `log_relation_list`——优化后该函数已变快 |
-| **[Keep]** `process_metric_relations` 的 workload 前置短路     | `apm_web/log/resources.py`        | 保留 `EntitySet.get_workloads` 判空逻辑          |
+| **[Change]** `process_metric_relations`                   | `apm_web/log/resources.py`        | 移除 `EntitySet.get_workloads` 判空逻辑，缓存路径已足够快，无需前置剪枝 |
 
 - 缓存命中时直接返回，不再调用 UQ。
 - 缓存未命中时返回空列表，不回退到 `RelationQ.query`，避免请求路径退化到分钟级耗时。
-
-**冷启动策略**：部署后缓存填充前，K8S 容器日志关联不展示。建议在部署脚本或 migration 中主动触发一次 `cache_application_k8s_related_indexes.delay()`，缩短空窗期。
 
 ## 0x04 验收与验证
 
@@ -217,11 +216,24 @@ uv run pytest -n auto tests/packages/apm_web/
 ## 0x06 参考
 
 - 前序 issue：[优化 APM 日志关联列表关系查询长耗时](../2026-05-06-apm-log-relation-list-uq-latency/README.md)
-- [源码 bk-monitor/packages/apm_web/handlers/log_handler.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/apm_web/handlers/log_handler.py)
-- [源码 bk-monitor/packages/apm_web/log/resources.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/apm_web/log/resources.py)
-- [源码 bk-monitor/packages/apm_web/tasks.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/apm_web/tasks.py)
-- [源码 bk-monitor/packages/apm_web/strategy/dispatch/entity.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/apm_web/strategy/dispatch/entity.py)
-- [源码 bk-monitor/packages/apm_web/topo/handle/relation/query.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/apm_web/topo/handle/relation/query.py)
+- 参考实现：[源码 fta_web/alert_v2/target.py · BaseK8STarget._k8s_related_log_targets](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/fta_web/alert_v2/target.py)
+- [源码 apm_web/handlers/log_handler.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/apm_web/handlers/log_handler.py)
+- [源码 apm_web/log/resources.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/apm_web/log/resources.py)
+- [源码 apm_web/tasks.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/apm_web/tasks.py)
+- [源码 apm_web/strategy/dispatch/entity.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/apm_web/strategy/dispatch/entity.py)
+- [源码 apm_web/topo/handle/relation/query.py](https://github.com/TencentBlueKing/bk-monitor/blob/master/bkmonitor/packages/apm_web/topo/handle/relation/query.py)
+
+### a. 辅助函数定位
+
+| 函数 / 常量                        | 模块                                            |
+|---------------------------------|-----------------------------------------------|
+| `compress_and_serialize`        | `bkmonitor.utils.common_utils`                |
+| `deserialize_and_decompress`    | `bkmonitor.utils.common_utils`                |
+| `ApmCacheKey`                   | `apm_web.constants`                           |
+| `SourceK8sDeployment` 等 Source  | `apm_web.topo.handle.relation.define`         |
+| `RelationQ`                     | `apm_web.topo.handle.relation.query`          |
+| `list_tables_by_data_ids`       | `apm_web.handlers.log_handler.ServiceLogHandler` |
+| `get_biz_index_sets_with_cache` | `apm_web.handlers.log_handler`                |
 
 ## 0x07 版本锚点
 
