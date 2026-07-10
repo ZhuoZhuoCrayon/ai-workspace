@@ -5,9 +5,12 @@ issue: knowledge/bkmonitor/issues/2026-05-06-apm-log-relation-list-uq-latency/RE
 description: 记录 APM 日志关联列表接口通过 workload 前置短路收敛 UQ 长耗时的方案
 created: 2026-05-06
 updated: 2026-05-08
+status: archived
 ---
 
 # 优化 APM 日志关联列表关系查询长耗时 —— 方案 PLAN
+
+> **已归档** — 本方案已于 `2026-05-08` 合并（[PR #10530](https://github.com/TencentBlueKing/bk-monitor/pull/10530)），后续优化由 [APM 关联容器日志采集项慢接口优化](../2026-07-10-apm-k8s-log-relation-cache/README.md) 接续。
 
 > 基于 [README.md](./README.md) 制定。
 
