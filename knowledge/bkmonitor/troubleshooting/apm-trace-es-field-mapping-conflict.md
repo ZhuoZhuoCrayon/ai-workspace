@@ -1,9 +1,9 @@
 ---
 title: APM Trace 写入 ES 字段类型冲突
 tags: [apm, trace, elasticsearch, mapping, attribute-filter, normaltypevalueconfig]
-description: APM Trace 属性同时上报 upstream_cluster 和 upstream_cluster.name，触发 ES keyword 与 object mapping 冲突，可通过应用级 attribute_filter drop 配置止血
+description: APM Trace 属性同时上报 upstream_cluster 和 upstream_cluster.name，触发 ES keyword 与 object mapping 冲突，可通过后台独立 drop 字段配置止血
 created: 2026-07-02
-updated: 2026-07-02
+updated: 2026-07-13
 ---
 
 # APM Trace 写入 ES 字段类型冲突
@@ -102,45 +102,100 @@ transfer 写入 ES 失败日志在 bkop 业务 `7`、索引集 `553`。一次查
 
 ## 0x03 解决方案
 
-在 bkmonitor SaaS 的 django shell 中执行。脚本只追加应用级 `db_config.drop` 规则，并用
-`need_delete_config=False` 保留同应用的其他配置。
+后台 drop 字段使用独立的 `ConfigTypes.DROP_FIELDS_CONFIG` 存储。生成应用下发配置时，系统再将这些字段合并到
+`attribute_config.drop`。该配置不会修改页面维护的 `DB_CONFIG`，页面查看和更新 DB 配置时也不会覆盖它。
+
+### a. 新增或更新后台配置
+
+在 bkmonitor SaaS 的 Django shell 中执行：
 
 ```python
 import json
 
 from apm.constants import ConfigTypes
 from apm.models import AppConfigBase, NormalTypeValueConfig
-from apm.task.tasks import refresh_apm_application_config
+
+BK_BIZ_ID = -4258012
+APP_NAME = "nba2kol3"
+DROP_FIELDS = ["attributes.upstream_cluster.name"]
+
+NormalTypeValueConfig.refresh_config(
+    BK_BIZ_ID,
+    APP_NAME,
+    AppConfigBase.APP_LEVEL,
+    APP_NAME,
+    [
+        {
+            "type": ConfigTypes.DROP_FIELDS_CONFIG,
+            "value": json.dumps(DROP_FIELDS, ensure_ascii=False),
+        }
+    ],
+    need_delete_config=False,
+)
+
+print(
+    NormalTypeValueConfig.get_app_value(
+        BK_BIZ_ID,
+        APP_NAME,
+        ConfigTypes.DROP_FIELDS_CONFIG,
+    )
+)
+```
+
+`refresh_config()` 会按应用和配置类型新增或更新记录。`need_delete_config=False` 保留其他类型的配置；
+`DROP_FIELDS_CONFIG` 的 `value` 仍按脚本内容整体覆盖。
+
+### b. 验证配置生成
+
+下面的脚本分别检查实时生成路径和定时批量下发使用的缓存路径。
+
+输出的 `attribute_config.drop` 应同时包含页面维护的 DB drop 规则和 `attributes.upstream_cluster.name`：
+
+```python
+import json
+
+from apm.core.application_config import ApmConfigCache, ApplicationConfig
+from apm.models import ApmApplication
 
 BK_BIZ_ID = -4258012
 APP_NAME = "nba2kol3"
 DROP_FIELD = "attributes.upstream_cluster.name"
 
-query = {
-    "bk_biz_id": BK_BIZ_ID,
-    "app_name": APP_NAME,
-    "config_level": AppConfigBase.APP_LEVEL,
-    "config_key": APP_NAME,
-    "type": ConfigTypes.DB_CONFIG,
+expected_rule = {
+    "predicate_key": DROP_FIELD,
+    "keys": [DROP_FIELD],
 }
-config = NormalTypeValueConfig.objects.filter(**query).first()
-value = json.loads(config.value) if config and config.value else {}
-drop_rules = value.setdefault("drop", [])
-if not isinstance(drop_rules, list):
-    raise ValueError("db_config.drop must be a list")
 
-rule = {"predicate_key": DROP_FIELD, "keys": [DROP_FIELD]}
-if rule not in drop_rules:
-    drop_rules.append(rule)
-    NormalTypeValueConfig.refresh_config(
-        BK_BIZ_ID,
-        APP_NAME,
-        AppConfigBase.APP_LEVEL,
-        APP_NAME,
-        [{"type": ConfigTypes.DB_CONFIG, "value": json.dumps(value, ensure_ascii=False)}],
-        need_delete_config=False,
-    )
+application = ApmApplication.objects.get(
+    bk_biz_id=BK_BIZ_ID,
+    app_name=APP_NAME,
+)
+
+
+def print_result(scene, generated_config):
+    attribute_config = generated_config.get("attribute_config", {})
+    drop_rules = attribute_config.get("drop", [])
+
+    print(f"\n--- {scene} ---")
+    print("后台规则已合并:", expected_rule in drop_rules)
+    print("后台规则数量:", drop_rules.count(expected_rule))
+    print(json.dumps(attribute_config, ensure_ascii=False, indent=2))
+
+
+generated_config = ApplicationConfig(application).application_config
+print_result("实时配置生成", generated_config)
+
+config_cache = ApmConfigCache()
+cached_config = ApplicationConfig(application, config_cache).application_config
+print_result("定时缓存配置生成", cached_config)
+```
+
+### c. 下发配置
+
+确认生成结果后，触发应用配置下发：
+
+```python
+from apm.task.tasks import refresh_apm_application_config
 
 refresh_apm_application_config.delay(BK_BIZ_ID, APP_NAME)
-print(json.dumps(value, ensure_ascii=False, indent=2))
 ```
