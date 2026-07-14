@@ -5,100 +5,144 @@ description: 归档 bkmonitor RUM Web 的 Span 公共字段与各类型专属字
 created: 2026-07-12
 updated: 2026-07-12
 ---
-
 # RUM Span 数据协议
-
-本文归档 bkmonitor RUM Web 的 Span 数据协议，覆盖顶层公共字段、Attributes、Resource、Status，以及 `9` 类
-`span_type` 的专属字段。本文适用于 RUM 数据上报、字段消费和协议核对。
 
 ## 0x01 公共字段
 
 ### a. 顶层字段
 
-| 字段               | 类型     | 描述                                                                             | 备注                                                                                |
-|------------------|--------|--------------------------------------------------------------------------------|-----------------------------------------------------------------------------------|
-| `app_name`       | String | 应用名称                                                                           | 应用名                                                                               |
-| `attributes`     | Object | 属性集                                                                            | 包含浏览器、设备、网络、异常等各类语义标签和度量                                                          |
-| `bk_biz_id`      | String | 业务 ID                                                                          | 蓝鲸业务标识                                                                            |
-| `elapsed_time`   | Number | 耗时（微秒）                                                                         | Span 从 start_time 到 end_time 的时间差                                                 |
-| `end_time`       | String | 结束时间戳（微秒）                                                                      | Span 结束的时间                                                                        |
-| `events`         | Object | 事件列表                                                                           | JSON 数组，span_type 为 error 时存在                                                     |
-| `kind`           | Number | [Span 类型](https://opentelemetry.io/zh/docs/concepts/signals/traces/#span-kind) | 枚举值：<br/>- 未定义：0<br/>- 内部调用：1<br/>- 同步被调：2<br/>- 同步主调：3<br/>- 异步主调：4<br/>- 异步被调：5 |
-| `links`          | Object | 关联 Span 列表                                                                     | JSON 数组                                                                           |
-| `parent_span_id` | String | 父 Span ID                                                                      |                                                                                   |
-| `resource`       | Object | 资源信息                                                                           | 产生此 Span 的服务、环境、SDK 等描述信息                                                         |
-| `span_id`        | String | 当前 Span ID                                                                     |                                                                                   |
-| `span_name`      | String | Span 名称                                                                        |                                                                                   |
-| `start_time`     | String | 开始时间戳（微秒）                                                                      |                                                                                   |
-| `status`         | Object | Span 执行状态                                                                      | 包含 `code` 和 `message`                                                             |
-| `time`           | String | 数据上报时间戳                                                                        | ES 写入时间标记                                                                         |
-| `trace_id`       | String | Trace ID                                                                       | 关联的链路追踪根标识                                                                        |
-| `trace_state`    | String | Trace 状态                                                                       | 内部格式，例如 `map[]`                                                                   |
+| 字段               | 类型           | 描述                                                                             | 备注                                                                          |
+| ---------------- | ------------ | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------- |
+| `app_name`       | String       | 应用名称                                                                           | 应用名。                                                                        |
+| `bk_biz_id`      | String       | 业务 ID                                                                          | 业务。                                                                         |
+| `trace_id`       | String       | Trace ID                                                                       | 关联的链路追踪根标识。                                                                 |
+| `trace_state`    | String       | Trace 状态                                                                       | 内部格式，例如 `map[]`。                                                            |
+| `span_name`      | String       | Span 名称                                                                        | --                                                                          |
+| `span_id`        | String       | Span ID                                                                        | --                                                                          |
+| `parent_span_id` | String       | 父 Span ID                                                                      | --                                                                          |
+| `status`         | Object       | Span 执行状态                                                                      | 包含 `code` 和 `message`。                                                      |
+| `kind`           | Number       | [Span 类型](https://opentelemetry.io/zh/docs/concepts/signals/traces/#span-kind) | 枚举值：<br>- 未定义：0<br>- 内部调用：1<br>- 同步被调：2<br>- 同步主调：3<br>- 异步主调：4<br>- 异步被调：5 |
+| `resource`       | Object       | 资源信息                                                                           | 服务、环境、SDK 等描述信息。                                                            |
+| `events`         | List[Object] | 事件列表                                                                           | 数组，span_type 为 error 时存在。                                                   |
+| `links`          | List[Object] | [Span 链接](https://opentelemetry.io/docs/concepts/signals/traces/#span-links)   | 链接的存在是为了 Span 同其他 Span 建立关联，从而表明存在因果关系。                                     |
+| `attributes`     | Object       | 属性                                                                             | 浏览器、设备、网络、异常等各类语义标签和度量。                                                     |
+| `time`           | String       | 数据上报时间（微秒）                                                                     | --                                                                          |
+| `start_time`     | String       | 开始时间（微秒）                                                                       | --                                                                          |
+| `end_time`       | String       | 结束时间（微秒）                                                                       | --                                                                          |
+| `elapsed_time`   | Number       | 耗时（微秒）                                                                         | --                                                                          |
+### b. [Resource](https://opentelemetry.io/docs/specs/semconv/resource/)
 
----
+#### 1）基础字段
+
+| 字段                                                                                                                     | 类型     | 描述     | 备注                                                |
+| ---------------------------------------------------------------------------------------------------------------------- | ------ | ------ | ------------------------------------------------- |
+| `resource.service.name`                                                                                                | String | 服务名    | --                                                |
+| `resource.service.version`                                                                                             | String | 版本     | --                                                |
+| [`resource.deployment.environment.name`](https://opentelemetry.io/docs/specs/semconv/resource/deployment-environment/) | String | 部署环境   | 推荐：`development`、`production`、`staging`、`test`。   |
+| `resource.telemetry.sdk.language`                                                                                      | String | 语言     | 固定值 `webjs`。                                      |
+| 【新增】`resource.telemetry.sdk.name`                                                                                      | String | SDK 名称 | 可选：`bluekin（或 opentelemetry）`、`aegis`             |
+| 【新增】`resource.telemetry.sdk.version`                                                                                   | String | SDK 版本 | --                                                |
+| `resource.rum.provider`                                                                                                | String | 数据提供方  | 固定值 `blueking`。<br><br>❌ 使用标准的 `sdk.name` 代替。<br> |
+* *[1]* [Telemetry SDK](https://opentelemetry.io/docs/specs/semconv/resource/#telemetry-sdk)
+#### 2）[user_agent](https://opentelemetry.io/docs/specs/semconv/registry/attributes/user-agent/)
+
+| 字段                             | 类型     | 描述                        | 备注                             |
+| ------------------------------ | ------ | ------------------------- | ------------------------------ |
+| `resource.user_agent.name`     | String | 代理名称                      | 通常指的是浏览器的名称，如 `Chrome`、`Edge`。 |
+| `resource.user_agent.version`  | String | 代理版本                      | 通常指的是浏览器的名称，如 `149`、`151`。     |
+| `resource.user_agent.original` | String | 客户端发送的 HTTP `User-Agent`。 | 如：`"Mozilla/5.0 ..."`。         |
+| `resource.user_agent.os.name`  | String | 操作系统名                     | 如 `macOS`、`Windows`、`Android`。 |
+* *[1] ❌ 从原 attributes 迁移，以上字段在 RUM 场景均为不可变属性，放到 resource 更合理。*
 
 ### b. Attributes
 
-#### Span 公共属性
+#### 1）基础字段
 
-- 基础字段
+| 字段                           | 类型     | 描述                 | 备注                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ---------------------------- | ------ | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `attributes.user.id`         | String | 用户 ID              | --                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `attributes.span_type`       | String | Span 类型            | 枚举值：<br>- 文档加载：document<br>- 路由切换：route<br>- 静态资源：resource<br>- HTTP / API：http<br>- 长任务：longtask<br>- 用户交互：action<br>- Web 指标：vital<br>- 错误：error<br>- 自定义：custom                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `attributes.span_subtype`    | String | Span 子类型           | 不同 `span_type` 具有不同的子类型：<br>[a] document<br>- 导航：navigate<br>- 文档下载完成：document_fetch<br>[b] route<br>- 压栈：pushState<br>- 替换：replaceState<br>- 弹栈：popstate<br>- 哈希变化：hashchange<br>[c] resource<br>- script<br>- link<br>- img<br>- css<br>- xml<br>- httprequest<br>- fetch<br>- video<br>- audio<br>- iframe<br>- beacon<br>- other<br>[d] http<br>- fetch<br>- xhr<br>- beacon<br>- sendbeacon<br>[e] longtask<br>- 脚本执行：script<br>- 布局：layout<br>- 绘制：paint<br>- 未归因：unknown<br>[f] action<br>- 点击：click<br>- 输入：input<br>- keydown<br>- scroll<br>- pointerdown<br>- submit<br>- custom<br>[g] vital<br>- lcp<br>- fcp<br>- cls<br>- inp<br>- fid<br>- ttfb<br>[h] error<br>- js<br>- promise<br>- resource_load<br>- blank_screen<br>- csp<br>- network<br>- cors<br>- console<br>- custom<br>[i]  custom<br>- websocket<br>- <自定义> |
+| `attributes.result`          | String | 结果                 | 枚举值：<br>- 成功：`success`<br>- 错误：`error`<br>- 超时：`timeout`<br>- 警告：`warning`<br><br>⚠️                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `attributes.error_type`      | String | 错误类型               | 枚举值：<br/>- none<br/>- http_4xx<br/>- http_5xx<br/>- network_timeout<br/>- js<br/>- promise<br/>- resource_load<br/>- blank_screen<br/>- csp<br/>- slow<br/>- longtask_blocking<br/>- network<br/>- custom                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `attributes.trace_scene`     | String | 追踪场景               | 枚举值：`page_load`、 `route_change`、`user_action`、`startup`。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `attributes.os_name`         | String | 操作系统名称，SDK 解析后的统一值 | 如 `macOS`。<br><br>❌ 重复，以 `attributes.user_agent.os.name` 为准。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `attributes.status_class`    | String | HTTP 状态码分类         | 如 `2xx`、`3xx`、`4xx`、`5xx`。<br><br>❌ SDK 不应该提供，如果后续需要高频获取，考虑预计算或实时聚合。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `attributes.event_label`     | String | 中文事件标签             | 如 `API 调用`/`错误`等。<br><br>❌  SDK 不应该提供中文名，另外这个字段看着也没啥用。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `attributes.duration_bucket` | String | 耗时分桶               | 如 `<100ms`、`100~500ms`、`500ms~2s`、`>2s`。<br><br>❌ 不需要，耗时分桶应该由后端支持。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
-| 字段                           | 类型      | 描述                                       | 备注                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-|------------------------------|---------|------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `attributes.span_type`       | String  | Span 类型                                  | 枚举值：<br/>- 文档加载：document<br/>- 路由切换：route<br/>- 静态资源：resource<br/>- HTTP / API：http<br/>- 长任务：longtask<br/>- 用户交互：action<br/>- Web 指标：vital<br/>- 错误：error<br/>- 自定义：custom                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `attributes.span_subtype`    | String  | Span 子类型，不同的 span_type 有不同的 span_subtype | 枚举值：<br/>1. document<br/>- 导航：navigate<br/>- 文档下载完成：document_fetch<br/>2. route<br/>- 压栈：pushState<br/>- 替换：replaceState<br/>- 弹栈：popstate<br/>- 哈希变化：hashchange<br/>3. resource<br/>- script<br/>- link<br/>- img<br/>- css<br/>- xmlhttprequest<br/>- fetch<br/>- video<br/>- audio<br/>- iframe<br/>- beacon<br/>- other<br/>4. http<br/>- fetch<br/>- xhr<br/>- beacon<br/>- sendbeacon<br/>5. longtask<br/>- 脚本执行：script<br/>- 布局：layout<br/>- 绘制：paint<br/>- 未归因：unknown<br/>6. action<br/>- 点击：click<br/>- 输入：input<br/>- keydown<br/>- scroll<br/>- pointerdown<br/>- submit<br/>- custom<br/>7. vital<br/>- lcp<br/>- fcp<br/>- cls<br/>- inp<br/>- fid<br/>- ttfb<br/>8. error<br/>- js<br/>- promise<br/>- resource_load<br/>- blank_screen<br/>- csp<br/>- network<br/>- cors<br/>- console<br/>- custom<br/>9. custom<br/>- websocket<br/>- <自定义> |
-| `attributes.duration_bucket` | String  | 耗时分桶                                     | 枚举值：<br/>- <100ms<br/>- 100~500ms<br/>- 500ms~2s<br/>- >2s                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `attributes.event_label`     | String  | 中文事件标签                                   | 如 `API 调用`/`错误`等                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `attributes.result`          | String  | 结果                                       |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `attributes.rum.page.host`   | String  | 页面 host                                  | hostname:port                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `attributes.rum.page.path`   | String  | 页面 pathname                              | 不含 query 和 hash                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `attributes.rum.sampled`     | Boolean | 是否采样                                     |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `attributes.status_class`    | String  | HTTP 状态段                                 |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `attributes.user.id`         | String  | 用户 ID                                    |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `attributes.os_name`         | String  | 操作系统名称，SDK 解析后的统一值                       |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `attributes.error_type`      | String  | 错误类型                                     | 枚举值：<br/>- none<br/>- http_4xx<br/>- http_5xx<br/>- network_timeout<br/>- js<br/>- promise<br/>- resource_load<br/>- blank_screen<br/>- csp<br/>- slow<br/>- longtask_blocking<br/>- network<br/>- custom                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `attributes.trace_scene`     | String  | 追踪场景                                     | 枚举值：<br/>- page_load<br/>- route_change<br/>- user_action<br/>- startup                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+#### 2）[exception](https://opentelemetry.io/docs/specs/semconv/registry/attributes/exception/)
 
-- browser
+| 字段                                     | 类型      | 描述        | 备注                                                                   |
+| -------------------------------------- | ------- | --------- | -------------------------------------------------------------------- |
+| `attributes.error.handled`             | Boolean | 错误是否被捕获   |                                                                      |
+| `attributes.error.source`              | String  | 错误来源      | 枚举值：<br/>- window.error（固定值）<br/>- resource<br/>- unhandledrejection |
+| `attributes.error.window_count`        | Number  | 窗口级错误累计次数 |                                                                      |
+| `attributes.exception.fingerprint`     | String  | 异常指纹      | 用于聚合同类异常                                                             |
+| `attributes.exception.message`         | String  | 异常完整消息    |                                                                      |
+| `attributes.exception.message_short`   | String  | 异常简短消息    | 适合列表展示                                                               |
+| `attributes.exception.stacktrace`      | String  | 异常堆栈信息    |                                                                      |
+| `attributes.exception.stack_top_frame` | String  | 堆栈顶部帧     |                                                                      |
+| `attributes.exception.type`            | String  | 异常类型      |                                                                      |
 
-| 字段                                   | 类型     | 描述      | 备注 |
-|--------------------------------------|--------|---------|----|
-| `attributes.browser.screen.height`   | Number | 屏幕尺寸的高度 |    |
-| `attributes.browser.screen.width`    | Number | 屏幕尺寸的宽度 |    |
-| `attributes.browser.viewport.height` | Number | 视口尺寸的高度 |    |
-| `attributes.browser.viewport.width`  | Number | 视口尺寸的宽度 |    |
-| `attributes.browser_name`            | String | 浏览器名称   |    |
-| `attributes.browser_version`         | String | 浏览器版本   |    |
+### c. Status
 
-- device
+| 字段               | 类型     | 描述   | 备注                                     |
+| ---------------- | ------ | ---- | -------------------------------------- |
+| `status.code`    | Number | 状态码  | 枚举值：<br/>- 未设置：0<br/>- 正常：1<br/>- 异常：2 |
+| `status.message` | String | 状态描述 | 仅在 `status.code` == 2 时有值，正常 span 为空   |
 
-| 字段                            | 类型      | 描述                      | 备注                              |
-|-------------------------------|---------|-------------------------|---------------------------------|
-| `attributes.device.cpu_cores` | Number  | 设备 cpu 核心数              |                                 |
-| `attributes.device.id`        | String  | 设备终身标识（localStorage 持久） |                                 |
-| `attributes.device.memory`    | Number  | 设备内存                    |                                 |
-| `attributes.device.mobile`    | Boolean | 是否为移动设备                 |                                 |
-| `attributes.device.platform`  | String  | 设备平台                    |                                 |
-| `attributes.device_type`      | String  | 设备类型                    | 枚举值：<br/>- mobile<br/>- desktop |
 
-- network
+---
 
-| 字段                                   | 类型      | 描述           | 备注                         |
-|--------------------------------------|---------|--------------|----------------------------|
-| `attributes.network.connection_type` | String  | 连接类型         | 非枚举值，浏览器 API 的直出值，SDK 只做转发 |
-| `attributes.network.downlink`        | Number  | 预估下行带宽（Mbps） |                            |
-| `attributes.network.effective_type`  | String  | 有效网络质量（4g 等） | 非枚举值，浏览器 API 的直出值，SDK 只做转发 |
-| `attributes.network.rtt`             | Number  | 往返时延（毫秒）     |                            |
-| `attributes.network.save_data`       | Boolean | 用户是否开启省流量模式  |                            |
+## 0x02 Attributes
 
-- session
+### a. rum
+
+| 字段                               | 类型      | 描述   | 备注                                                                                                                                          |
+| -------------------------------- | ------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `attributes.rum.sampled`         | Boolean | 是否采样 | --                                                                                                                                          |
+| `attributes.rum.page.host`       | String  | 站点   | 例如 `https://example.com`                                                                                                                    |
+| `attributes.rum.page.path`       | String  | 路径   | 例如 `/`                                                                                                                                      |
+| `attributes.rum.navigation.type` | String  | 导航类型 | 仅 `span_type=vital` 上报该字段，枚举值：<br>- back-forward<br>- back-forward-cache<br>- navigate<br>- prerender<br>- reload<br>- restore<br>- unknown |
+### b. [browser](https://opentelemetry.io/docs/specs/semconv/registry/attributes/browser/)
+
+| 字段                                   | 类型     | 描述      | 备注                                                |
+| ------------------------------------ | ------ | ------- | ------------------------------------------------- |
+| `attributes.browser.screen.height`   | Number | 屏幕尺寸的高度 | Aegis 使用 `sr = 1728 * 1117`。                      |
+| `attributes.browser.screen.width`    | Number | 屏幕尺寸的宽度 | --                                                |
+| `attributes.browser.viewport.height` | Number | 视口尺寸的高度 | Aegis 使用 `vp = 576 * 918`。                        |
+| `attributes.browser.viewport.width`  | Number | 视口尺寸的宽度 | --                                                |
+| `attributes.browser_name`            | String | 浏览器名称   | 如 `Chrome`、`Edge`。<br><br>❌ 复用 `user_agent` 业界规范。 |
+| `attributes.browser_version`         | String | 浏览器版本   | 如 `149`、`151`。<br><br>❌ 复用 `user_agent` 业界规范。     |
+### c. [device](https://opentelemetry.io/docs/specs/semconv/registry/attributes/device/)
+
+| 字段                            | 类型      | 描述                                                                                       | 备注                                                      |
+| ----------------------------- | ------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `attributes.device.id`        | String  | 终身标识     [a] 如 `fd136680-a37b-45ea-80ee-365bfdc7f82e`。<br>[c] Aegis 使用 `fid` 获取浏览器指纹。  ` |                                                         |
+| `attributes.device.cpu_cores` | Number  | CPU 核心数                                                                                  |                                                         |
+| `attributes.device.memory`    | Number  | 内存（单位 G                                                                                  |                                                         |
+| `attributes.device.mobile`    | Boolean | 是否为移动设备                                                                                  |                                                         |
+| `attributes.device.platform`  | String  | 设备平台                                                                                     | 如 `macOS`、`Windows`、`Android`。<br><br>❌ 复用 `user_agent` |
+| `attributes.device_type`      | String  | 设备类型                                                                                     | ❌ `attributes.device.mobile` 已能代                        |
+### d. [network](https://opentelemetry.io/docs/specs/semconv/registry/attributes/network/)
+
+| 字段                                        | 类型      | 描述           | 备注                                                                             |
+| ----------------------------------------- | ------- | ------------ | ------------------------------------------------------------------------------ |
+| 【新增】 `attributes.network.connection.type` | String  | 连接类型         | [a] 如 `wifi`。<br><br>[b] Aegis netType：`wifi`、`wired`、`2G`、`3G`、`5G`、`6G`。<br> |
+| `attributes.network.downlink`             | Number  | 预估下行带宽（Mbps） | ⚠️ 没有使用场景且 Aegis 也未提供该字段，Span 包含过多数值字段时后续难以聚合。                              |
+| `attributes.network.effective_type`       | String  | 有效网络质量       | 如 `4g`、`slow-2g`。<br><br>⚠️ 没有场景就不要上报，把 `connection.type` 准确上报，现在都是 `wifi`。    |
+| `attributes.network.rtt`                  | Number  | 往返时延（毫秒）     |                                                                                |
+| `attributes.network.save_data`            | Boolean | 用户是否开启省流量模式  |                                                                                |
+| `attributes.network.connection_type`      | String  | 连接类型         | ❌ 已规范命名，删除。                                                                    |
+### e. session
 
 | 字段                              | 类型      | 描述     | 备注 |
 |---------------------------------|---------|--------|----|
 | `attributes.session.has_replay` | Boolean | 是否回放   |    |
 | `attributes.session.id`         | String  | 会话唯一标识 |    |
 
-- target
+### f. target
 
 | 字段                                | 类型     | 描述               | 备注 |
 |-----------------------------------|--------|------------------|----|
@@ -106,17 +150,7 @@ updated: 2026-07-12
 | `attributes.target_label`         | String | 跨类型主标签，用于统一检索    |    |
 | `attributes.target_path_template` | String | 目标低基数路径模板        |    |
 | `attributes.target_value`         | Number | 主数值（状态码、耗时、字节数等） |    |
-
-- user_agent
-
-| 字段                               | 类型     | 描述       | 备注 |
-|----------------------------------|--------|----------|----|
-| `attributes.user_agent.name`     | String | UA 名称    |    |
-| `attributes.user_agent.original` | String | UA 原始字符串 |    |
-| `attributes.user_agent.os.name`  | String | UA 操作系统名 |    |
-| `attributes.user_agent.version`  | String | UA 版本    |    |
-
-- view
+### g. view
 
 | 字段                               | 类型     | 描述     | 备注                                         |
 |----------------------------------|--------|--------|--------------------------------------------|
@@ -124,24 +158,6 @@ updated: 2026-07-12
 | `attributes.view.loading_type`   | String | 视图加载类型 | 枚举值：<br/>- route_change<br/>- initial_load |
 | `attributes.view.url`            | String | 视图 URL |                                            |
 | `attributes.view.url_path_group` | String | 视图路径分组 |                                            |
-
-### c. Resource
-
-| 字段                                     | 类型     | 描述        | 备注                            |
-|----------------------------------------|--------|-----------|-------------------------------|
-| `resource.deployment.environment.name` | String | 部署环境名称    | 同 `app.environment`           |
-| `resource.rum.provider`                | String | RUM 数据提供方 | 固定值 `blueking`，标识蓝鲸 RUM 采集器   |
-| `resource.service.name`                | String | 服务名称      | 同应用名 `app.name`               |
-| `resource.service.version`             | String | 服务版本      | 可选，如果没传 `app.version`，这个字段不存在 |
-| `resource.telemetry.sdk.language`      | String | SDK 语言    | 固定值 `webjs`，表示前端 Web JS SDK   |
-
-### d. Status
-
-| 字段               | 类型     | 描述   | 备注                                     |
-|------------------|--------|------|----------------------------------------|
-| `status.code`    | Number | 状态码  | 枚举值：<br/>- 未设置：0<br/>- 正常：1<br/>- 异常：2 |
-| `status.message` | String | 状态描述 | 仅在 `status.code` == 2 时有值，正常 span 为空   |
-
 ## 0x02 专属字段
 
 `span_type` 有九种类型，分别为 `document`、`http`、`resource`、`vital`、`error`、`longtask`、`action`、`route`、
@@ -204,12 +220,11 @@ updated: 2026-07-12
 ### d. vital
 
 | 字段                               | 类型     | 描述         | 备注                                                                                                                       |
-|----------------------------------|--------|------------|--------------------------------------------------------------------------------------------------------------------------|
+| -------------------------------- | ------ | ---------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `attributes.vital.id`            | String | Vital 唯一标识 |                                                                                                                          |
 | `attributes.vital.metric`        | String | 指标名        | 枚举值：<br/>- cls<br/>- inp<br/>- lcp<br/>- fcp<br/>- ttfb<br/>术语介绍看下方表格                                                    |
 | `attributes.vital.rating`        | String | 评级         | 枚举值：<br/>- good<br/>- needs-improvement<br/>- poor                                                                       |
 | `attributes.vital.value`         | Number | 指标测量值      |                                                                                                                          |
-| `attributes.rum.navigation.type` | String | 导航类型       | 枚举值：<br/>- back-forward<br/>- back-forward-cache<br/>- navigate<br/>- prerender<br/>- reload<br/>- restore<br/>- unknown |
 
 `attributes.vital.metric` 的枚举值术语介绍如下：
 
