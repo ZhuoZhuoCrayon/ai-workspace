@@ -3,7 +3,7 @@ title: APM 关联容器日志采集项慢接口优化
 tags: [apm, log-relation, k8s, cache, latency, index-set]
 description: 通过后台任务预缓存服务与 K8S 容器日志索引的关联关系，消除 APM 日志页面首次打开时的逐服务关系查询瓶颈
 created: 2026-07-10
-updated: 2026-07-10
+updated: 2026-07-16
 ---
 
 # APM 关联容器日志采集项慢接口优化

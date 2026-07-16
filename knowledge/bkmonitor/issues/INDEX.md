@@ -3,7 +3,7 @@
 
 | 文件                                                                                                     | 标签                                                        | 摘要                                                      | 更新日期       |
 |------|------|------|---------|
-| [APM 关联容器日志采集项慢接口优化](./2026-07-10-apm-k8s-log-relation-cache/README.md) | `apm` `log-relation` `k8s` `cache` `latency` `index-set` | 通过后台任务预缓存服务与 K8S 容器日志索引的关联关系，消除逐服务关系查询瓶颈 | 2026-07-10 |
+| [APM 关联容器日志采集项慢接口优化](./2026-07-10-apm-k8s-log-relation-cache/README.md) | `apm` `log-relation` `k8s` `cache` `latency` `index-set` | 通过后台任务预缓存服务与 K8S 容器日志索引的关联关系，消除逐服务关系查询瓶颈 | 2026-07-16 |
 | [APM Span 详情支持 Links 反向关联展示](./2026-06-04-apm-span-links-reverse-relation/README.md) | `apm` `span` `trace` `links` `relation` `otlp` | 通过 TraceID 和 SpanID 过滤正向与反向关联，并统一返回 OpenTelemetry Link 列表 | 2026-06-25 |
 | [日志数据源切换前后保持原始日志结构一致](./2026-06-08-log-uq-object-structure-restore/README.md) | `log` `unify-query` `data-source` `object-field` | 让日志 UnifyQuery 返回的打平对象字段恢复为 ES 查询时期的原始结构 | 2026-06-08 |
 | [主机场景容器事件关联准确性提升](./2026-06-03-alert-host-k8s-event-relation-accuracy/README.md) | `alert` `k8s-event` `host-target` `k8s-node` `scene-view` `unify-query` | 让主机与 K8S-NODE 告警按节点维度关联容器事件，避免跨节点 workload 事件混入并降低关联查询成本 | 2026-06-04 |
