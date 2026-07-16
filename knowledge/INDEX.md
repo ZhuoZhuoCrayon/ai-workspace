@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-07-13
+> 最后更新：2026-07-16
 
 ## 0x01 项目知识
 
@@ -18,9 +18,8 @@
 
 ## 0x02 最近更新
 
-- 2026-07-13：更新 [APM Trace 写入 ES 字段类型冲突](./bkmonitor/troubleshooting/apm-trace-es-field-mapping-conflict.md) 的止血方案（后台独立维护 `DROP_FIELDS_CONFIG`，生成下发配置时与页面 DB drop 规则合并）
+- 2026-07-16：完成 [APM 关联容器日志采集项慢接口优化](./bkmonitor/issues/2026-07-10-apm-k8s-log-relation-cache/README.md)（[TencentBlueKing/bk-monitor #11539](https://github.com/TencentBlueKing/bk-monitor/pull/11539) 已合入）
+- 2026-07-16：更新 [APM Trace 写入 ES 字段类型冲突](./bkmonitor/troubleshooting/apm-trace-es-field-mapping-conflict.md) 的止血方案（按最新代码改为完整 drop 规则数组，并补充 Admin 配置与下发验证）
 - 2026-07-12：归档 [RUM Span 数据协议](./bkmonitor/articles/2026-07-12-rum-span-data-protocol/README.md) 至 bkmonitor articles（收录公共字段、资源与状态结构，以及 `9` 类 Span 专属字段）
-- 2026-07-10：新增 [APM 关联容器日志采集项慢接口优化](./bkmonitor/issues/2026-07-10-apm-k8s-log-relation-cache/README.md) 至 bkmonitor（后台任务预缓存 + Redis 直查，消除逐服务 UQ 关系查询瓶颈）
 - 2026-07-02：新增 [APM Trace 写入 ES 字段类型冲突](./bkmonitor/troubleshooting/apm-trace-es-field-mapping-conflict.md) 至 bkmonitor troubleshooting（沉淀 transfer 日志查询模板和 NormalTypeValueConfig drop 止血脚本）
 - 2026-06-30：更新 [优化告警详情主机日志关联准确性](./bkmonitor/issues/2026-04-15-alert-detail-host-collector-log-relation/README.md) 至 bkmonitor（写回 [TencentBlueKing/bk-monitor #11276](https://github.com/TencentBlueKing/bk-monitor/pull/11276) 已合入，标记 ✅ 里程碑 1 已合入，里程碑 2 待创建）
-- 2026-06-29：更新 [APM 支持跨应用共享数据源](./bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md) 至 bkmonitor（补充迁入 / 迁出可重入方案，明确独占链路备份、恢复和命令入口）
