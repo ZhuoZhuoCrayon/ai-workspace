@@ -46,5 +46,21 @@
     "branch": "main",
     "local_path": "/Users/sandrincai/Project/Github/crypto-python-sdk/crypto-python-sdk",
     "language": "zh"
+  },
+  {
+    "name": "browser-sdk",
+    "description": "Datadog Browser SDK",
+    "git_url": "https://github.com/DataDog/browser-sdk.git",
+    "branch": "main",
+    "local_path": "/Users/sandrincai/Project/Tencent/bkm/browser-sdk",
+    "language": "zh"
+  },
+  {
+    "name": "bk-product-designs",
+    "description": "蓝鲸监控团队设计协作的 Git 事实源，使用 OpenSpec 管理设计需求、Figma 交接信息、团队评审意见、产品经理决策、发布审批和历史 revision。",
+    "git_url": "https://git.woa.com/bkmonitor/bk-product-designs",
+    "branch": "main",
+    "local_path": "/Users/sandrincai/Project/Tencent/bkm/bk-product-designs",
+    "language": "zh"
   }
 ]
