@@ -4,7 +4,7 @@ tags: [apm, log-relation, k8s, cache, latency, index-set]
 issue: knowledge/bkmonitor/issues/2026-07-10-apm-k8s-log-relation-cache/README.md
 description: 通过后台任务批量预计算服务与容器日志索引的关联关系并写入缓存，将请求侧的逐服务 UQ 实时查询改为直查缓存
 created: 2026-07-10
-updated: 2026-07-16
+updated: 2026-07-17
 ---
 
 # APM 关联容器日志采集项慢接口优化 —— 实施方案
@@ -211,6 +211,7 @@ uv run pytest -n auto tests/packages/apm_web/
 
 | 时间                 | 结论性进展                                       |
 |--------------------|---------------------------------------------|
+| `2026-07-17 11:00` | 完成 `bkapp_ai` 应用缓存刷新排除适配，[TencentBlueKing/bk-monitor #11558](https://github.com/TencentBlueKing/bk-monitor/pull/11558) 已通过 Review |
 | `2026-07-16 10:00` | 完成后台任务预缓存与消费侧替换，[TencentBlueKing/bk-monitor #11539](https://github.com/TencentBlueKing/bk-monitor/pull/11539) 已合入 |
 | `2026-07-10 17:00` | 完成方案设计：后台任务批量预计算 + Redis 缓存 + 请求侧直查缓存的三段式架构 |
 
@@ -241,3 +242,4 @@ uv run pytest -n auto tests/packages/apm_web/
 |----|-----------------------------------------|----------------------------------|----------------------------------------------------------------------------|
 | ✅  | `feat/apm_alert/#1010158081134133218`   | 里程碑 1：优化告警中心关联事件查询耗时              | [#10530](https://github.com/TencentBlueKing/bk-monitor/pull/10530)         |
 | ✅  | `feat/apm_service_alert_relate_log_targets_slow_query_opt/#1010158081136089503` | 里程碑 2：后台任务预缓存 + 消费侧替换 | [TencentBlueKing/bk-monitor #11539](https://github.com/TencentBlueKing/bk-monitor/pull/11539) |
+| 🔄 | `feat/apm_related_log_cache_exclude_bkapp_ai/#1010158081136235674` | 里程碑 3：排除 `bkapp_ai` 应用缓存刷新 | [TencentBlueKing/bk-monitor #11558](https://github.com/TencentBlueKing/bk-monitor/pull/11558) |
