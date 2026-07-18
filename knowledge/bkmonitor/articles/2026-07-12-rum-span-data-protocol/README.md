@@ -80,17 +80,17 @@ updated: 2026-07-12
 
 #### 2）[exception](https://opentelemetry.io/docs/specs/semconv/registry/attributes/exception/)
 
-| 字段                                     | 状态  | 类型      | 描述        | 备注                                                                   |
-| -------------------------------------- | --- | ------- | --------- | -------------------------------------------------------------------- |
-| `attributes.error.handled`             |     | boolean | 错误是否被捕获   |                                                                      |
-| `attributes.error.source`              |     | str     | 错误来源      | 枚举值：<br/>- window.error（固定值）<br/>- resource<br/>- unhandledrejection |
-| `attributes.error.window_count`        |     | int     | 窗口级错误累计次数 |                                                                      |
-| `attributes.exception.fingerprint`     |     | str     | 异常指纹      | 用于聚合同类异常                                                             |
-| `attributes.exception.message`         |     | str     | 异常完整消息    |                                                                      |
-| `attributes.exception.message_short`   |     | str     | 异常简短消息    | 适合列表展示                                                               |
-| `attributes.exception.stacktrace`      |     | str     | 异常堆栈信息    |                                                                      |
-| `attributes.exception.stack_top_frame` |     | str     | 堆栈顶部帧     |                                                                      |
-| `attributes.exception.type`            |     | str     | 异常类型      |                                                                      |
+| 字段                                     | 状态                                                          | 类型      | 描述        | 备注                                                                   |
+| -------------------------------------- | ----------------------------------------------------------- | ------- | --------- | -------------------------------------------------------------------- |
+| `attributes.error.handled`             |                                                             | boolean | 错误是否被捕获   |                                                                      |
+| `attributes.error.source`              |                                                             | str     | 错误来源      | 枚举值：<br/>- window.error（固定值）<br/>- resource<br/>- unhandledrejection |
+| `attributes.error.window_count`        |                                                             | int     | 窗口级错误累计次数 |                                                                      |
+| `attributes.exception.fingerprint`     | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str     | 异常指纹      | 用于聚合同类异常                                                             |
+| `attributes.exception.message`         | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str     | 异常完整消息    |                                                                      |
+| `attributes.exception.message_short`   | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str     | 异常简短消息    | 适合列表展示                                                               |
+| `attributes.exception.stacktrace`      | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str     | 异常堆栈信息    |                                                                      |
+| `attributes.exception.stack_top_frame` | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str     | 堆栈顶部帧     |                                                                      |
+| `attributes.exception.type`            | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str     | 异常类型      |                                                                      |
 
 ### c. Status
 
