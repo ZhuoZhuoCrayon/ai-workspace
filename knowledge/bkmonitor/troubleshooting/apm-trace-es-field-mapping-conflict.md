@@ -1,9 +1,9 @@
 ---
 title: APM Trace 写入 ES 字段类型冲突
-tags: [apm, trace, elasticsearch, mapping, attribute-filter, as-string, index-rollover, normaltypevalueconfig]
-description: APM Trace 字段在 keyword/object 或 long/string 之间冲突时的定位与修复方法，覆盖独立 drop 止血和 as_string 配合索引轮转的类型迁移
+tags: [apm, trace, elasticsearch, mapping, attribute-filter, as-string, index-rollover, normaltypevalueconfig, all-app-config]
+description: APM Trace 字段在 keyword/object 或 long/string 之间冲突时的定位与修复方法，覆盖独立 drop 止血和 APP 全量配置配合索引轮转的类型迁移
 created: 2026-07-02
-updated: 2026-07-17
+updated: 2026-07-19
 ---
 
 # APM Trace 写入 ES 字段类型冲突
@@ -231,56 +231,65 @@ refresh_apm_application_config.delay(BK_BIZ_ID, APP_NAME)
 
 ## 0x04 将 long 字段迁移为 keyword
 
-`attributes.trpc.status_type` 和 `attributes.trpc.status_code` 可能同时上报整数和字符串。Collector 固定先执行
-`as_string`，再执行 drop，YAML 中的配置顺序不会改变处理顺序。为避免转换后的字符串写入旧的 `long` 索引，
-迁移过程先单独启用无条件 drop，索引轮转完成后再将 drop 替换为 `as_string`。
+`attributes.trpc.status_type` 和 `attributes.trpc.status_code` 混合上报整数和字符串，旧索引已将它们映射为 `long`。
 
-以下脚本以业务 `5000140`、应用 `trpc_demo` 为例。`refresh_apm_application_config.run()` 同步执行配置下发，不使用
-异步任务。
+执行顺序：
 
-### a. 配置临时 drop
+1. 临时 drop：停止写入目标字段。
+2. 轮转索引：创建新索引并切换写别名。
+3. 恢复写入：删除临时 drop，并将目标字段转为字符串。
 
-第一阶段移除目标字段已有的 `as_string`，再配置无条件 drop。`match: []` 表示字段存在时直接删除，确保索引轮转前
-不会写入这两个字段。脚本兼容曾经误写的 `{"keys": [...]}` 结构及其渲染产物 `["keys"]`，重复执行会得到相同结果。
+Collector 固定先执行 `as_string`，再执行 drop。因此，第一阶段必须先删除目标字段的 `as_string`。两类规则都写入
+`ALL_APP_CONFIG.attribute_config`，避免页面更新 `DB_CONFIG` 后丢失。
+
+以下脚本以业务 `5000140`、应用 `trpc_demo` 为例，并同步下发配置。
+
+### a. 阶段 1：停止写入目标字段
+
+删除目标字段的 `as_string`，再增加无条件 drop。首次创建 `attribute_config` 时复制当前生效配置，避免覆盖已有规则。
 
 ```python
+import copy
 import json
 
 from apm.constants import ConfigTypes
-from apm.models import AppConfigBase, NormalTypeValueConfig
+from apm.core.application_config import ApplicationConfig
+from apm.models import ApmApplication, AppConfigBase, NormalTypeValueConfig
 from apm.task.tasks import refresh_apm_application_config
 
 BIZ, APP = 5000140, "trpc_demo"
 KEYS = ["attributes.trpc.status_type", "attributes.trpc.status_code"]
+TEMP_DROPS = [{"predicate_key": key, "match": [], "keys": [key]} for key in KEYS]
 
-raw = NormalTypeValueConfig.get_app_value(BIZ, APP, ConfigTypes.DB_CONFIG)
+raw = NormalTypeValueConfig.get_app_value(BIZ, APP, ConfigTypes.ALL_APP_CONFIG)
 config = json.loads(raw or "{}")
 
-as_string = config.get("as_string", [])
-as_string = as_string.get("keys", []) if isinstance(as_string, dict) else as_string
-config["as_string"] = [key for key in as_string if key != "keys" and key not in KEYS]
+if "attribute_config" not in config:
+    application = ApmApplication.objects.get(bk_biz_id=BIZ, app_name=APP)
+    current = ApplicationConfig(application).application_config["attribute_config"]
+    config["attribute_config"] = copy.deepcopy(current)
 
-config["drop"] = [
-    rule for rule in config.get("drop", []) if not set(rule.get("keys", [])) & set(KEYS)
-]
-config["drop"] += [{"predicate_key": key, "match": [], "keys": [key]} for key in KEYS]
+attribute = config["attribute_config"]
+attribute.setdefault("name", "attribute_filter/app")
+attribute["as_string"] = [key for key in attribute.get("as_string", []) if key not in KEYS]
+attribute["drop"] = [rule for rule in attribute.get("drop", []) if rule not in TEMP_DROPS] + TEMP_DROPS
 
 NormalTypeValueConfig.refresh_config(
     BIZ,
     APP,
     AppConfigBase.APP_LEVEL,
     APP,
-    [{"type": ConfigTypes.DB_CONFIG, "value": json.dumps(config)}],
+    [{"type": ConfigTypes.ALL_APP_CONFIG, "value": json.dumps(config, ensure_ascii=False)}],
     need_delete_config=False,
 )
 refresh_apm_application_config.run(BIZ, APP)
 ```
 
-执行后确认所有 Collector 实例都已加载新配置，再轮转索引。
+完成标志：所有 Collector 实例都已开始 drop 目标字段。
 
-### b. 强制轮转索引
+### b. 阶段 2：轮转索引
 
-强制轮转会创建新索引并切换别名，属于不可逆的外部操作。执行前必须确认第一阶段已在全部 Collector 实例生效。
+强制创建新索引并切换写别名。该操作不可逆，执行前必须确认第一阶段已生效。
 
 ```python
 from apm.models import ApmApplication, TraceDataSource
@@ -303,13 +312,11 @@ storage.create_or_update_aliases(force_rotate=True)
 print("after:", storage.current_index_info())
 ```
 
-确认新索引已创建且写别名完成切换，再解除临时 drop。
+完成标志：写别名已切换到新索引。
 
-### c. 将 drop 替换为 as_string
+### c. 阶段 3：恢复字符串写入
 
-第三阶段在同一次配置更新中删除临时 drop，并增加 `as_string`。尚未更新的 Collector 继续删除字段；已更新的
-Collector 将字段转换为字符串后写入新索引。`DB_CONFIG.as_string` 使用字段数组，配置模板会为它补上 `keys`；
-不要在数据库中写成 `{"keys": [...]}`。`DROP_FIELDS_CONFIG` 不存放这两个 tRPC 状态字段的规则，不需要修改。
+同一次更新中删除临时 drop，并增加 `as_string`。滚动生效期间，旧配置继续 drop，新配置向新索引写入字符串。
 
 ```python
 import json
@@ -320,28 +327,27 @@ from apm.task.tasks import refresh_apm_application_config
 
 BIZ, APP = 5000140, "trpc_demo"
 KEYS = ["attributes.trpc.status_type", "attributes.trpc.status_code"]
+TEMP_DROPS = [{"predicate_key": key, "match": [], "keys": [key]} for key in KEYS]
 
-raw = NormalTypeValueConfig.get_app_value(BIZ, APP, ConfigTypes.DB_CONFIG)
+raw = NormalTypeValueConfig.get_app_value(BIZ, APP, ConfigTypes.ALL_APP_CONFIG)
 config = json.loads(raw or "{}")
 
-config["drop"] = [
-    rule for rule in config.get("drop", []) if not set(rule.get("keys", [])) & set(KEYS)
-]
-as_string = config.get("as_string", [])
-as_string = as_string.get("keys", []) if isinstance(as_string, dict) else as_string
-as_string = [key for key in as_string if key != "keys"]
-config["as_string"] = list(dict.fromkeys(as_string + KEYS))
+attribute = config["attribute_config"]
+attribute["drop"] = [rule for rule in attribute.get("drop", []) if rule not in TEMP_DROPS]
+attribute["as_string"] = list(dict.fromkeys(attribute.get("as_string", []) + KEYS))
 
 NormalTypeValueConfig.refresh_config(
     BIZ,
     APP,
     AppConfigBase.APP_LEVEL,
     APP,
-    [{"type": ConfigTypes.DB_CONFIG, "value": json.dumps(config)}],
+    [{"type": ConfigTypes.ALL_APP_CONFIG, "value": json.dumps(config, ensure_ascii=False)}],
     need_delete_config=False,
 )
 refresh_apm_application_config.run(BIZ, APP)
 ```
 
-迁移完成后，新写入的两个字段统一为字符串。检查新索引 Mapping 时，应看到对应字段为 `keyword`；如果索引模板
-显式声明为 `long`，仅轮转索引无法改变字段类型，需要先修改模板。
+完成后检查新索引 Mapping：目标字段应为 `keyword`。
+
+- 如果索引模板将字段固定为 `long`，必须先修改模板。
+- 旧索引仍是 `long`，跨新旧索引查询可能出现类型冲突，直至旧索引过期或完成重建。
