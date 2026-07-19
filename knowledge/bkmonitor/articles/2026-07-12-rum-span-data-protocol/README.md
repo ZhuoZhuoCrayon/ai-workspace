@@ -13,36 +13,35 @@ updated: 2026-07-18
 | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | 已上报，但需要废弃。  |
 | ![Development](https://img.shields.io/badge/-development-blue) | 新补充或字段位置变更。 |
 
+原则：
+* Aegis、DataDog 后续统一转成 Otel Span 协议，同领域字段尽量对齐前两个 SDK，需控制字段数量，避免出现需转换 150+ 字段的情况。
+* 控制字段规模：输出可覆盖 Otel & Aegis & DataDog SDK 最简协议，其他不必要字段统一省略，减少初始技术负债。
+* 指标：Web Vitals 指标由接收端派生，SDK 无需埋点。
+
 # Resource
 
-Span、Metric 和 Log 使用同一个 OpenTelemetry Resource。Resource 在 SDK 实例创建时确定，不随单次事件变化。
-
-协议基线：
-
-- 接入数据按 SDK `0.0.20`、Schema `2` 维护。
-- 当前仓库包版本仍为 `0.0.16`，源码默认 Schema 仍为 `1`，发布时需要同步版本与 Schema 常量。
-
-下表使用归一后的 `resource.<key>` 路径，OTLP/HTTP JSON 上报时编码为 `resource.attributes[]` KeyValue。
+Span、Metric 和 Log 使用同一个 OpenTelemetry Resource。
 
 ## 0x01 基础字段
 
-| 字段                                                                                                                     | 状态                                                             | 类型   | 描述     | 备注                                              |
-| ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ---- | ------ | ----------------------------------------------- |
-| `resource.service.name`                                                                                                | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | 服务名    | --                                              |
-| `resource.service.version`                                                                                             | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | 版本     | --                                              |
-| [`resource.deployment.environment.name`](https://opentelemetry.io/docs/specs/semconv/resource/deployment-environment/) | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | 环境     | 推荐：`development`、`production`、`staging`、`test`。 |
-| [`resource.telemetry.sdk.language`](https://opentelemetry.io/docs/specs/semconv/resource/#telemetry-sdk)               | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | enum | 语言     | 固定值 `webjs`。                                    |
-| `resource.telemetry.sdk.name` *[1]*                                                                                    | ![Development](https://img.shields.io/badge/-development-blue) | str  | SDK 名称 | --                                              |
-| `resource.telemetry.sdk.version`                                                                                       | ![Development](https://img.shields.io/badge/-development-blue) | str  | SDK 版本 | --                                              |
-| `resource.rum.provider`                                                                                                | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str  | 数据提供方  | ❌ 使用标准的 `sdk.name` 代替。<br>                      |
-| `resource.rum.schema.version`                                                                                          | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | RUM Schema 版本 | 最新版本固定为 `2`。                                  |
-| `resource.browser.name`                                                                                                | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | 浏览器名称  | 如 `Chrome`、`Edge`。                              |
-| `resource.browser.version`                                                                                             | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | 浏览器版本  | 如 `150`。                                         |
-| `resource.device.type`                                                                                                 | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | 设备类型   | 枚举值：`desktop`、`mobile`。                         |
-| `resource.device.logical_processor_count`                                                                              | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | int  | 逻辑处理器数量 | 如 `14`。                                          |
-| `resource.os.name`                                                                                                     | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | 操作系统名称 | 如 `macOS`、`Windows`、`Android`。                   |
+| 字段                                                                                                                     | 状态                                                             | 类型   | 描述        | 备注                                             |
+| ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ---- | --------- | ---------------------------------------------- |
+| `resource.service.name`                                                                                                | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | 服务名       | --                                             |
+| `resource.service.version`                                                                                             | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | 版本        | --                                             |
+| [`resource.deployment.environment.name`](https://opentelemetry.io/docs/specs/semconv/resource/deployment-environment/) | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | 环境        | 如 `development`、`production`、`staging`、`test`。 |
+| [`resource.telemetry.sdk.language`](https://opentelemetry.io/docs/specs/semconv/resource/#telemetry-sdk)               | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | enum | 语言        | `webjs`。                                       |
+| `resource.telemetry.sdk.name` *[1]*                                                                                    | ![Development](https://img.shields.io/badge/-development-blue) | str  | SDK 名称    | --                                             |
+| `resource.telemetry.sdk.version`                                                                                       | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | SDK 版本    | --                                             |
+| `resource.browser.name`                                                                                                | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | 浏览器名称     | 如 `Chrome`、`Edge`。                             |
+| `resource.browser.version`                                                                                             | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | 浏览器版本     | 如 `150`。                                       |
+| `resource.device.type`                                                                                                 | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | enum | 设备类型      | `desktop`；`mobile`。                            |
+| `resource.os.name`                                                                                                     | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | 操作系统名称    | 如 `macOS`、`Windows`、`Android`。                 |
+| `resource.rum.provider`                                                                                                | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str  | 数据提供方     | ❌ 使用标准的 `sdk.name` 代替。<br>                     |
+| `resource.device.logical_processor_count`                                                                              | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | int  | 逻辑处理器数量   | 如 `14`。<br><br>❌ 另外两个 SDK 不上报。                 |
+| `resource.rum.schema.version`                                                                                          | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str  | Schema 版本 | ❌ 不需要。                                         |
 
-*[1] `resource.telemetry.sdk.name`：`@blueking/open-telemetry`（蓝鲸 Otel SDK）｜aegis（Aegis SDK）。*
+*[1] `resource.telemetry.sdk.name`：`blueking`（蓝鲸 Otel SDK，当前值为 @blueking/open-telemetry，需修改。）｜aegis（Aegis SDK）。*
+
 
 ## 0x02 [User Agent](https://opentelemetry.io/docs/specs/semconv/registry/attributes/user-agent/)
 
@@ -486,31 +485,31 @@ URL、Server、Network 和 Target 字段，不产生 `attributes.websocket.*` Sp
 
 ### a. Web Vitals
 
-#### 1）指标
+1）指标
 
 | 字段                           | 状态                                                         | 类型        | 描述                                |
 | ---------------------------- | ---------------------------------------------------------- | --------- | --------------------------------- |
 | `browser.web_vital.cls`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Histogram | CLS 分布，单位为 `1`，每个 View 结束时记录一次。   |
 | `browser.web_vital.duration` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Histogram | FCP、INP、LCP 和 TTFB 耗时分布，单位为 `ms`。 |
 
-#### 2）维度
+ 2）维度
 
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `attributes.view.url_path_group` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 两个指标均存在，记录低基数 View 路径模板。 |
-| `attributes.rum.navigation.type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 两个指标均存在，记录导航类型。 |
-| `attributes.vital.metric` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | CLS 指标固定为 `cls`，Duration 指标为 `fcp`、`inp`、`lcp`、`ttfb`。 |
-| `attributes.vital.rating` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 两个指标均存在，枚举值为 `good`、`needs-improvement`、`poor`。 |
+| 字段                               | 状态                                                         | 类型  | 描述                                                     |
+| -------------------------------- | ---------------------------------------------------------- | --- | ------------------------------------------------------ |
+| `attributes.view.url_path_group` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 两个指标均存在，记录低基数 View 路径模板。                               |
+| `attributes.rum.navigation.type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 两个指标均存在，记录导航类型。                                        |
+| `attributes.vital.metric`        | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | CLS 指标固定为 `cls`，Duration 指标为 `fcp`、`inp`、`lcp`、`ttfb`。 |
+| `attributes.vital.rating`        | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 两个指标均存在，枚举值为 `good`、`needs-improvement`、`poor`。        |
 
 ### b. View
 
-#### 1）指标
+1）指标
 
 | 字段 | 状态 | 类型 | 描述 |
 | --- | --- | --- | --- |
 | `browser.view.loading_time` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Histogram | View 加载耗时分布，单位为 `ms`，仅启用 View Loading Time 计算且成功得到最终值时记录。 |
 
-#### 2）维度
+2）维度
 
 | 字段 | 状态 | 类型 | 描述 |
 | --- | --- | --- | --- |
@@ -519,13 +518,13 @@ URL、Server、Network 和 Target 字段，不产生 `attributes.websocket.*` Sp
 
 ### c. Blank Screen
 
-#### 1）指标
+1）指标
 
 | 字段 | 状态 | 类型 | 描述 |
 | --- | --- | --- | --- |
 | `browser.blank_screen.count` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Counter | 确认白屏的次数，每个 View 最多增加 `1`。 |
 
-#### 2）维度
+2）维度
 
 | 字段 | 状态 | 类型 | 描述 |
 | --- | --- | --- | --- |
@@ -535,14 +534,14 @@ URL、Server、Network 和 Target 字段，不产生 `attributes.websocket.*` Sp
 
 ### d. Error
 
-#### 1）指标
+1）指标
 
 | 字段 | 状态 | 类型 | 描述 |
 | --- | --- | --- | --- |
 | `browser.error.count` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Counter | JS、Promise 和资源加载错误总数，在 Error Span 节流前累计。 |
 | `browser.csp_violation.count` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Counter | CSP 违规总数，在 CSP Span 节流前累计，仅启用 CSP Violation 插件时记录。 |
 
-#### 2）维度
+2）维度
 
 | 字段 | 状态 | 类型 | 描述 |
 | --- | --- | --- | --- |
@@ -554,7 +553,7 @@ URL、Server、Network 和 Target 字段，不产生 `attributes.websocket.*` Sp
 
 ### e. Long Task
 
-#### 1）指标
+1）指标
 
 | 字段 | 状态 | 类型 | 描述 |
 | --- | --- | --- | --- |
@@ -562,7 +561,7 @@ URL、Server、Network 和 Target 字段，不产生 `attributes.websocket.*` Sp
 | `browser.long_task.duration` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Histogram | Long Task 或 Long Animation Frame 的总耗时分布，单位为 `ms`。 |
 | `browser.long_task.blocking_duration` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Histogram | Long Animation Frame 的阻塞耗时分布，单位为 `ms`，普通 Long Task 不记录。 |
 
-#### 2）维度
+2）维度
 
 | 字段 | 状态 | 类型 | 描述 |
 | --- | --- | --- | --- |
@@ -571,7 +570,7 @@ URL、Server、Network 和 Target 字段，不产生 `attributes.websocket.*` Sp
 
 ### f. WebSocket
 
-#### 1）指标
+1）指标
 
 | 字段 | 状态 | 类型 | 描述 |
 | --- | --- | --- | --- |
@@ -580,7 +579,7 @@ URL、Server、Network 和 Target 字段，不产生 `attributes.websocket.*` Sp
 | `browser.websocket.error.count` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Counter | WebSocket 建连或运行时错误数，不受错误日志节流影响。 |
 | `browser.websocket.connect.duration` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Histogram | WebSocket 成功建连耗时分布，单位为 `ms`，建连失败不记录。 |
 
-#### 2）维度
+2）维度
 
 | 字段 | 状态 | 类型 | 描述 |
 | --- | --- | --- | --- |
@@ -637,35 +636,21 @@ URL、Server、Network 和 Target 字段，不产生 `attributes.websocket.*` Sp
 
 ### a. Session
 
-#### 1）日志
-
 | 字段 | 状态 | 类型 | 描述 |
 | --- | --- | --- | --- |
 | `session.start` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | INFO：当前页面首次创建新 Session 时上报，复用其他页面创建的共享 Session 时不上报。 |
 | `session.rotate` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | INFO：Session 因不活跃或达到最长生命周期而轮换时上报。 |
-
-#### 2）字段
-
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
 | `attributes.session.start_time` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | Session 开始时间，单位为毫秒时间戳。 |
 | `attributes.session.previous_id` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 轮换前的 Session ID，仅 `session.rotate` 存在。 |
 | `attributes.session.rotate.reason` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | `session.start` 固定为 `init`，`session.rotate` 为 `inactivity`、`maxLifetime`。 |
 
 ### b. View Snapshot
 
-#### 1）日志
-
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `browser.view` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | INFO：View 创建、属性更新、加载时间计算完成或结束时上报快照。 |
-
-#### 2）字段
-
 `browser.view` 继承同一个 View Span 的 Attributes，并补充以下快照字段。
 
 | 字段 | 状态 | 类型 | 描述 |
 | --- | --- | --- | --- |
+| `browser.view` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | INFO：View 创建、属性更新、加载时间计算完成或结束时上报快照。 |
 | `attributes.event.type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 固定值 `view`。 |
 | `attributes.view.snapshot.type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 快照类型，枚举值为 `create`、`update`、`final`。 |
 | `attributes.view.document_version` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | 当前 View 快照版本，从 `1` 开始递增。 |
@@ -677,40 +662,26 @@ URL、Server、Network 和 Target 字段，不产生 `attributes.websocket.*` Sp
 
 ### c. Request Body
 
-#### 1）日志
-
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `browser.request.body` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 显式启用 Request Body 采集后上报：错误请求为 ERROR，`capture=all` 时成功请求为 INFO。 |
-
-#### 2）字段
-
 `browser.request.body` 继承对应 Resource Span 的 HTTP、Resource 和归一字段，并补充以下正文快照字段。
 
 | 字段 | 状态 | 类型 | 描述 |
 | --- | --- | --- | --- |
-| `attributes.request.body` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 脱敏后的请求正文，只支持允许的文本 Content-Type。 |
-| `attributes.request.body.content_type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 请求正文 Content-Type，可获取时存在。 |
-| `attributes.request.body.truncated` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | boolean | 请求正文是否因长度限制被截断。 |
-| `attributes.response.body` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 脱敏后的响应正文，只支持允许的文本 Content-Type。 |
-| `attributes.response.body.content_type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 响应正文 Content-Type，可获取时存在。 |
-| `attributes.response.body.truncated` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | boolean | 响应正文是否因长度限制被截断。 |
+| `browser.request.body` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 显式启用 Request Body 采集后上报：错误请求为 ERROR，`capture=all` 时成功请求为 INFO。 |
+| `attributes.request.body`               | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 脱敏后的请求正文，只支持允许的文本 Content-Type。 |
+| `attributes.request.body.content_type`  | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 请求正文 Content-Type，可获取时存在。       |
+| `attributes.request.body.truncated`     | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | boolean | 请求正文是否因长度限制被截断。                 |
+| `attributes.response.body`              | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 脱敏后的响应正文，只支持允许的文本 Content-Type。 |
+| `attributes.response.body.content_type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 响应正文 Content-Type，可获取时存在。       |
+| `attributes.response.body.truncated`    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | boolean | 响应正文是否因长度限制被截断。                 |
 
 ### d. WebSocket
-
-#### 1）日志
-
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `websocket.error` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | ERROR：WebSocket 建连或运行时错误，相同 URL 在 `60 s` 内最多上报 `5` 条。 |
-| `websocket.close` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | INFO：WebSocket 关闭时上报关闭码、原因和是否正常关闭。 |
-
-#### 2）字段
 
 WebSocket Log 使用 Span 中定义的 URL、Server、Network 和归一字段，并补充以下事件专属字段。
 
 | 字段 | 状态 | 类型 | 描述 |
 | --- | --- | --- | --- |
+| `websocket.error` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | ERROR：WebSocket 建连或运行时错误，相同 URL 在 `60 s` 内最多上报 `5` 条。 |
+| `websocket.close` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | INFO：WebSocket 关闭时上报关闭码、原因和是否正常关闭。 |
 | `attributes.websocket.error.phase` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 错误阶段，枚举值为 `connect`、`runtime`，仅 `websocket.error` 存在。 |
 | `attributes.websocket.error.window_occurrence_index` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | 当前节流窗口内已上报错误日志的触发序号。 |
 | `attributes.websocket.close.code` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | WebSocket 关闭码，仅 `websocket.close` 存在。 |
