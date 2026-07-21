@@ -1,7 +1,7 @@
 ---
 title: APM Trace 写入 ES 字段类型冲突
 tags: [apm, trace, elasticsearch, mapping, attribute-filter, as-string, index-rollover, normaltypevalueconfig, all-app-config]
-description: APM Trace 字段在 keyword/object 或 long/string 之间冲突时的定位与修复方法，覆盖独立 drop 止血和 APP 全量配置配合索引轮转的类型迁移
+description: APM Trace 字段在 keyword/object 或 long/string 之间冲突时的定位与修复方法，覆盖独立 drop 止血、APP 全量配置和 APM_GLOBAL 配合索引轮转的类型迁移
 created: 2026-07-02
 updated: 2026-07-19
 ---
@@ -235,21 +235,15 @@ refresh_apm_application_config.delay(BK_BIZ_ID, APP_NAME)
 
 执行顺序：
 
-1. 临时 drop：停止写入目标字段。
-2. 轮转索引：创建新索引并切换写别名。
-3. 恢复写入：删除临时 drop，并将目标字段转为字符串。
+1. 在 APP 全量配置中增加 `as_string`，并确认所有 Collector 实例已生效。
+2. 强制轮转索引，让新索引将字符串映射为 `keyword`。
 
-Collector 固定先执行 `as_string`，再执行 drop。因此，第一阶段必须先删除目标字段的 `as_string`。两类规则都写入
-`ALL_APP_CONFIG.attribute_config`，避免页面更新 `DB_CONFIG` 后丢失。
+旧索引仍可在 Elasticsearch `coerce=true` 时接收 `"0"`、`"404"` 等数字字符串；非数字字符串会继续写入失败，直至索引
+轮转完成。如果索引模板将目标字段固定为 `long`，必须先修改模板。
 
-以下脚本以业务 `5000140`、应用 `trpc_demo` 为例，并同步下发配置。
-
-### a. 阶段 1：停止写入目标字段
-
-删除目标字段的 `as_string`，再增加无条件 drop。首次创建 `attribute_config` 时复制当前生效配置，避免覆盖已有规则。
+### a. 阶段 1：增加 as_string
 
 ```python
-import copy
 import json
 
 from apm.constants import ConfigTypes
@@ -257,97 +251,202 @@ from apm.core.application_config import ApplicationConfig
 from apm.models import ApmApplication, AppConfigBase, NormalTypeValueConfig
 from apm.task.tasks import refresh_apm_application_config
 
-BIZ, APP = 5000140, "trpc_demo"
+APPS = [
+    (5000140, "trpc_demo"),
+]
+
 KEYS = ["attributes.trpc.status_type", "attributes.trpc.status_code"]
-TEMP_DROPS = [{"predicate_key": key, "match": [], "keys": [key]} for key in KEYS]
 
-raw = NormalTypeValueConfig.get_app_value(BIZ, APP, ConfigTypes.ALL_APP_CONFIG)
-config = json.loads(raw or "{}")
+for biz_id, app_name in APPS:
+    raw = NormalTypeValueConfig.get_app_value(
+        biz_id,
+        app_name,
+        ConfigTypes.ALL_APP_CONFIG,
+    )
+    config = json.loads(raw or "{}")
 
-if "attribute_config" not in config:
-    application = ApmApplication.objects.get(bk_biz_id=BIZ, app_name=APP)
-    current = ApplicationConfig(application).application_config["attribute_config"]
-    config["attribute_config"] = copy.deepcopy(current)
+    attribute_config = config.setdefault("attribute_config", {})
+    attribute_config.setdefault("name", "attribute_filter/app")
+    attribute_config["as_string"] = list(
+        dict.fromkeys(attribute_config.get("as_string", []) + KEYS)
+    )
 
-attribute = config["attribute_config"]
-attribute.setdefault("name", "attribute_filter/app")
-attribute["as_string"] = [key for key in attribute.get("as_string", []) if key not in KEYS]
-attribute["drop"] = [rule for rule in attribute.get("drop", []) if rule not in TEMP_DROPS] + TEMP_DROPS
+    NormalTypeValueConfig.refresh_config(
+        biz_id,
+        app_name,
+        AppConfigBase.APP_LEVEL,
+        app_name,
+        [{
+            "type": ConfigTypes.ALL_APP_CONFIG,
+            "value": json.dumps(config, ensure_ascii=False),
+        }],
+        need_delete_config=False,
+    )
 
-NormalTypeValueConfig.refresh_config(
-    BIZ,
-    APP,
-    AppConfigBase.APP_LEVEL,
-    APP,
-    [{"type": ConfigTypes.ALL_APP_CONFIG, "value": json.dumps(config, ensure_ascii=False)}],
-    need_delete_config=False,
-)
-refresh_apm_application_config.run(BIZ, APP)
+    application = ApmApplication.objects.get(
+        bk_biz_id=biz_id,
+        app_name=app_name,
+    )
+    generated = ApplicationConfig(application).application_config
+
+    print(
+        biz_id,
+        app_name,
+        generated["attribute_config"]["as_string"],
+    )
+
+    refresh_apm_application_config.run(biz_id, app_name)
+    print("下发成功")
+
+print("全部配置更新并下发完成")
 ```
 
-完成标志：所有 Collector 实例都已开始 drop 目标字段。
+完成标志：所有 Collector 实例的应用配置都包含两个 `as_string` 字段。
 
 ### b. 阶段 2：轮转索引
 
-强制创建新索引并切换写别名。该操作不可逆，执行前必须确认第一阶段已生效。
+确认第一阶段已全量生效后，批量创建新索引并切换写别名：
 
 ```python
 from apm.models import ApmApplication, TraceDataSource
 from metadata.models import ESStorage
 
-BIZ, APP = 5000140, "trpc_demo"
+APPS = [
+    (5000140, "trpc_demo"),
+]
 
-application = ApmApplication.objects.get(bk_biz_id=BIZ, app_name=APP)
-trace = TraceDataSource.objects.get(bk_biz_id=BIZ, app_name=APP)
-storage = ESStorage.objects.get(
-    table_id=trace.result_table_id,
-    bk_tenant_id=application.bk_tenant_id,
-)
+for biz_id, app_name in APPS:
+    application = ApmApplication.objects.get(
+        bk_biz_id=biz_id,
+        app_name=app_name,
+    )
+    trace = TraceDataSource.objects.get(
+        bk_biz_id=biz_id,
+        app_name=app_name,
+    )
+    storage = ESStorage.objects.get(
+        table_id=trace.result_table_id,
+        bk_tenant_id=application.bk_tenant_id,
+    )
 
-print("before:", storage.current_index_info())
-if storage.update_index_v2(force_rotate=True) is False:
-    raise RuntimeError("索引未启用，轮转失败")
+    print(biz_id, app_name, "before:", storage.current_index_info())
+    if storage.update_index_v2(force_rotate=True) is False:
+        raise RuntimeError(f"{biz_id}/{app_name}: 索引未启用，轮转失败")
 
-storage.create_or_update_aliases(force_rotate=True)
-print("after:", storage.current_index_info())
+    storage.create_or_update_aliases(force_rotate=True)
+    print(biz_id, app_name, "after:", storage.current_index_info())
 ```
 
-完成标志：写别名已切换到新索引。
+新数据写入后，检查目标字段的 Mapping 应为 `keyword`。旧索引仍是 `long`，跨新旧索引查询可能出现类型冲突，直至旧索引
+过期或完成重建。
 
-### c. 阶段 3：恢复字符串写入
+### c. 备选方案：写入 APM_GLOBAL
 
-同一次更新中删除临时 drop，并增加 `as_string`。滚动生效期间，旧配置继续 drop，新配置向新索引写入字符串。
+**（1）扫描现有配置**
+
+先扫描全部 `NormalTypeValueConfig`，不限定应用和配置类型：
 
 ```python
 import json
 
-from apm.constants import ConfigTypes
-from apm.models import AppConfigBase, NormalTypeValueConfig
-from apm.task.tasks import refresh_apm_application_config
+from apm.models import NormalTypeValueConfig
 
-BIZ, APP = 5000140, "trpc_demo"
-KEYS = ["attributes.trpc.status_type", "attributes.trpc.status_code"]
-TEMP_DROPS = [{"predicate_key": key, "match": [], "keys": [key]} for key in KEYS]
 
-raw = NormalTypeValueConfig.get_app_value(BIZ, APP, ConfigTypes.ALL_APP_CONFIG)
-config = json.loads(raw or "{}")
+def find_as_string(value, path="$"):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = f"{path}.{key}"
+            if key == "as_string":
+                yield child_path, child
+            yield from find_as_string(child, child_path)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from find_as_string(child, f"{path}[{index}]")
 
-attribute = config["attribute_config"]
-attribute["drop"] = [rule for rule in attribute.get("drop", []) if rule not in TEMP_DROPS]
-attribute["as_string"] = list(dict.fromkeys(attribute.get("as_string", []) + KEYS))
 
-NormalTypeValueConfig.refresh_config(
-    BIZ,
-    APP,
-    AppConfigBase.APP_LEVEL,
-    APP,
-    [{"type": ConfigTypes.ALL_APP_CONFIG, "value": json.dumps(config, ensure_ascii=False)}],
-    need_delete_config=False,
-)
-refresh_apm_application_config.run(BIZ, APP)
+configs = NormalTypeValueConfig.objects.filter(
+    value__contains='"as_string"'
+).order_by("bk_biz_id", "app_name", "type")
+
+for config in configs:
+    matches = list(find_as_string(json.loads(config.value)))
+    if not matches:
+        continue
+
+    print(
+        f"id={config.id} biz={config.bk_biz_id} "
+        f"app={config.app_name} type={config.type}"
+    )
+    for path, value in matches:
+        print(f"  {path} = {json.dumps(value, ensure_ascii=False)}")
 ```
 
-完成后检查新索引 Mapping：目标字段应为 `keyword`。
+该脚本同时覆盖 `DB_CONFIG`、`ALL_APP_CONFIG` 和 `APM_GLOBAL` 中的 `as_string`。
 
-- 如果索引模板将字段固定为 `long`，必须先修改模板。
-- 旧索引仍是 `long`，跨新旧索引查询可能出现类型冲突，直至旧索引过期或完成重建。
+**（2）更新 APM_GLOBAL**
+
+需要对所有 APM 应用生效时，可以更新 `0 / APM_GLOBAL / ALL_APP_CONFIG`。脚本保留其他 Global 配置，替换同一
+`source + destination` 的 replace 规则，并去重追加 `as_string`；重复执行结果不变。
+
+```python
+import json
+
+from apm.constants import (
+    APM_GLOBAL_CONFIG_KEY,
+    GLOBAL_CONFIG_BK_BIZ_ID,
+    ConfigTypes,
+)
+from apm.models import AppConfigBase, NormalTypeValueConfig
+
+KEYS = ["attributes.trpc.status_type", "attributes.trpc.status_code"]
+REPLACE = {
+    "source": "telemetry.target",
+    "destination": "service.name",
+    "extract_pattern": r".*\.(.*\..*)",
+}
+
+raw = NormalTypeValueConfig.get_app_value(
+    GLOBAL_CONFIG_BK_BIZ_ID,
+    APM_GLOBAL_CONFIG_KEY,
+    ConfigTypes.ALL_APP_CONFIG,
+)
+config = json.loads(raw or "{}")
+
+resource_filter = config.setdefault("resource_filter_config", {})
+replace_rules = resource_filter.setdefault("replace", [])
+resource_filter["replace"] = [
+    rule
+    for rule in replace_rules
+    if (
+        rule.get("source"),
+        rule.get("destination"),
+    )
+    != (
+        REPLACE["source"],
+        REPLACE["destination"],
+    )
+] + [REPLACE]
+
+attribute = config.setdefault("attribute_config", {"name": "attribute_filter/app"})
+attribute["as_string"] = list(
+    dict.fromkeys(attribute.get("as_string", []) + KEYS)
+)
+
+NormalTypeValueConfig.refresh_config(
+    GLOBAL_CONFIG_BK_BIZ_ID,
+    APM_GLOBAL_CONFIG_KEY,
+    AppConfigBase.APP_LEVEL,
+    APM_GLOBAL_CONFIG_KEY,
+    [{
+        "type": ConfigTypes.ALL_APP_CONFIG,
+        "value": json.dumps(config, ensure_ascii=False),
+    }],
+    need_delete_config=False,
+)
+
+print(json.dumps(config, ensure_ascii=False, indent=2))
+```
+
+`APM_GLOBAL` 的优先级低于应用自己的 APP 全量配置。应用如果单独配置了 `attribute_config` 或
+`resource_filter_config`，会整体覆盖对应的 Global 配置。更新后需重新下发目标应用；确认生成结果包含目标规则后，再按
+阶段 2 轮转索引。
