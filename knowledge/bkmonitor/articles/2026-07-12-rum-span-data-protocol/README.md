@@ -3,19 +3,20 @@ title: RUM 数据协议
 tags: [rum, span, metric, log, data-protocol, opentelemetry, web]
 description: 归档 bkmonitor RUM Web 的 Resource、Span、Metric 和 Log 协议，供数据上报、字段消费和协议核对使用。
 created: 2026-07-12
-updated: 2026-07-18
+updated: 2026-07-19
 ---
 本文记录 `@blueking/open-telemetry` 当前上报的 Resource、Span、Metric 和 Log 字段。
 
-| 状态                                                             | 描述          |
-| -------------------------------------------------------------- | ----------- |
-| ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | 已上报，保持现状。   |
-| ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | 已上报，但需要废弃。  |
-| ![Development](https://img.shields.io/badge/-development-blue) | 新补充或字段位置变更。 |
+| 状态                                                             | 描述             |
+| -------------------------------------------------------------- | -------------- |
+| ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | 已上报，保持现状。      |
+| ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | 已上报，但需要废弃。     |
+| ![Development](https://img.shields.io/badge/-development-blue) | 新补充或字段位置变更。    |
+| ![Backend](https://img.shields.io/badge/-backend-orange)       | 由后端生成，前端不直接上报。 |
 
 原则：
-* Aegis、DataDog 后续统一转成 Otel Span 协议，同领域字段尽量对齐前两个 SDK，需控制字段数量，避免出现需转换 150+ 字段的情况。
-* 控制字段规模：输出可覆盖 Otel & Aegis & DataDog SDK 最简协议，其他不必要字段统一省略，减少初始技术负债。
+* Aegis、DataDog 后续统一转成 Otel Span 协议，同领域字段尽量对齐前两个 SDK，需控制字段数量，避免出现需转换 150+ 字段的情况.
+* 控制字段规模：输出可覆盖 Otel & Aegis & DataDog SDK 最简协议，其他不必要字段统一省略，减少初始技术负债（字段一旦放出但没有真正使用，稳定后一旦有需求变更，就有兼容风险）。
 * 指标：Web Vitals 指标由接收端派生，SDK 无需埋点。
 
 # Resource
@@ -24,35 +25,41 @@ Span、Metric 和 Log 使用同一个 OpenTelemetry Resource。
 
 ## 0x01 基础字段
 
-| 字段                                                                                                                     | 状态                                                             | 类型   | 描述        | 备注                                             |
-| ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ---- | --------- | ---------------------------------------------- |
-| `resource.service.name`                                                                                                | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | 服务名       | --                                             |
-| `resource.service.version`                                                                                             | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | 版本        | --                                             |
-| [`resource.deployment.environment.name`](https://opentelemetry.io/docs/specs/semconv/resource/deployment-environment/) | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | 环境        | 如 `development`、`production`、`staging`、`test`。 |
-| [`resource.telemetry.sdk.language`](https://opentelemetry.io/docs/specs/semconv/resource/#telemetry-sdk)               | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | enum | 语言        | `webjs`。                                       |
-| `resource.telemetry.sdk.name` *[1]*                                                                                    | ![Development](https://img.shields.io/badge/-development-blue) | str  | SDK 名称    | --                                             |
-| `resource.telemetry.sdk.version`                                                                                       | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | SDK 版本    | --                                             |
-| `resource.browser.name`                                                                                                | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | 浏览器名称     | 如 `Chrome`、`Edge`。                             |
-| `resource.browser.version`                                                                                             | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | 浏览器版本     | 如 `150`。                                       |
-| `resource.device.type`                                                                                                 | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | enum | 设备类型      | `desktop`；`mobile`。                            |
-| `resource.os.name`                                                                                                     | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | 操作系统名称    | 如 `macOS`、`Windows`、`Android`。                 |
-| `resource.rum.provider`                                                                                                | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str  | 数据提供方     | ❌ 使用标准的 `sdk.name` 代替。<br>                     |
-| `resource.device.logical_processor_count`                                                                              | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | int  | 逻辑处理器数量   | 如 `14`。<br><br>❌ 另外两个 SDK 不上报。                 |
-| `resource.rum.schema.version`                                                                                          | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str  | Schema 版本 | ❌ 不需要。                                         |
+| 字段                                                                                                                     | 状态                                                             | 类型      | 描述        | 备注                                             |
+| ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ------- | --------- | ---------------------------------------------- |
+| `resource.service.name`                                                                                                | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str     | 服务名       | --                                             |
+| `resource.service.version`                                                                                             | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str     | 版本        | --                                             |
+| [`resource.deployment.environment.name`](https://opentelemetry.io/docs/specs/semconv/resource/deployment-environment/) | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str     | 环境        | 如 `development`、`production`、`staging`、`test`。 |
+| `resource.telemetry.sdk.name` *[1]*                                                                                    | ![Development](https://img.shields.io/badge/-development-blue) | str     | SDK 名称    | --                                             |
+| `resource.telemetry.sdk.version`                                                                                       | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str     | SDK 版本    | --                                             |
+| [`resource.telemetry.sdk.language`](https://opentelemetry.io/docs/specs/semconv/resource/#telemetry-sdk)               | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | enum    | 语言        | `webjs`。                                       |
+| `resource.device.type`                                                                                                 | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | enum    | 设备类型      | `desktop`、`mobile`、`tablet`、`other`。           |
+| `resource.user_agent.name`                                                                                             | ![Development](https://img.shields.io/badge/-development-blue) | str     | 代理名称      | 通常指的是浏览器的名称，如 `Chrome`、`Edge`。                 |
+| `resource.user_agent.version`                                                                                          | ![Development](https://img.shields.io/badge/-development-blue) | str     | 代理版本      | 通常指的是浏览器的名称，如 `149`、`151`。                     |
+| `resource.user_agent.os.name`                                                                                          | ![Development](https://img.shields.io/badge/-development-blue) | str     | 操作系统名     | 如 `macOS`、`Windows`、`Android`。                 |
+| `resource.device.mobile`                                                                                               | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | boolean | 是否为移动设备   | 与 `device.type` 重复。                            |
+| `resource.os.name`                                                                                                     | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str     | 操作系统名称    | 如 `macOS`、`Windows`、`Android`。                 |
+| `resource.rum.provider`                                                                                                | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str     | 数据提供方     | ❌ 使用标准的 `sdk.name` 代替。<br>                     |
+| `resource.rum.schema.version`                                                                                          | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str     | Schema 版本 | ❌ 不需要。                                         |
+| `resource.browser.name`                                                                                                | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str     | 浏览器名称     | 如 `Chrome`、`Edge`。                             |
+| `resource.browser.version`                                                                                             | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str     | 浏览器版本     | 如 `150`。                                       |
+| `resource.device.logical_processor_count`                                                                              | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | int     | 逻辑处理器数量   | 如 `14`。<br><br>❌ 另外两个 SDK 不上报。                 |
+**[1] `resource.telemetry.sdk.name`**：`blueking`（蓝鲸 Otel SDK，当前值为 @blueking/open-telemetry，需修改。）｜aegis（Aegis SDK）。
 
-*[1] `resource.telemetry.sdk.name`：`blueking`（蓝鲸 Otel SDK，当前值为 @blueking/open-telemetry，需修改。）｜aegis（Aegis SDK）。*
+**[2] `os.name` / `browser.name`  / `browser.version`**：已有  [User Agent](https://opentelemetry.io/docs/specs/semconv/registry/attributes/user-agent/) 概念可以容纳这些字段，放到同一个类别下更紧凑更好维护。
 
 
-## 0x02 [User Agent](https://opentelemetry.io/docs/specs/semconv/registry/attributes/user-agent/)
+## 0x02 用户真实监控模型
 
-| 字段 *[1]*                       | 状态                                                             | 类型  | 描述                        | 备注                             |
-| ------------------------------ | -------------------------------------------------------------- | --- | ------------------------- | ------------------------------ |
-| `resource.user_agent.name`     | ![Development](https://img.shields.io/badge/-development-blue) | str | 代理名称                      | 通常指的是浏览器的名称，如 `Chrome`、`Edge`。 |
-| `resource.user_agent.version`  | ![Development](https://img.shields.io/badge/-development-blue) | str | 代理版本                      | 通常指的是浏览器的名称，如 `149`、`151`。     |
-| `resource.user_agent.original` | ![Development](https://img.shields.io/badge/-development-blue) | str | 客户端发送的 HTTP `User-Agent`。 | 如：`"Mozilla/5.0 ..."`。         |
-| `resource.user_agent.os.name`  | ![Development](https://img.shields.io/badge/-development-blue) | str | 操作系统名                     | 如 `macOS`、`Windows`、`Android`。 |
-
-*[1] 从原 attributes 迁移，以上字段在 RUM 场景均为不可变属性，放到 resource 更合理。*
+```text
+Session
+└── View
+    ├── Vital：FCP / LCP / CLS / INP / TTFB
+    ├── Action
+    ├── Resource
+    ├── Error
+    └── Long Task
+```
 
 # Span
 
@@ -62,9 +69,9 @@ Span、Metric 和 Log 使用同一个 OpenTelemetry Resource。
 
 | 字段               | 状态                                                         | 类型      | 描述                                                                             | 备注                                                                          |
 | ---------------- | ---------------------------------------------------------- | ------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------- |
-| `time`           | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 数据上报时间（毫秒时间戳字符串）                                                               | 【非上报字段】由接收链路自动补充。                                                           |
-| `app_name`       | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 应用名称                                                                           | 【非上报字段】由接收链路自动补充。                                                           |
-| `bk_biz_id`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 业务 ID                                                                          | 【非上报字段】由接收链路自动补充。                                                           |
+| `time`           | ![Backend](https://img.shields.io/badge/-backend-orange)   | str     | 数据上报时间（毫秒时间戳字符串）                                                               | --                                                                          |
+| `app_name`       | ![Backend](https://img.shields.io/badge/-backend-orange)   | str     | 应用名称                                                                           | --                                                                          |
+| `bk_biz_id`      | ![Backend](https://img.shields.io/badge/-backend-orange)   | str     | 业务 ID                                                                          | --                                                                          |
 | `trace_id`       | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | Trace ID                                                                       | --                                                                          |
 | `trace_state`    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | Trace 状态                                                                       | --                                                                          |
 | `span_name`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | Span 名称                                                                        | --                                                                          |
@@ -73,7 +80,7 @@ Span、Metric 和 Log 使用同一个 OpenTelemetry Resource。
 | `status`         | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Status  | Span 执行状态                                                                      | 包含 `code` 和 `message`。                                                      |
 | `kind`           | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | enum    | [Span 类型](https://opentelemetry.io/zh/docs/concepts/signals/traces/#span-kind) | 枚举值：<br>- 未定义：0<br>- 内部调用：1<br>- 同步被调：2<br>- 同步主调：3<br>- 异步主调：4<br>- 异步被调：5 |
 | `resource`       | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | object  | 资源信息                                                                           | 服务、环境、SDK 等描述信息。                                                            |
-| `events`         | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Event[] | 事件列表                                                                           | 异常详情和 Long Task 脚本明细通过 Span Event 承载。                                         |
+| `events`         | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Event[] | 事件列表                                                                           | 异常详情和 Long Task 脚本明细通过 Span Event 承载。                                       |
 | `links`          | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Link[]  | [Span 链接](https://opentelemetry.io/docs/concepts/signals/traces/#span-links)   | 链接的存在是为了 Span 同其他 Span 建立关联，从而表明存在因果关系。                                     |
 | `attributes`     | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | object  | 属性                                                                             | 浏览器、设备、网络、异常等各类语义标签和度量。                                                     |
 | `start_time`     | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int     | 开始时间（微秒）                                                                       | --                                                                          |
@@ -82,10 +89,23 @@ Span、Metric 和 Log 使用同一个 OpenTelemetry Resource。
 
 ### b. Status
 
-| 字段               | 状态                                                         | 类型  | 描述   | 备注                                   |
-| ---------------- | ---------------------------------------------------------- | --- | ---- | ------------------------------------ |
-| `status.code`    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | 状态码  | 0（未设置）<br />1（正常）<br />2（异常）            |
-| `status.message` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 状态描述 | 仅在 `status.code` == 2 时有值，正常 span 为空 |
+| 字段               | 状态                                                         | 类型  | 描述   | 备注                           |
+| ---------------- | ---------------------------------------------------------- | --- | ---- | ---------------------------- |
+| `status.code`    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | 状态码  | 0（未设置）<br />1（正常）<br />2（异常） |
+| `status.message` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 状态描述 | 如 `Failed to fetch`          |
+
+### c. Event
+> *目前 SDK 同时记录异常到 `attributes` 和 `events`，保留 events 即可。*
+
+| 字段                                       | 状态                                                         | 类型  | 描述      | 备注                   |
+| ---------------------------------------- | ---------------------------------------------------------- | --- | ------- | -------------------- |
+| `events.name` *[1]*                      | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 事件名称    |                      |
+| `events.timestamp`                       | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 事件事件    |                      |
+| `events.attributes.exception.type`       | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 异常类型    | 如 `TypeError`。       |
+| `events.attributes.exception.message`    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 异常简短消息。 | 如 `Failed to fetch`。 |
+| `events.attributes.exception.stacktrace` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 异常堆栈    |                      |
+
+**[1] `events.name`**：「异常」需将事件名固定为 `exception`。
 
 ---
 
@@ -93,80 +113,116 @@ Span、Metric 和 Log 使用同一个 OpenTelemetry Resource。
 
 ### a. 基础字段
 
-| 字段                           | 状态                                                          | 类型  | 描述         | 备注                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| ---------------------------- | ----------------------------------------------------------- | --- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `attributes.user.id`         | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | str | 用户 ID      | --                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `attributes.span_type`       |                                                             | str | Span 类型    | 枚举值：<br>- 文档加载：document<br>- 路由切换：route<br>- 静态资源与 HTTP / API：resource<br>- 长任务：longtask<br>- 用户交互：action<br>- Web 指标：vital<br>- 错误：error<br>- 自定义：custom                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 字段                           | 状态                                                          | 类型  | 描述         | 备注                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------------- | ----------------------------------------------------------- | --- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `attributes.user.id`         | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | str | 用户 ID      | --                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `attributes.span_type`       |                                                             | str | Span 类型    | 枚举值：<br>- 文档加载：document<br>- 路由切换：route<br>- 静态资源与 HTTP / API：resource<br>- 长任务：longtask<br>- 用户交互：action<br>- Web 指标：vital<br>- 错误：error<br>- 自定义：custom                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `attributes.span_subtype`    |                                                             | str | Span 子类型   | 不同 `span_type` 具有不同的子类型：<br>[a] document<br>- 导航：navigate<br>[b] route<br>- pushState<br>- replaceState<br>- popstate<br>- hashchange<br>- manual<br>- bfCache<br>- sessionRenewal<br>[c] resource<br>- script<br>- link<br>- img<br>- css<br>- xml<br>- fetch<br>- xhr<br>- video<br>- audio<br>- iframe<br>- beacon<br>- other<br>[d] longtask<br>- long-animation-frame<br>- long-task<br>[e] action<br>- click<br>- custom<br>[f] vital<br>- lcp<br>- fcp<br>- cls<br>- inp<br>- ttfb<br>[g] error<br>- js<br>- promise<br>- resource_load<br>- blank_screen<br>- csp<br>[h] custom<br>- websocket<br>- <自定义> |
-| `attributes.result`          |                                                             | str | 结果         | 枚举值：<br>- 成功：`success`<br>- 错误：`error`<br>- 超时：`timeout`<br>- 警告：`warning`<br><br>⚠️                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `attributes.error_type`      |                                                             | str | 错误类型       | 枚举值：<br/>- none<br/>- http_4xx<br/>- http_5xx<br/>- network_timeout<br/>- js<br/>- promise<br/>- resource_load<br/>- blank_screen<br/>- csp<br/>- slow<br/>- longtask_blocking<br/>- network<br/>- custom                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `attributes.trace_scene`     |                                                             | str | 追踪场景       | 枚举值：`page_load`、 `route_change`、`user_action`、`startup`。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `attributes.os_name`         | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 操作系统名称     | 【重复】以 `attributes.user_agent.os.name` 为准。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `attributes.status_class`    | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | HTTP 状态码分类 | 如 `2xx`、`3xx`、`4xx`、`5xx`。<br><br>❌ SDK 不应该提供，如果后续需要高频获取，考虑预计算或实时聚合。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `attributes.event_label`     | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 中文事件标签     | 如 `API 调用`/`错误`等。<br><br>❌  SDK 不应该提供中文名，另外这个字段看着也没啥用。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `attributes.duration_bucket` | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 耗时分桶       | 如 `<100ms`、`100~500ms`、`500ms~2s`、`>2s`。<br><br>❌ 不需要，耗时分桶应该由后端支持。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `attributes.trace_scene`     |                                                             | str | 追踪场景       | 枚举值：`page_load`、 `route_change`、`user_action`、`startup`。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `attributes.result`          | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 结果         | 枚举值：<br>- 成功：`success`<br>- 错误：`error`<br>- 超时：`timeout`<br>- 警告：`warning`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `attributes.error_type`      | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 错误类型       | 枚举值：<br/>- none<br/>- http_4xx<br/>- http_5xx<br/>- network_timeout<br/>- js<br/>- promise<br/>- resource_load<br/>- blank_screen<br/>- csp<br/>- slow<br/>- longtask_blocking<br/>- network<br/>- custom                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `attributes.status_class`    | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | HTTP 状态码分类 | 如 `2xx`、`3xx`、`4xx`、`5xx`。<br><br>❌ SDK 不应该提供，如果后续需要高频获取，考虑预计算或实时聚合。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `attributes.event_label`     | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 中文事件标签     | 如 `API 调用`/`错误`等。<br><br>❌  SDK 不应该提供中文名，另外这个字段看着也没啥用。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `attributes.duration_bucket` | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 耗时分桶       | 如 `<100ms`、`100~500ms`、`500ms~2s`、`>2s`。<br><br>❌ 不需要，耗时分桶应该由后端支持。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `attributes.error.source`    | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 错误来源       | 枚举值：<br/>- window.error（固定值）<br/>- resource<br/>- unhandledrejection                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+
+### b. [error](https://opentelemetry.io/docs/specs/semconv/registry/attributes/error/)
+
+
+| 字段                                         | 状态                                                             | 类型      | 描述      | 备注                                                                   |
+| ------------------------------------------ | -------------------------------------------------------------- | ------- | ------- | -------------------------------------------------------------------- |
+| `attributes.error.type`                    | ![Development](https://img.shields.io/badge/-development-blue) | str     | 低基数错误类型 | --                                                                   |
+| `attributes.error.handled`                 | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     |         | boolean | 错误是否被捕获                                                              |
+| `attributes.error.source`                  | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str     | 错误来源    | 枚举值：<br/>- window.error（固定值）<br/>- resource<br/>- unhandledrejection |
+| `attributes.error.cross_origin`            | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | boolean | 跨域脚本错误  | --                                                                   |
+| `attributes.error.window_occurrence_index` | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | int     | --      | --                                                                   |
+
+
 
 ### b. [exception](https://opentelemetry.io/docs/specs/semconv/registry/attributes/exception/)
 
-| 字段                                     | 状态                                                          | 类型      | 描述        | 备注                                                                   |
-| -------------------------------------- | ----------------------------------------------------------- | ------- | --------- | -------------------------------------------------------------------- |
-| `attributes.error.handled`             |                                                             | boolean | 错误是否被捕获   |                                                                      |
-| `attributes.error.source`              |                                                             | str     | 错误来源      | 枚举值：<br/>- window.error（固定值）<br/>- resource<br/>- unhandledrejection |
-| `attributes.error.window_occurrence_index` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | 节流窗口内已上报错误的触发序号 | 总量使用 `browser.error.count` Metric。 |
-| `attributes.exception.fingerprint`     | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str     | 异常指纹      | 用于聚合同类异常                                                             |
-| `attributes.exception.message`         | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str     | 异常完整消息    |                                                                      |
-| `attributes.exception.message_short`   | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str     | 异常简短消息    | 适合列表展示                                                               |
-| `attributes.exception.stacktrace`      | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str     | 异常堆栈信息    |                                                                      |
-| `attributes.exception.stack_top_frame` | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str     | 堆栈顶部帧     |                                                                      |
-| `attributes.exception.type`            | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str     | 异常类型      |                                                                      |
+| 字段                                         | 状态                                                          | 类型  | 描述              | 备注       |
+| ------------------------------------------ | ----------------------------------------------------------- | --- | --------------- | -------- |
+| `attributes.exception.fingerprint`         | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 异常指纹            | 用于聚合同类异常 |
+| `attributes.exception.message`             | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 异常完整消息          |          |
+| `attributes.exception.message_short`       | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 异常简短消息          | 适合列表展示   |
+| `attributes.exception.stacktrace`          | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 异常堆栈信息          |          |
+| `attributes.exception.stack_top_frame`     | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 堆栈顶部帧           |          |
+| `attributes.exception.type`                | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 异常类型            |          |
 
 ### c. rum
 
-| 字段                               | 类型      | 描述   | 备注                                                                                                                                          |
-|----------------------------------|---------|------|---------------------------------------------------------------------------------------------------------------------------------------------|
-| `attributes.rum.page.host`       | str     | 站点   | 例如 `https://example.com`                                                                                                                    |
-| `attributes.rum.page.path`       | str     | 路径   | 例如 `/`                                                                                                                                      |
-| `attributes.rum.navigation.type` | str     | 导航类型 | 仅 `span_type=vital` 上报该字段，枚举值：<br>- back-forward<br>- back-forward-cache<br>- navigate<br>- prerender<br>- reload<br>- restore<br>- unknown |
+| 字段                               | 类型  | 描述   | 备注                                                                                                                                          |
+| -------------------------------- | --- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `attributes.rum.page.host`       | str | 站点   | 例如 `https://example.com`                                                                                                                    |
+| `attributes.rum.page.path`       | str | 路径   | 例如 `/`                                                                                                                                      |
+| `attributes.rum.navigation.type` | str | 导航类型 | 仅 `span_type=vital` 上报该字段，枚举值：<br>- back-forward<br>- back-forward-cache<br>- navigate<br>- prerender<br>- reload<br>- restore<br>- unknown |
+|                                  |     |      |                                                                                                                                             |
 ### d. [browser](https://opentelemetry.io/docs/specs/semconv/registry/attributes/browser/)
 
-| 字段                                   | 类型  | 描述      | 备注                                                |
-|--------------------------------------|-----|---------|---------------------------------------------------|
-| `attributes.browser.screen.height`   | int | 屏幕尺寸的高度 | Aegis 使用 `sr = 1728 * 1117`。                      |
-| `attributes.browser.screen.width`    | int | 屏幕尺寸的宽度 | --                                                |
-| `attributes.browser.viewport.height` | int | 视口尺寸的高度 | Aegis 使用 `vp = 576 * 918`。                        |
-| `attributes.browser.viewport.width`  | int | 视口尺寸的宽度 | --                                                |
+| 字段                                   | 状态                                                         | 类型  | 描述      | 备注                           |
+| ------------------------------------ | ---------------------------------------------------------- | --- | ------- | ---------------------------- |
+| `attributes.browser.screen.height`   | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | 屏幕尺寸的高度 | Aegis 使用 `sr = 1728 * 1117`。 |
+| `attributes.browser.screen.width`    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | 屏幕尺寸的宽度 | --                           |
+| `attributes.browser.viewport.height` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | 视口尺寸的高度 | Aegis 使用 `vp = 576 * 918`。   |
+| `attributes.browser.viewport.width`  | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | 视口尺寸的宽度 | --                           |
+
 ### e. [device](https://opentelemetry.io/docs/specs/semconv/registry/attributes/device/)
 
-| 字段                         | 类型  | 描述      | 备注                                                                              |
-| -------------------------- | --- | ------- | ------------------------------------------------------------------------------- |
-| `attributes.device.id`     | str | 设备标识    | [a] 如 `fd136680-a37b-45ea-80ee-365bfdc7f82e`。<br>[b] ⚠️ Aegis 使用 `fId` 获取浏览器指纹。 |
-| `attributes.device.memory` | int | 内存（单位 G |                                                                                 |
+| 字段                            | 状态                                                          | 类型  | 描述   | 备注                                        |
+| ----------------------------- | ----------------------------------------------------------- | --- | ---- | ----------------------------------------- |
+| `attributes.device.id`        | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 设备标识 | 如 `fd136680-a37b-45ea-80ee-365bfdc7f82e`。 |
+| `attributes.device.platform`  | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 平台   | 与 `os.name` 重复。                           |
+| `attributes.device.memory`    | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | int | 内存   |                                           |
+| `attributes.device.cpu_cores` | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | int | CPU  | --                                        |
+
 ### f. [network](https://opentelemetry.io/docs/specs/semconv/registry/attributes/network/)
 
-| 字段                                        | 类型      | 描述           | 备注                                                                            |
-|-------------------------------------------|---------|--------------|-------------------------------------------------------------------------------|
-| 【新增】 `attributes.network.connection.type` | str     | 连接类型         | [a] 如 `wifi`。<br>[b] ⚠️ Aegis netType：`wifi`、`wired`、`2G`、`3G`、`5G`、`6G`，需对齐。 |
-| `attributes.network.downlink`             | int     | 预估下行带宽（Mbps） | ❌ 没有使用场景且 Aegis 也未提供该字段，Span 包含过多数值字段时后续难以聚合。                                 |
-| `attributes.network.effective_type`       | str     | 有效网络质量       | 如 `4g`、`slow-2g`。<br><br>❌ 删除，把 `connection.type` 准确上报，现在都是 `wifi`。           |
-| `attributes.network.rtt`                  | int     | 往返时延（毫秒）     |                                                                               |
-| `attributes.network.save_data`            | boolean | 用户是否开启省流量模式  |                                                                               |
-| `attributes.network.connection_type`      | str     | 连接类型         | ❌ 已规范命名，删除。                                                                   |
-| `attributes.network.protocol.name`        | str     | 应用层网络协议      | 仅 `websocket.connect` 存在，固定为 `websocket`。                                        |
+| 字段                                   | 状态                                                          | 类型      | 描述           | 备注                                                               |
+| ------------------------------------ | ----------------------------------------------------------- | ------- | ------------ | ---------------------------------------------------------------- |
+| `attributes.network.connection.type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | str     | 连接类型         | [a] 如 `wifi`。<br>[b] ⚠️ Aegis netType：<br><br>表示设备当前使用的物理网络连接方式。 |
+| `attributes.network.effective_type`  | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | str     | 有效网络质量       | 表示浏览器根据延迟和下载速度估算出的实际网络质量。                                        |
+| `attributes.network.protocol.name`   | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | enum    | 应用层网络协议      | 枚举值：<br>[a] `http`<br>[b] `websocket`                            |
+| `attributes.network.downlink`        | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | int     | 预估下行带宽（Mbps） | ❌ 没有使用场景且 Aegis 也未提供该字段，Span 包含过多数值字段时后续难以聚合。                    |
+| `attributes.network.rtt`             | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | int     | 往返时延（毫秒）     |                                                                  |
+| `attributes.network.save_data`       | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | boolean | 用户是否开启省流量模式  |                                                                  |
+| `attributes.network.connection_type` | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str     | 连接类型         | ❌ 已规范命名，删除。                                                      |
+
+**[1] `attributes.network.connection.type`**：等同与 DataDog（`connectivity.interfaces`）、Aegis（`netType`）。
+
+Aegis 将「连接类型」「网络质量」整合成 `netType`（`wifi`、`wired`、`2G`、`3G`、`5G`、`6G`），不推荐这种做法。
+
+| 值          | 描述         | 备注                                  |
+| ---------- | ---------- | ----------------------------------- |
+| `wifi`     | Wi-Fi 无线网络 | 仅表示通过 Wi-Fi 连接，不代表网络一定快。            |
+| `cellular` | 蜂窝移动网络     | 可能是 2G、3G、4G 或 5G，不表示具体代际。          |
+| `ethernet` | 有线网络       | 通过网线或有线网卡连接，Aegis 的 `wired` 应映射为该值。 |
+| `unknown`  | 未知         | 浏览器不支持、无法识别，或者连接方式不在支持范围内；不表示已经断网。  |
+
+**[2] `attributes.network.effective_type`**：等同与 DataDog（`connectivity.effective_type`）、Aegis（`netType`）。
+
+| 值         | 描述   | 备注                         |
+| --------- | ---- | -------------------------- |
+| `slow-2g` | 极慢网络 | 页面和图片加载非常慢，通常只能满足少量文本传输。   |
+| `2g`      | 较慢网络 | 简单页面可以打开，图片、脚本和接口请求可能明显缓慢。 |
+| `3g`      | 中等网络 | 普通网页基本可用，但大资源和复杂页面仍可能等待。   |
+| `4g`      | 较快网络 | 延迟和带宽表现较好，适合大多数 Web 应用。    |
+
 ### g. session
 
-| 字段                              | 类型      | 描述     | 备注 |
-|---------------------------------|---------|--------|----|
-| `attributes.session.has_replay` | boolean | 是否回放   |    |
-| `attributes.session.id`         | str     | 会话唯一标识 |    |
+| 字段                              | 状态                                                         | 类型      | 描述     | 备注  |
+| ------------------------------- | ---------------------------------------------------------- | ------- | ------ | --- |
+| `attributes.session.has_replay` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | boolean | 是否回放   | --  |
+| `attributes.session.id`         | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 会话唯一标识 | --  |
 
 ### h. target
 
-| 字段                                | 类型  | 描述               | 备注 |
-|-----------------------------------|-----|------------------|----|
-| `attributes.target_domain`        | str | 目标域名             | Resource 或 WebSocket URL 可解析时存在。 |
-| `attributes.target_label`         | str | 跨类型主标签，用于统一检索    | 插件能够提取主检索标签时存在。 |
-| `attributes.target_path_template` | str | 目标低基数路径模板        | Resource URL 或 View 路径可归一时存在。 |
-| `attributes.target_value`         | str / int / boolean | 主数值（状态码、耗时、字节数等） | 当前事件存在主数值时写入。 |
+| 字段                                | 类型                  | 描述               | 备注                               |
+| --------------------------------- | ------------------- | ---------------- | -------------------------------- |
+| `attributes.target_domain`        | str                 | 目标域名             | Resource 或 WebSocket URL 可解析时存在。 |
+| `attributes.target_label`         | str                 | 跨类型主标签，用于统一检索    | 插件能够提取主检索标签时存在。                  |
+| `attributes.target_path_template` | str                 | 目标低基数路径模板        | Resource URL 或 View 路径可归一时存在。    |
+| `attributes.target_value`         | str / int / boolean | 主数值（状态码、耗时、字节数等） | 当前事件存在主数值时写入。                    |
 ### i. view
 
 | 字段                               | 类型  | 描述     | 备注                                         |
@@ -186,8 +242,6 @@ Span、Metric 和 Log 使用同一个 OpenTelemetry Resource。
 
 ### j. resource
 
-以下字段仅在 `span_name=browser.resource` 时存在。Fetch / XHR 和静态资源共用该 Span 名，通过
-`attributes.resource.type` 区分来源。
 
 | 字段                                           | 状态                                                         | 类型      | 描述                                                                            |
 | -------------------------------------------- | ---------------------------------------------------------- | ------- | ----------------------------------------------------------------------------- |
@@ -318,56 +372,30 @@ span_name 固定为 `browser.view`。
 
 - span_subtype == js（span_name == browser.error）
 
-| 字段                                       | 类型      | 描述        | 备注                                                                   |
-|------------------------------------------|---------|-----------|----------------------------------------------------------------------|
-| `attributes.error.handled`               | boolean | 错误是否被捕获   |                                                                      |
-| `attributes.error.source`                | str     | 错误来源      | 枚举值：<br/>- window.error（固定值）<br/>- resource<br/>- unhandledrejection |
-| `attributes.error.window_occurrence_index` | int   | 节流窗口内已上报错误的触发序号 | 总量使用 `browser.error.count` Metric。 |
-| `attributes.error.cross_origin`          | boolean | 跨域脚本错误    | 条件字段：仅跨域脚本错误（消息为 `"Script error."` 且无 stack / filename）时存在           |
-| `attributes.code.column`                 | int     | 代码列号      |                                                                      |
-| `attributes.code.filepath`               | str     | 代码文件路径    |                                                                      |
-| `attributes.code.lineno`                 | int     | 代码行号      |                                                                      |
-| `attributes.exception.fingerprint`       | str     | 异常指纹      | 用于聚合同类异常                                                             |
-| `attributes.exception.message_short`     | str     | 异常简短消息    | 适合列表展示                                                               |
-| `attributes.exception.stack_top_frame`   | str     | 堆栈顶部帧     |                                                                      |
-| `events.name`                            | str     | 事件名称      |                                                                      |
-| `events.timestamp`                       | str     | 事件发生时间戳   |                                                                      |
-| `events.attributes.exception.type`       | str     | 异常类型      |                                                                      |
-| `events.attributes.exception.message`    | str     | 异常的简短消息   |                                                                      |
-| `events.attributes.exception.stacktrace` | str     | 异常的堆栈信息   | 根据 error 实例提取，不一定存在                                                  |
+| 字段                         | 类型  | 描述     | 备注  |
+| -------------------------- | --- | ------ | --- |
+| `attributes.code.column`   | int | 代码列号   |     |
+| `attributes.code.filepath` | str | 代码文件路径 |     |
+| `attributes.code.lineno`   | int | 代码行号   |     |
+|                            |     |        |     |
+
 
 - span_subtype == promise（span_name == browser.unhandledrejection）
 
-| 字段                                       | 类型      | 描述        | 备注                                                                   |
-|------------------------------------------|---------|-----------|----------------------------------------------------------------------|
-| `attributes.error.handled`               | boolean | 错误是否被捕获   |                                                                      |
-| `attributes.error.source`                | str     | 错误来源      | 枚举值：<br/>- window.error（固定值）<br/>- resource<br/>- unhandledrejection |
-| `attributes.error.window_occurrence_index` | int   | 节流窗口内已上报错误的触发序号 | 总量使用 `browser.error.count` Metric。 |
-| `attributes.exception.fingerprint`       | str     | 异常指纹      | 用于聚合同类异常                                                             |
-| `attributes.exception.message_short`     | str     | 异常简短消息    | 适合列表展示                                                               |
-| `attributes.exception.stack_top_frame`   | str     | 堆栈顶部帧     |                                                                      |
-| `events.name`                            | str     | 事件名称      |                                                                      |
-| `events.timestamp`                       | str     | 事件发生时间戳   |                                                                      |
-| `events.attributes.exception.type`       | str     | 异常类型      |                                                                      |
-| `events.attributes.exception.message`    | str     | 异常的简短消息   |                                                                      |
-| `events.attributes.exception.stacktrace` | str     | 异常的堆栈信息   | 根据 error 实例提取，不一定存在                                                  |
+| 字段                                         | 类型      | 描述              | 备注                                                                   |
+| ------------------------------------------ | ------- | --------------- | -------------------------------------------------------------------- |
+| `attributes.error.handled`                 | boolean | 错误是否被捕获         |                                                                      |
+| `attributes.error.source`                  | str     | 错误来源            | 枚举值：<br/>- window.error（固定值）<br/>- resource<br/>- unhandledrejection |
+| `attributes.error.window_occurrence_index` | int     | 节流窗口内已上报错误的触发序号 | 总量使用 `browser.error.count` Metric。                                   |
+
 
 - span_subtype == resource_load（span_name == browser.resource_error）
 
-| 字段                                       | 类型      | 描述            | 备注                                                                   |
-|------------------------------------------|---------|---------------|----------------------------------------------------------------------|
-| `attributes.error.handled`               | boolean | 错误是否被捕获       |                                                                      |
-| `attributes.error.source`                | str     | 错误来源          | 枚举值：<br/>- window.error（固定值）<br/>- resource<br/>- unhandledrejection |
-| `attributes.error.window_occurrence_index` | int   | 节流窗口内已上报错误的触发序号 | 总量使用 `browser.error.count` Metric。 |
-| `attributes.exception.fingerprint`       | str     | 异常指纹          | 用于聚合同类异常                                                             |
-| `attributes.exception.message_short`     | str     | 异常简短消息        | 适合列表展示                                                               |
-| `attributes.exception.stack_top_frame`   | str     | 堆栈顶部帧         |                                                                      |
-| `attributes.html.tag`                    | str     | 关联 HTML 标签    | 资源类错误时出现，例如 `IMG`                                                    |
-| `events.name`                            | str     | 事件名称          |                                                                      |
-| `events.timestamp`                       | str     | 事件发生时间戳       |                                                                      |
-| `events.attributes.exception.type`       | str     | 异常类型          |                                                                      |
-| `events.attributes.exception.message`    | str     | 异常的简短消息       |                                                                      |
-| `events.attributes.exception.stacktrace` | str     | 异常的堆栈信息       | 根据 error 实例提取，不一定存在                                                  |
+| 字段                    | 类型  | 描述         | 备注                |
+| --------------------- | --- | ---------- | ----------------- |
+| `attributes.html.tag` | str | 关联 HTML 标签 | 资源类错误时出现，例如 `IMG` |
+
+
 
 - span_subtype == blank_screen（span_name == browser.blank_screen）
 
