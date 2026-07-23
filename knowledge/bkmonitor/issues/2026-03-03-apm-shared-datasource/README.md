@@ -3,7 +3,7 @@ title: APM 支持跨应用共享数据源
 tags: [apm, datasource, es, shared-storage, migration]
 description: 支持多 APM 应用复用同一数据源，压缩 ES 索引数量，降低数据链路资源消耗
 created: 2026-03-03
-updated: 2026-06-29
+updated: 2026-07-23
 ---
 
 # APM 支持跨应用共享数据源

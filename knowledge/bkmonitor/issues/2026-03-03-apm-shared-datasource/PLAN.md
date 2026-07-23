@@ -4,7 +4,7 @@ tags: [apm, datasource, es, shared-storage, architecture, migration]
 issue: knowledge/bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md
 description: APM 跨应用共享数据源的实现方案与开发方案
 created: 2026-03-03
-updated: 2026-06-29
+updated: 2026-07-23
 ---
 
 # APM 跨应用共享数据源 —— 实施方案
@@ -680,6 +680,139 @@ for bk_biz_id, app_name in apps:
 | ✅ | `feat/apm_shared_datasource_opt/#1010158081134381477` | APM 跨应用共享数据源功能完善 | [TencentBlueKing/bk-monitor #10671](https://github.com/TencentBlueKing/bk-monitor/pull/10671) |
 | ✅ | `feat/apm_meta/#1010158081134528860` | APM 预计算任务调度支持共享数据源场景 | [TencentBlueKing/bk-monitor #10725](https://github.com/TencentBlueKing/bk-monitor/pull/10725) |
 | 🔄 | `<branch_name>` | APM 共享数据源迁入迁出支持可重入 | 待创建 |
+
+## 0x05 运维操作
+
+批量迁移低频 AI 应用时，SaaS 与后台需分开操作。执行顺序为「SaaS 筛选候选应用 → 后台迁移 → SaaS 同步元数据」。
+
+### a. SaaS 筛选低频应用
+
+以下脚本筛选最近 `7` 天访问次数小于 `10`，且 Trace 数据状态缓存为「有数据」的 AI 应用。无访问记录按 `0` 次处理，已指向共享 RT 的应用不进入候选列表。
+
+```python
+import json
+from datetime import datetime, timedelta
+
+from django.core.cache import cache
+from django.db.models import Count
+from django.utils import timezone
+
+from apm_web.constants import ApmCacheKey, DataStatus
+from apm_web.models.application import Application
+from apm_web.models.visit_record import UserVisitRecord
+
+PREFIX = "bkapp_ai0us0"
+SHARED_RT_PREFIX = "apm_global.shared_trace_"
+LIMIT = 10
+since = timezone.now() - timedelta(days=7)
+
+status_date = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
+status_key = ApmCacheKey.APP_APPLICATION_STATUS_KEY.format(date=status_date)
+cached_status = cache.get(status_key)
+if not cached_status:
+    raise RuntimeError(f"应用数据状态缓存不存在：{status_key}")
+status_by_application_id = json.loads(cached_status)
+
+visits = {
+    (row["bk_biz_id"], row["app_name"]): row["count"]
+    for row in (
+        UserVisitRecord.objects.filter(
+            created_at__gte=since,
+            app_name__startswith=PREFIX,
+        )
+        .values("bk_biz_id", "app_name")
+        .annotate(count=Count("id"))
+    )
+}
+
+candidates = set(
+    (bk_biz_id, app_name)
+    for application_id, bk_biz_id, app_name in (
+        Application.objects.filter(app_name__startswith=PREFIX)
+        .exclude(trace_result_table_id="")
+        .exclude(trace_result_table_id__startswith=SHARED_RT_PREFIX)
+        .values_list("application_id", "bk_biz_id", "app_name")
+    )
+    if status_by_application_id.get(str(application_id), {}).get("trace") == DataStatus.NORMAL
+)
+
+low = sorted(
+    (visits.get(app, 0), *app)
+    for app in candidates
+    if visits.get(app, 0) < LIMIT
+)
+
+print("APPS = [")
+for count, bk_biz_id, app_name in low:
+    print(f"    ({bk_biz_id!r}, {app_name!r}),  # 7d={count}")
+print("]")
+```
+
+数据状态使用 `APP_APPLICATION_STATUS_KEY` 的前一日快照，`trace=normal` 表示 Trace 有数据。缓存缺失时脚本直接终止，不将未知状态误判为无数据。
+
+SaaS 通过 `trace_result_table_id` 的 `apm_global.shared_trace_` 前缀识别共享应用。如果应用迁移后未同步过 SaaS 元数据，该字段可能仍是旧值；后台迁移命令会按真实数据源状态执行幂等检查。
+
+### b. 后台执行迁移
+
+将上一阶段输出的 `APPS` 粘贴到后台 Django shell。首次运行保留 `DRY_RUN = True`；确认输出后改为 `False`，脚本会输出迁移成功的 `SYNC_APPS`。
+
+```python
+from django.core.management import call_command
+
+APPS = [
+    # 粘贴 SaaS 筛选脚本的输出
+]
+
+TARGET = "shared"
+DRY_RUN = True
+succeeded = []
+
+for bk_biz_id, app_name in APPS:
+    try:
+        args = [
+            "--target",
+            TARGET,
+            f"--apps={bk_biz_id}:{app_name}",
+        ]
+        if DRY_RUN:
+            args.append("--dry-run")
+        call_command("migrate_apm_trace_datasource", *args)
+    except Exception as error:
+        print(f"[failed] {bk_biz_id}:{app_name}: {error}")
+    else:
+        succeeded.append((bk_biz_id, app_name))
+
+if not DRY_RUN:
+    print("SYNC_APPS = [")
+    for bk_biz_id, app_name in succeeded:
+        print(f"    ({bk_biz_id!r}, {app_name!r}),")
+    print("]")
+```
+
+`call_command()` 需通过位置参数满足管理命令的必填参数解析。逐应用使用 `--apps=<值>` 可兼容负数业务 ID，也能避免单个应用失败后中断整批迁移。迁出共享时将 `TARGET` 改为 `exclusive`。
+
+### c. SaaS 同步 APM 元数据
+
+迁入或迁出会改变 RT。后台实际迁移完成后，在 SaaS Django shell 中同步迁移成功应用的元数据：
+
+```python
+from apm_web.models.application import Application
+
+SYNC_APPS = [
+    # 粘贴后台迁移脚本的输出
+]
+
+for bk_biz_id, app_name in SYNC_APPS:
+    try:
+        app = Application.objects.get(
+            bk_biz_id=bk_biz_id,
+            app_name=app_name,
+        )
+        app.sync_datasource()
+        print(f"[synced] {bk_biz_id}:{app_name}")
+    except Exception as error:
+        print(f"[failed] {bk_biz_id}:{app_name}: {error}")
+```
 
 ---
 
