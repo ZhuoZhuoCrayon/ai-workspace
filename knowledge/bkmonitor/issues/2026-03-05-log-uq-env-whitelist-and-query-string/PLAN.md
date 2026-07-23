@@ -1,28 +1,27 @@
 ---
-title: 日志 UnifyQuery 环境变量白名单与 query_string 增强 —— 实施方案
-tags: [log, unify-query, data-source, query-string, config]
+title: 日志 UnifyQuery 环境变量黑名单与 query_string 增强 —— 实施方案
+tags: [log, unify-query, data-source, query-string, config, blacklist]
 issue: ./README.md
-description: 为日志灰度白名单增加环境变量配置层，并在日志数据源中对齐日志平台 query_string 处理逻辑
+description: 日志查询默认切换到 UnifyQuery，以环境变量黑名单控制业务回退，并保留 query_string 兼容处理
 created: 2026-03-05
-updated: 2026-06-10
+updated: 2026-07-21
 ---
 
-# 日志 UnifyQuery 环境变量白名单与 query_string 增强 —— 实施方案
+# 日志 UnifyQuery 环境变量黑名单与 query_string 增强 —— 实施方案
 
 > 基于 [README.md](./README.md) 制定。
 
 ## 0x01 实现方案
 
-### a. 白名单优先级
+### a. 黑名单路由
 
-**Before**：`_fetch_white_list` 两层——类成员（对账覆盖） > DB 动态配置。
+普通日志查询默认使用 UnifyQuery，环境变量黑名单只表达需要回退到日志平台数据源的业务。
 
-**After**：三层——类成员 > 环境变量 > DB。
-
-- 环境变量在 `config/default.py` 声明，命名区别于 DB 配置项（如 `_ENV` 后缀）。
-- 从 `os.getenv` 解析逗号分隔业务 ID。
-- 白名单判断保持原 `switch_unify_query` 结构，仅在原有业务 ID / 字符串业务 ID 命中基础上扩展 `-1` / `"-1"` 全量灰度标识。
-- `-1` 作为全量灰度标识，只要出现在白名单中，任意业务均走 UnifyQuery。
+- `LOG_UNIFY_QUERY_BLACK_BIZ_LIST` 保存逗号分隔的业务 ID，未配置时为空列表。
+- `LOG_UNIFY_QUERY_BLACK_BIZ_LIST` 类成员只用于对账命令临时覆盖，值为 `None` 时读取环境变量。
+- `switch_unify_query` 先处理全局数据源开关和聚类表，再判断业务是否命中黑名单。
+- 命中黑名单返回 `False`，未命中返回 `True`，业务 ID 同时兼容整数与字符串形式。
+- DB 动态配置不再参与日志查询路由，删除未生效的旧白名单配置项。
 
 ### b. query_string 模板方法
 
@@ -39,7 +38,7 @@ updated: 2026-06-10
 
 ### c. 聚类表路由
 
-日志聚类查询的表后缀 `_clustered` 是查询能力边界：命中聚类表时，不再等待业务白名单灰度，统一使用 UnifyQuery 查询。
+日志聚类查询的表后缀 `_clustered` 是查询能力边界：命中聚类表时不受业务黑名单影响，统一使用 UnifyQuery 查询。
 
 后缀判断从 `_get_unify_query_table` 拆为 `_get_unify_query_table_suffix`，由表名拼接和 `switch_unify_query` 共用，避免两处维护聚类识别规则。
 
@@ -47,11 +46,11 @@ updated: 2026-06-10
 
 ### a. 环境变量配置
 
-`config/default.py` — 在 `LOG_UNIFY_QUERY_WHITE_BIZ_LIST` 附近新增配置项。
+`config/default.py` 声明 `LOG_UNIFY_QUERY_BLACK_BIZ_LIST_ENV`：
 
 - 从环境变量解析逗号分隔整数列表，未设置时为空列表。
-- 格式：`LOG_UNIFY_QUERY_WHITE_BIZ_LIST=2,9,100147,-50`
-- 全量灰度格式：`LOG_UNIFY_QUERY_WHITE_BIZ_LIST=-1`
+- 配置格式：`LOG_UNIFY_QUERY_BLACK_BIZ_LIST=2,9,100147,-50`。
+- 删除旧的 `LOG_UNIFY_QUERY_WHITE_BIZ_LIST` 环境变量和未接入查询路由的 GlobalConfig 配置项。
 
 ### b. `BaseBkMonitorLogDataSource`
 
@@ -64,129 +63,58 @@ updated: 2026-06-10
 
 `bkmonitor/data_source/data_source/__init__.py`
 
-- 通配符常量、特殊字符正则：新增类常量，预编译。
-- 全量灰度常量：新增 `LOG_UNIFY_QUERY_ALL_BIZ_ID = -1`。
-- `_fetch_white_list`：新增环境变量优先级层。
-- `_get_unify_query_table_suffix`：从 `_get_unify_query_table` 提取后缀判断，原 `__dist` 条件与 `query_string` 判断保持不变。
-- `switch_unify_query`：保持原判断结构，在全量灰度后、业务白名单前增加 `_clustered` 判断。
-- `_get_unify_query_table`：仅负责拼接 `bklog_index_set_{index_set_id}{suffix}`。
-- `_get_unify_query_string`：覆写，对齐日志平台 QueryStringBuilder。
+- `[Change] LOG_UNIFY_QUERY_BLACK_BIZ_LIST`：保存对账命令的进程内临时覆盖值。
+- `[Change] _fetch_black_list`：优先返回临时覆盖值，否则读取 `LOG_UNIFY_QUERY_BLACK_BIZ_LIST_ENV`。
+- `[Change] switch_unify_query`：全局数据源和聚类表固定使用 UnifyQuery，普通日志按黑名单返回查询路径。
+- `[Keep] _get_unify_query_table_suffix`：继续统一识别 `__dist` 聚类查询。
+- `[Keep] _get_unify_query_string`：继续对齐日志平台 QueryStringBuilder。
 
-### d. Helm 灰度配置
+### d. 对账命令
 
-`bk-monitor-helm-values` — `monitor.extraEnvVars`
+`bkmonitor/management/commands/reconcile_log_strategy.py` 通过类成员覆盖黑名单：
 
+- `use_unify_query=True` 时设置空黑名单，强制普通日志使用 UnifyQuery。
+- `use_unify_query=False` 时把当前业务 ID 加入黑名单，强制普通日志使用日志平台数据源。
+- 数据源必须在设置临时黑名单后构建，查询结束后在 `finally` 中恢复为 `None`。
 
-| 环境   | 灰度业务                 |
-| ---- | -------------------- |
-| bkte | 100147               |
-| bkop | 2, 9, 10, 11, 7, -50 |
+### e. 部署配置
 
-全量灰度配置规则：
+`bk-monitor-helm-values` 的 `monitor.extraEnvVars` 使用 `LOG_UNIFY_QUERY_BLACK_BIZ_LIST`：
 
-- 需要全量灰度时配置为 `-1`。
-- `-1` 可以与局部业务 ID 共存，命中后局部业务 ID 不再影响判断结果。
+- `bkte` 配置 `5000206,622`，分别回退 TAM 前端监控和 TGlog。
+- `bkop` 删除旧白名单，不配置黑名单；其他环境也不配置黑名单，默认使用 UnifyQuery。
+- 环境变量不可热更新，变更后需要重启服务。
 
+## 0x03 验收、Review 与风险结论
 
-同步到本地开发环境 `local/env/bkop.woa.com.env`。
+### a. 验收口径
 
+- 空黑名单：普通日志使用 UnifyQuery。
+- 业务 ID 以整数或字符串形式命中黑名单：普通日志使用日志平台数据源。
+- 未命中黑名单：普通日志使用 UnifyQuery。
+- 负数业务 ID 命中黑名单：普通日志使用日志平台数据源。
+- 聚类查询命中黑名单：仍使用 UnifyQuery。
+- 对账临时黑名单优先于环境变量，并在查询结束后恢复。
 
-## 0x03 Review 要点
+### b. Review 结论
 
-### a. 查询路由来源
+- [TencentBlueKing/bk-monitor #11599](https://github.com/TencentBlueKing/bk-monitor/pull/11599) 已于 `2026-07-21 19:42` 合入 `master`，合并提交为 `35c429eaf7a178b052809026c794b136e037c5be`。
+- 黑名单命名、对账覆盖、`switch_unify_query` 路由和单元测试与本方案一致。
+- `8` 个定向测试通过，Ruff 与 `git diff --check` 通过。
 
-日志策略是否走 UnifyQuery 查询由三类入口控制：全局数据源开关、聚类表后缀和灰度白名单。
+### c. 行为风险
 
-- 当前仅使用**环境变量** `LOG_UNIFY_QUERY_WHITE_BIZ_LIST` 控制灰度，逗号分隔业务 ID。
-- 白名单支持 `-1` 全量灰度标识，只要列表中存在 `-1`，所有业务都视为命中。
-- 聚类表以 `_get_unify_query_table_suffix() == "_clustered"` 为准，命中后直接走 UnifyQuery。
-- DB 动态配置（GlobalConfig）暂未接入，待灰度验证通过后再开放。
-- 环境变量不可热更，变更需重启服务。
-
-`bkmonitor/data_source/data_source/__init__.py`：
-
-```python
-class LogSearchTimeSeriesDataSource(BaseBkMonitorLogDataSource):
-
-  # 用于灰度对账的临时白名单列表（类成员变量），仅终端生效，运行时恒定为 None。
-  LOG_UNIFY_QUERY_WHITE_BIZ_LIST: list[int] | None = None
-
-  @classmethod
-  def _fetch_white_list(cls) -> list[str | int]:
-      # 仅用于命令行对账，线上环境恒定为 None，没有引用设置该变量的入口。
-      if cls.LOG_UNIFY_QUERY_WHITE_BIZ_LIST is not None:
-          return cls.LOG_UNIFY_QUERY_WHITE_BIZ_LIST
-
-      return settings.LOG_UNIFY_QUERY_WHITE_BIZ_LIST_ENV
-
-  def _get_unify_query_table_suffix(self) -> str:
-      suffix: str = ""
-      for cond in self._get_conditions().get("field_list", []):
-          field_name: str = cond.get("field_name", "")
-          if field_name.startswith("__dist"):
-              suffix = "_clustered"
-
-      if "__dist_05" in (self.query_string or ""):
-          suffix = "_clustered"
-      return suffix
-
-  def switch_unify_query(self, bk_biz_id: int) -> bool:
-      white_list = self._fetch_white_list()
-      if self.LOG_UNIFY_QUERY_ALL_BIZ_ID in white_list or str(self.LOG_UNIFY_QUERY_ALL_BIZ_ID) in white_list:
-          return True
-
-      if self._get_unify_query_table_suffix() == "_clustered":
-          return True
-
-      if bk_biz_id in white_list or str(bk_biz_id) in white_list:
-          return True
-      return False
-```
-
-`config/default.py`：
-
-```python
-# 日志 UnifyQuery 查询业务白名单（环境变量，逗号分隔业务 ID，-1 表示全量灰度）
-_log_uq_white_biz_env = os.getenv("LOG_UNIFY_QUERY_WHITE_BIZ_LIST", "")
-LOG_UNIFY_QUERY_WHITE_BIZ_LIST_ENV = (
-    [int(biz_id.strip()) for biz_id in _log_uq_white_biz_env.split(",") if biz_id.strip()]
-    if _log_uq_white_biz_env
-    else []
-)
-```
-
-### b. Helm 配置
-
-在 `bk-monitor-helm-values` 的 `monitor.extraEnvVars` 中新增：
-
-**bkte** (`bkte/bkmonitor-values.yaml`)：
-
-```yaml
-- name: LOG_UNIFY_QUERY_WHITE_BIZ_LIST
-  value: "100147,100791"
-```
-
-**bkop** (`bkop/bkmonitor-values.yaml`)：
-
-```yaml
-- name: LOG_UNIFY_QUERY_WHITE_BIZ_LIST
-  value: "2,9,10,11,7,-50"
-```
-
-Helm values 已提前设置，代码发布后立即生效。
-
-### c. 风险
-
-- **白名单范围**：普通日志仍仅在命中白名单时走 UnifyQuery，未命中的普通日志行为不变。
-- **全量灰度**：`-1` 会扩大影响范围到所有业务，应只在明确需要全量切换时配置。
-- **聚类表路由**：仅当后缀判断返回 `_clustered` 时扩大为 UnifyQuery，普通日志仍由白名单控制。
-- **query_string 处理对齐**：切换 UnifyQuery 后绕过日志平台，新增了日志平台原有的 query_string 预处理（HTML 反转义、通配符包裹），确保查询行为一致。
+- 高风险：代码和 Helm 配置必须按同一版本生效。旧代码只读取白名单，提前删除白名单会让普通日志回退到日志平台；新代码若先于黑名单配置生效，则 TAM 前端监控和 TGlog 会短暂使用 UnifyQuery。
+- 中风险：业务黑名单只控制普通日志路由。聚类查询固定使用 UnifyQuery，表达式、查询函数或多数据源等强制 UnifyQuery 场景也可能绕过 `switch_unify_query`。
+- 高风险：除 `bkte` 外不配置黑名单会放开所有普通日志查询。`bkop` 原白名单为 `-1`，切换后语义不变；原先未配置白名单的环境会从日志平台数据源整体切到 UnifyQuery。
+- 中风险：黑名单没有 DB 动态配置，调整后需要重启服务。发布后需重点观察 UnifyQuery 请求量、错误率、耗时和两条查询路径的对账结果。
 
 ## 0x06 实施进展
 
 | 时间 | 结论性进展 |
 | --- | --- |
-| `2026-06-10 15:46` | 日志聚类查询统一走 UnifyQuery 的实现已通过 [TencentBlueKing/bk-monitor #11010](https://github.com/TencentBlueKing/bk-monitor/pull/11010) 合入 `master`。变更覆盖数据源路由和对应单测 |
+| `2026-07-21 19:00` | [a] [TencentBlueKing/bk-monitor #11599](https://github.com/TencentBlueKing/bk-monitor/pull/11599) 已合入 `master`<br />[b] `bk-monitor-helm-values` 已同步到 `48428cf9`，删除旧白名单，`bkte` 为 TAM 前端监控和 TGlog 配置黑名单，其他环境默认使用 UnifyQuery<br />[c] 确认代码与 Helm 配置需同版本生效，并保留聚类及强制 UnifyQuery 场景绕过黑名单的风险提示 |
+| `2026-06-10 15:00` | 日志聚类查询统一走 UnifyQuery 的实现已通过 [TencentBlueKing/bk-monitor #11010](https://github.com/TencentBlueKing/bk-monitor/pull/11010) 合入 `master`。变更覆盖数据源路由和对应单测 |
 | `2026-06-08 14:00` | [a] 确认初始落地 PR 为 [TencentBlueKing/bk-monitor #9086](https://github.com/TencentBlueKing/bk-monitor/pull/9086)，当前全量灰度扩展 PR 为 [TencentBlueKing/bk-monitor #10966](https://github.com/TencentBlueKing/bk-monitor/pull/10966)<br />[b] 全量灰度保持在 `switch_unify_query` 原判断结构内扩展，先判断 `-1` / `"-1"` 全量标识，再执行原业务白名单判断 |
 | `2026-03-05 21:00` | 完成日志数据源切换 UnifyQuery、环境变量灰度白名单和 query_string 对齐能力合入 |
 
@@ -197,6 +125,8 @@ Helm values 已提前设置，代码发布后立即生效。
 | ✅ | `feat/event/#1010158081129076973` | 里程碑 1：日志数据源切换 UnifyQuery 与灰度白名单 | [TencentBlueKing/bk-monitor #9086](https://github.com/TencentBlueKing/bk-monitor/pull/9086) |
 | ✅ | `feat/datasource/#1010158081135015922` | 里程碑 2：日志数据源全量灰度标识 | [TencentBlueKing/bk-monitor #10966](https://github.com/TencentBlueKing/bk-monitor/pull/10966) |
 | ✅ | `feat/datasource/#1010158081135097674` | 里程碑 3：日志聚类场景统一通过 UnifyQuery 查询 | [TencentBlueKing/bk-monitor #11010](https://github.com/TencentBlueKing/bk-monitor/pull/11010) |
+| ✅ | `feat/log_unify_query_switch_black_biz_list/#1010158081136300803` | 里程碑 4：日志 UnifyQuery 灰度切换改为业务黑名单 | [TencentBlueKing/bk-monitor #11599](https://github.com/TencentBlueKing/bk-monitor/pull/11599) |
+| 🔄 | `master` | 里程碑 5：按环境收敛 Helm 白名单并配置 `bkte` 回退业务 | 待创建 |
 
 ---
 
