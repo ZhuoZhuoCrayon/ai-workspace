@@ -19,37 +19,7 @@ updated: 2026-07-19
 * 控制字段规模：输出可覆盖 Otel & Aegis & DataDog SDK 最简协议，其他不必要字段统一省略，减少初始技术负债（字段一旦放出但没有真正使用，稳定后一旦有需求变更，就有兼容风险）。
 * 指标：Web Vitals 指标由接收端派生，SDK 无需埋点。
 
-# Resource
-
-Span、Metric 和 Log 使用同一个 OpenTelemetry Resource。
-
-## 0x01 基础字段
-
-| 字段                                                                                                                     | 状态                                                             | 类型      | 描述        | 备注                                             |
-| ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ------- | --------- | ---------------------------------------------- |
-| `resource.service.name`                                                                                                | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str     | 服务名       | --                                             |
-| `resource.service.version`                                                                                             | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str     | 版本        | --                                             |
-| [`resource.deployment.environment.name`](https://opentelemetry.io/docs/specs/semconv/resource/deployment-environment/) | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str     | 环境        | 如 `development`、`production`、`staging`、`test`。 |
-| `resource.telemetry.sdk.name` *[1]*                                                                                    | ![Development](https://img.shields.io/badge/-development-blue) | str     | SDK 名称    | --                                             |
-| `resource.telemetry.sdk.version`                                                                                       | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str     | SDK 版本    | --                                             |
-| [`resource.telemetry.sdk.language`](https://opentelemetry.io/docs/specs/semconv/resource/#telemetry-sdk)               | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | enum    | 语言        | `webjs`。                                       |
-| `resource.device.type`                                                                                                 | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | enum    | 设备类型      | `desktop`、`mobile`、`tablet`、`other`。           |
-| `resource.user_agent.name`                                                                                             | ![Development](https://img.shields.io/badge/-development-blue) | str     | 代理名称      | 通常指的是浏览器的名称，如 `Chrome`、`Edge`。                 |
-| `resource.user_agent.version`                                                                                          | ![Development](https://img.shields.io/badge/-development-blue) | str     | 代理版本      | 通常指的是浏览器的名称，如 `149`、`151`。                     |
-| `resource.user_agent.os.name`                                                                                          | ![Development](https://img.shields.io/badge/-development-blue) | str     | 操作系统名     | 如 `macOS`、`Windows`、`Android`。                 |
-| `resource.device.mobile`                                                                                               | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | boolean | 是否为移动设备   | 与 `device.type` 重复。                            |
-| `resource.os.name`                                                                                                     | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str     | 操作系统名称    | 如 `macOS`、`Windows`、`Android`。                 |
-| `resource.rum.provider`                                                                                                | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str     | 数据提供方     | ❌ 使用标准的 `sdk.name` 代替。<br>                     |
-| `resource.rum.schema.version`                                                                                          | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str     | Schema 版本 | ❌ 不需要。                                         |
-| `resource.browser.name`                                                                                                | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str     | 浏览器名称     | 如 `Chrome`、`Edge`。                             |
-| `resource.browser.version`                                                                                             | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str     | 浏览器版本     | 如 `150`。                                       |
-| `resource.device.logical_processor_count`                                                                              | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | int     | 逻辑处理器数量   | 如 `14`。<br><br>❌ 另外两个 SDK 不上报。                 |
-**[1] `resource.telemetry.sdk.name`**：`blueking`（蓝鲸 Otel SDK，当前值为 @blueking/open-telemetry，需修改。）｜aegis（Aegis SDK）。
-
-**[2] `os.name` / `browser.name`  / `browser.version`**：已有  [User Agent](https://opentelemetry.io/docs/specs/semconv/registry/attributes/user-agent/) 概念可以容纳这些字段，放到同一个类别下更紧凑更好维护。
-
-
-## 0x02 用户真实监控模型
+## 0x01 用户真实监控模型
 
 ```text
 Session
@@ -61,9 +31,7 @@ Session
     └── Long Task
 ```
 
-# Span
-
-## 0x01 公共字段
+## 0x02 公共字段
 
 ### a. 顶层字段
 
@@ -87,25 +55,61 @@ Session
 | `end_time`       | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int     | 结束时间（微秒）                                                                       | --                                                                          |
 | `elapsed_time`   | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int     | 耗时（微秒）                                                                         | --                                                                          |
 
-### b. Status
+### b. Resource
+
+
+
+| 字段                                                                                                                     | 状态                                                             | 类型   | 描述        | 备注                                             |
+| ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ---- | --------- | ---------------------------------------------- |
+| `resource.service.name`                                                                                                | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | 服务名       | --                                             |
+| `resource.service.version`                                                                                             | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | 版本        | --                                             |
+| [`resource.deployment.environment.name`](https://opentelemetry.io/docs/specs/semconv/resource/deployment-environment/) | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | 环境        | 如 `development`、`production`、`staging`、`test`。 |
+| `resource.telemetry.sdk.version`                                                                                       | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str  | SDK 版本    | --                                             |
+| [`resource.telemetry.sdk.language`](https://opentelemetry.io/docs/specs/semconv/resource/#telemetry-sdk)               | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | enum | 语言        | `webjs`。                                       |
+| `resource.telemetry.sdk.name` *[1]*                                                                                    | ![Development](https://img.shields.io/badge/-development-blue) | str  | SDK 名称    | --                                             |
+| `resource.device.type`                                                                                                 | ![Development](https://img.shields.io/badge/-development-blue) | enum | 设备类型      | `desktop`、`mobile`、`tablet`、`other`。           |
+| `resource.user_agent.name`                                                                                             | ![Development](https://img.shields.io/badge/-development-blue) | str  | 代理名称      | 通常指的是浏览器的名称，如 `Chrome`、`Edge`。                 |
+| `resource.user_agent.version`                                                                                          | ![Development](https://img.shields.io/badge/-development-blue) | str  | 代理版本      | 通常指的是浏览器的名称，如 `149`、`151`。                     |
+| `resource.user_agent.os.name`                                                                                          | ![Development](https://img.shields.io/badge/-development-blue) | str  | 操作系统名     | 如 `macOS`、`Windows`、`Android`。                 |
+| `resource.os.name`                                                                                                     | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str  | 操作系统名称    | 如 `macOS`、`Windows`、`Android`。                 |
+| `resource.rum.schema.version`                                                                                          | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str  | Schema 版本 | ❌ 不需要。                                         |
+| `resource.browser.name`                                                                                                | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str  | 浏览器名称     | 如 `Chrome`、`Edge`。                             |
+| `resource.browser.version`                                                                                             | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str  | 浏览器版本     | 如 `150`。                                       |
+| `resource.device.logical_processor_count`                                                                              | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | int  | 逻辑处理器数量   | 如 `14`。<br><br>❌ 另外两个 SDK 不上报。                 |
+| `resource.device.memory_gib`                                                                                           | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | int  | 内存        |                                                |
+**[1] `resource.telemetry.sdk.name`**：`blueking`（蓝鲸 Otel SDK，当前值为 @blueking/open-telemetry，需修改。）｜aegis（Aegis SDK）。
+
+**[2] `os.name` / `browser.name`  / `browser.version`**：已有  [User Agent](https://opentelemetry.io/docs/specs/semconv/registry/attributes/user-agent/) 概念可以容纳这些字段，放到同一个类别下更紧凑更好维护。
+
+### c. Status
 
 | 字段               | 状态                                                         | 类型  | 描述   | 备注                           |
 | ---------------- | ---------------------------------------------------------- | --- | ---- | ---------------------------- |
 | `status.code`    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | 状态码  | 0（未设置）<br />1（正常）<br />2（异常） |
 | `status.message` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 状态描述 | 如 `Failed to fetch`          |
 
-### c. Event
-> *目前 SDK 同时记录异常到 `attributes` 和 `events`，保留 events 即可。*
+### d. Event
 
-| 字段                                       | 状态                                                         | 类型  | 描述      | 备注                   |
-| ---------------------------------------- | ---------------------------------------------------------- | --- | ------- | -------------------- |
-| `events.name` *[1]*                      | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 事件名称    |                      |
-| `events.timestamp`                       | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 事件事件    |                      |
-| `events.attributes.exception.type`       | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 异常类型    | 如 `TypeError`。       |
-| `events.attributes.exception.message`    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 异常简短消息。 | 如 `Failed to fetch`。 |
-| `events.attributes.exception.stacktrace` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 异常堆栈    |                      |
+| 字段                                                                      | 状态                                                         | 类型     | 描述            | 备注                   |
+| ----------------------------------------------------------------------- | ---------------------------------------------------------- | ------ | ------------- | -------------------- |
+| `events[].name` *[1]*                                                   | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str    | 事件发生时间（微秒）    |                      |
+| `events[].timestamp`                                                    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int    | 事件事件          |                      |
+| `events[].attributes.exception.type`                                    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str    | 异常类型          | 如 `TypeError`。       |
+| `events[].attributes.exception.message`                                 | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str    | 异常消息          | 如 `Failed to fetch`。 |
+| `events[].attributes.exception.stacktrace`                              | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str    | 异常堆栈          |                      |
+| `events[].attributes.long_task.script.duration`                         | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 脚本耗时（ms）      |                      |
+| `events[].attributes.long_task.script.execution_start`                  | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 脚本执行开始时间（ms）  |                      |
+| `events[].attributes.long_task.script.forced_style_and_layout_duration` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 强制样式与布局耗时（ms） |                      |
+| `events[].attributes.long_task.script.pause_duration`                   | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 暂停耗时（ms）      |                      |
+| `events[].attributes.long_task.script.source_char_position`             | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 源码字符位置        |                      |
+| `events[].attributes.long_task.script.start_time`                       | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 脚本开始时间（ms）    |                      |
+| `events[].attributes.long_task.script.invoker`                          | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str    | 调用方           |                      |
+| `events[].attributes.long_task.script.invoker_type`                     | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str    | 调用方类型         |                      |
+| `events[].attributes.long_task.script.source_function_name`             | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str    | 源函数名          |                      |
+| `events[].attributes.long_task.script.source_url`                       | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str    | 已脱敏的脚本 URL    |                      |
+| `events[].attributes.long_task.script.window_attribution`               | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str    | Window 归因     |                      |
 
-**[1] `events.name`**：「异常」需将事件名固定为 `exception`。
+**[1] `events[].name`**：「异常」需将事件名固定为 `exception`。
 
 ---
 
@@ -113,51 +117,39 @@ Session
 
 ### a. 基础字段
 
-| 字段                           | 状态                                                          | 类型  | 描述         | 备注                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| ---------------------------- | ----------------------------------------------------------- | --- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `attributes.user.id`         | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | str | 用户 ID      | --                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `attributes.span_type`       |                                                             | str | Span 类型    | 枚举值：<br>- 文档加载：document<br>- 路由切换：route<br>- 静态资源与 HTTP / API：resource<br>- 长任务：longtask<br>- 用户交互：action<br>- Web 指标：vital<br>- 错误：error<br>- 自定义：custom                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `attributes.span_subtype`    |                                                             | str | Span 子类型   | 不同 `span_type` 具有不同的子类型：<br>[a] document<br>- 导航：navigate<br>[b] route<br>- pushState<br>- replaceState<br>- popstate<br>- hashchange<br>- manual<br>- bfCache<br>- sessionRenewal<br>[c] resource<br>- script<br>- link<br>- img<br>- css<br>- xml<br>- fetch<br>- xhr<br>- video<br>- audio<br>- iframe<br>- beacon<br>- other<br>[d] longtask<br>- long-animation-frame<br>- long-task<br>[e] action<br>- click<br>- custom<br>[f] vital<br>- lcp<br>- fcp<br>- cls<br>- inp<br>- ttfb<br>[g] error<br>- js<br>- promise<br>- resource_load<br>- blank_screen<br>- csp<br>[h] custom<br>- websocket<br>- <自定义> |
-| `attributes.trace_scene`     |                                                             | str | 追踪场景       | 枚举值：`page_load`、 `route_change`、`user_action`、`startup`。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `attributes.result`          | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 结果         | 枚举值：<br>- 成功：`success`<br>- 错误：`error`<br>- 超时：`timeout`<br>- 警告：`warning`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `attributes.error_type`      | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 错误类型       | 枚举值：<br/>- none<br/>- http_4xx<br/>- http_5xx<br/>- network_timeout<br/>- js<br/>- promise<br/>- resource_load<br/>- blank_screen<br/>- csp<br/>- slow<br/>- longtask_blocking<br/>- network<br/>- custom                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `attributes.status_class`    | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | HTTP 状态码分类 | 如 `2xx`、`3xx`、`4xx`、`5xx`。<br><br>❌ SDK 不应该提供，如果后续需要高频获取，考虑预计算或实时聚合。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `attributes.event_label`     | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 中文事件标签     | 如 `API 调用`/`错误`等。<br><br>❌  SDK 不应该提供中文名，另外这个字段看着也没啥用。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `attributes.duration_bucket` | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 耗时分桶       | 如 `<100ms`、`100~500ms`、`500ms~2s`、`>2s`。<br><br>❌ 不需要，耗时分桶应该由后端支持。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `attributes.error.source`    | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 错误来源       | 枚举值：<br/>- window.error（固定值）<br/>- resource<br/>- unhandledrejection                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| 字段                             | 状态                                                          | 类型  | 描述          | 备注                                                                                                                                                        |
+| ------------------------------ | ----------------------------------------------------------- | --- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `attributes.user.id`           | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | str | 用户 ID       | --                                                                                                                                                        |
+| `attributes.span_type`         |                                                             | str | Span 类型     | 枚举值：<br>- 文档加载：document<br>- 路由切换：route<br>- 静态资源与 HTTP / API：resource<br>- 长任务：longtask<br>- 用户交互：action<br>- Web 指标：vital<br>- 错误：error<br>- 自定义：custom |
+| `attributes.result`            | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 结果          | 枚举值：<br>- 成功：`success`<br>- 错误：`error`<br>- 超时：`timeout`<br>- 警告：`warning`                                                                                |
+| `attributes.document.referrer` |                                                             | str | 文档 referrer | 仅初始加载上报。                                                                                                                                                  |
 
 ### b. [error](https://opentelemetry.io/docs/specs/semconv/registry/attributes/error/)
 
 
-| 字段                                         | 状态                                                             | 类型      | 描述      | 备注                                                                   |
-| ------------------------------------------ | -------------------------------------------------------------- | ------- | ------- | -------------------------------------------------------------------- |
-| `attributes.error.type`                    | ![Development](https://img.shields.io/badge/-development-blue) | str     | 低基数错误类型 | --                                                                   |
-| `attributes.error.handled`                 | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     |         | boolean | 错误是否被捕获                                                              |
-| `attributes.error.source`                  | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str     | 错误来源    | 枚举值：<br/>- window.error（固定值）<br/>- resource<br/>- unhandledrejection |
-| `attributes.error.cross_origin`            | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | boolean | 跨域脚本错误  | --                                                                   |
-| `attributes.error.window_occurrence_index` | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | int     | --      | --                                                                   |
+| 字段                                         | 状态                                                             | 类型      | 描述         | 备注                                                                   |
+| ------------------------------------------ | -------------------------------------------------------------- | ------- | ---------- | -------------------------------------------------------------------- |
+| `attributes.error.type`                    | ![Development](https://img.shields.io/badge/-development-blue) | str     | 低基数错误类型    | --                                                                   |
+| `attributes.error.message`                 | ![Development](https://img.shields.io/badge/-development-blue) | str     | 错误信息       | --                                                                   |
+| `attributes.error.handled`                 | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | boolean | 错误是否被捕获    | --                                                                   |
+| `attributes.error.source`                  | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str     | 错误来源       | 枚举值：<br/>- window.error（固定值）<br/>- resource<br/>- unhandledrejection |
+| `attributes.code.column`                   | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | int     | 代码列号       |                                                                      |
+| `attributes.code.filepath`                 | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str     | 代码文件路径     |                                                                      |
+| `attributes.code.lineno`                   | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | int     | 代码行号       |                                                                      |
+| `attributes.html.tag`                      | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str     | 关联 HTML 标签 | 资源类错误时出现，例如 `IMG`                                                    |
+| `attributes.error_type`                    | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str     | 错误类型       | --                                                                   |
+| `attributes.error.cross_origin`            | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | boolean | 跨域脚本错误     | --                                                                   |
+| `attributes.error.window_occurrence_index` | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | int     | --         | --                                                                   |
 
-
-
-### b. [exception](https://opentelemetry.io/docs/specs/semconv/registry/attributes/exception/)
-
-| 字段                                         | 状态                                                          | 类型  | 描述              | 备注       |
-| ------------------------------------------ | ----------------------------------------------------------- | --- | --------------- | -------- |
-| `attributes.exception.fingerprint`         | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 异常指纹            | 用于聚合同类异常 |
-| `attributes.exception.message`             | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 异常完整消息          |          |
-| `attributes.exception.message_short`       | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 异常简短消息          | 适合列表展示   |
-| `attributes.exception.stacktrace`          | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 异常堆栈信息          |          |
-| `attributes.exception.stack_top_frame`     | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 堆栈顶部帧           |          |
-| `attributes.exception.type`                | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 异常类型            |          |
 
 ### c. rum
 
-| 字段                               | 类型  | 描述   | 备注                                                                                                                                          |
-| -------------------------------- | --- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `attributes.rum.page.host`       | str | 站点   | 例如 `https://example.com`                                                                                                                    |
-| `attributes.rum.page.path`       | str | 路径   | 例如 `/`                                                                                                                                      |
-| `attributes.rum.navigation.type` | str | 导航类型 | 仅 `span_type=vital` 上报该字段，枚举值：<br>- back-forward<br>- back-forward-cache<br>- navigate<br>- prerender<br>- reload<br>- restore<br>- unknown |
-|                                  |     |      |                                                                                                                                             |
+| 字段                               | 状态                                                         | 类型  | 描述   | 备注                                                                                                                                          |
+| -------------------------------- | ---------------------------------------------------------- | --- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `attributes.rum.page.host`       | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 站点   | 如 `example.com`。                                                                                                                            |
+| `attributes.rum.page.path`       |                                                            | str | 路径   | 例如 `/`                                                                                                                                      |
+| `attributes.rum.navigation.type` |                                                            | str | 导航类型 | 仅 `span_type=vital` 上报该字段，枚举值：<br>- back-forward<br>- back-forward-cache<br>- navigate<br>- prerender<br>- reload<br>- restore<br>- unknown |
+|                                  |                                                            |     |      |                                                                                                                                             |
 ### d. [browser](https://opentelemetry.io/docs/specs/semconv/registry/attributes/browser/)
 
 | 字段                                   | 状态                                                         | 类型  | 描述      | 备注                           |
@@ -169,35 +161,33 @@ Session
 
 ### e. [device](https://opentelemetry.io/docs/specs/semconv/registry/attributes/device/)
 
-| 字段                            | 状态                                                          | 类型  | 描述   | 备注                                        |
-| ----------------------------- | ----------------------------------------------------------- | --- | ---- | ----------------------------------------- |
-| `attributes.device.id`        | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 设备标识 | 如 `fd136680-a37b-45ea-80ee-365bfdc7f82e`。 |
-| `attributes.device.platform`  | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 平台   | 与 `os.name` 重复。                           |
-| `attributes.device.memory`    | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | int | 内存   |                                           |
-| `attributes.device.cpu_cores` | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | int | CPU  | --                                        |
+| 字段                     | 状态                                                          | 类型  | 描述   | 备注                                        |
+| ---------------------- | ----------------------------------------------------------- | --- | ---- | ----------------------------------------- |
+| `attributes.device.id` | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str | 设备标识 | 如 `fd136680-a37b-45ea-80ee-365bfdc7f82e`。 |
+
 
 ### f. [network](https://opentelemetry.io/docs/specs/semconv/registry/attributes/network/)
 
-| 字段                                   | 状态                                                          | 类型      | 描述           | 备注                                                               |
-| ------------------------------------ | ----------------------------------------------------------- | ------- | ------------ | ---------------------------------------------------------------- |
-| `attributes.network.connection.type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | str     | 连接类型         | [a] 如 `wifi`。<br>[b] ⚠️ Aegis netType：<br><br>表示设备当前使用的物理网络连接方式。 |
-| `attributes.network.effective_type`  | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | str     | 有效网络质量       | 表示浏览器根据延迟和下载速度估算出的实际网络质量。                                        |
-| `attributes.network.protocol.name`   | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | enum    | 应用层网络协议      | 枚举值：<br>[a] `http`<br>[b] `websocket`                            |
-| `attributes.network.downlink`        | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | int     | 预估下行带宽（Mbps） | ❌ 没有使用场景且 Aegis 也未提供该字段，Span 包含过多数值字段时后续难以聚合。                    |
-| `attributes.network.rtt`             | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | int     | 往返时延（毫秒）     |                                                                  |
-| `attributes.network.save_data`       | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | boolean | 用户是否开启省流量模式  |                                                                  |
-| `attributes.network.connection_type` | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str     | 连接类型         | ❌ 已规范命名，删除。                                                      |
+| 字段                                   | 状态                                                             | 类型      | 描述           | 备注                                                               |
+| ------------------------------------ | -------------------------------------------------------------- | ------- | ------------ | ---------------------------------------------------------------- |
+| `attributes.network.connection.type` | ![Development](https://img.shields.io/badge/-development-blue) | str     | 连接类型         | [a] 如 `wifi`。<br>[b] ⚠️ Aegis netType：<br><br>表示设备当前使用的物理网络连接方式。 |
+| `attributes.network.effective_type`  | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str     | 有效网络质量       | 表示浏览器根据延迟和下载速度估算出的实际网络质量。                                        |
+| `attributes.network.protocol.name`   | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | enum    | 应用层网络协议      | 枚举值：<br>[a] `http`<br>[b] `websocket`                            |
+| `attributes.network.downlink`        | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | int     | 预估下行带宽（Mbps） | ❌ 没有使用场景且 Aegis 也未提供该字段，Span 包含过多数值字段时后续难以聚合。                    |
+| `attributes.network.rtt`             | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | int     | 往返时延（毫秒）     |                                                                  |
+| `attributes.network.save_data`       | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | boolean | 用户是否开启省流量模式  |                                                                  |
+| `attributes.network.connection_type` | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str     | 连接类型         | ❌ 已规范命名，删除。                                                      |
 
 **[1] `attributes.network.connection.type`**：等同与 DataDog（`connectivity.interfaces`）、Aegis（`netType`）。
 
 Aegis 将「连接类型」「网络质量」整合成 `netType`（`wifi`、`wired`、`2G`、`3G`、`5G`、`6G`），不推荐这种做法。
 
-| 值          | 描述         | 备注                                  |
-| ---------- | ---------- | ----------------------------------- |
-| `wifi`     | Wi-Fi 无线网络 | 仅表示通过 Wi-Fi 连接，不代表网络一定快。            |
-| `cellular` | 蜂窝移动网络     | 可能是 2G、3G、4G 或 5G，不表示具体代际。          |
-| `ethernet` | 有线网络       | 通过网线或有线网卡连接，Aegis 的 `wired` 应映射为该值。 |
-| `unknown`  | 未知         | 浏览器不支持、无法识别，或者连接方式不在支持范围内；不表示已经断网。  |
+| 值         | 描述         | 备注                                  |
+| --------- | ---------- | ----------------------------------- |
+| `wifi`    | Wi-Fi 无线网络 | 仅表示通过 Wi-Fi 连接，不代表网络一定快。            |
+| `cell`    | 蜂窝移动网络     | 可能是 2G、3G、4G 或 5G，不表示具体代际。          |
+| `wired`   | 有线网络       | 通过网线或有线网卡连接，Aegis 的 `wired` 应映射为该值。 |
+| `unknown` | 未知         | 浏览器不支持、无法识别，或者连接方式不在支持范围内；不表示已经断网。  |
 
 **[2] `attributes.network.effective_type`**：等同与 DataDog（`connectivity.effective_type`）、Aegis（`netType`）。
 
@@ -215,132 +205,223 @@ Aegis 将「连接类型」「网络质量」整合成 `netType`（`wifi`、`wir
 | `attributes.session.has_replay` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | boolean | 是否回放   | --  |
 | `attributes.session.id`         | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 会话唯一标识 | --  |
 
-### h. target
-
-| 字段                                | 类型                  | 描述               | 备注                               |
-| --------------------------------- | ------------------- | ---------------- | -------------------------------- |
-| `attributes.target_domain`        | str                 | 目标域名             | Resource 或 WebSocket URL 可解析时存在。 |
-| `attributes.target_label`         | str                 | 跨类型主标签，用于统一检索    | 插件能够提取主检索标签时存在。                  |
-| `attributes.target_path_template` | str                 | 目标低基数路径模板        | Resource URL 或 View 路径可归一时存在。    |
-| `attributes.target_value`         | str / int / boolean | 主数值（状态码、耗时、字节数等） | 当前事件存在主数值时写入。                    |
 ### i. view
 
-| 字段                               | 类型  | 描述     | 备注                                         |
-|----------------------------------|-----|--------|--------------------------------------------|
-| `attributes.view.id`             | str | 视图 ID  |                                            |
-| `attributes.view.name`           | str | 视图名称   | 默认使用路由分组，手动模式可指定。                         |
-| `attributes.view.loading_type`   | str | 视图加载类型 | 枚举值：<br/>- route_change<br/>- initial_load<br/>- session_renewal<br/>- bf_cache |
-| `attributes.view.url`            | str | 视图 URL |                                            |
-| `attributes.view.url_path_group` | str | 视图路径分组 |                                            |
-| `attributes.view.loading_time`   | number | 视图加载耗时（ms） | 加载时间计算完成后上报。                           |
-| `attributes.view.loading_time.source` | str | 视图加载耗时来源 | 自动或手动。                                  |
-| `attributes.view.first_byte`     | number | 首字节时间（ms） | 仅初始导航存在。                                |
-| `attributes.view.dom_interactive` | number | DOM 可交互时间（ms） | 仅初始导航存在。                             |
-| `attributes.view.dom_content_loaded` | number | DOMContentLoaded 时间（ms） | 仅初始导航存在。                    |
-| `attributes.view.dom_complete`   | number | DOM Complete 时间（ms） | 仅初始导航存在。                           |
-| `attributes.view.load_event`     | number | Load Event 时间（ms） | 仅初始导航存在。                              |
+| 字段                                    | 状态                                                             | 类型     | 描述                      | 备注                                            |
+| ------------------------------------- | -------------------------------------------------------------- | ------ | ----------------------- | --------------------------------------------- |
+| `attributes.view.id`                  | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str    | 视图 ID                   |                                               |
+| `attributes.view.name`                | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str    | 视图名称                    | 如 `/apm/home`。                                |
+| `attributes.view.loading_type`        | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str    | 视图加载类型                  | --                                            |
+| `attributes.view.url`                 | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str    | 视图 URL                  | 如 `https://example.com/apm/home`。             |
+| `attributes.view.url_path_group`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str    | 视图路径分组                  | 如 `/apm/home`。                                |
+| `attributes.view.loading_time`        | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | number | 视图加载耗时（ms）              | 加载时间计算完成后上报。                                  |
+| `attributes.view.first_byte`          | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | number | 首字节时间（ms）               | 仅初始导航存在。                                      |
+| `attributes.view.dom_interactive`     | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | number | DOM 可交互时间（ms）           | 仅初始导航存在。                                      |
+| `attributes.view.dom_content_loaded`  | ![Stable\|43](https://img.shields.io/badge/-stable-lightgreen) | number | DOMContentLoaded 时间（ms） | 仅初始导航存在。                                      |
+| `attributes.view.dom_complete`        | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | number | DOM Complete 时间（ms）     | 仅初始导航存在。                                      |
+| `attributes.view.load_event`          | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | number | Load Event 时间（ms）       | 仅初始导航存在。                                      |
+| `attributes.view.phase`               | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | enum   | 视图生命周期阶段                | 枚举值：<br>- start<br>- update<br>- end          |
+| `attributes.view.started_at`          | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | number | 视图开始时间（ms）              | 取 `performance.timeOrigin`。                   |
+| `attributes.view.version`             | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | int    | 视图事件版本号                 | 同一 `attributes.view.id` 从 `1` 开始递增，用于排序和幂等合并。 |
+| `attributes.view.end_reason`          | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str    | 结束原因                    | --                                            |
+| `attributes.view.loading_time.source` | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str    | 视图加载耗时来源                | 自动或手动。                                        |
+| `attributes.view.source`              | ![Deprecated](https://img.shields.io/badge/-deprecated-red)    | str    | 视图创建来源                  | --                                            |
+
+
+
+**[1] `attributes.view.name`**：默认取 `view.url_path_group`，也可由 `startView({ name })` 或 `setViewName` 设置。
+
+**[2] `attributes.view.loading_type`**：
+
+| 值                 | 描述              |
+| ----------------- | --------------- |
+| `initial_load`    | 首次页面加载（初始导航）    |
+| `route_change`    | SPA 路由切换        |
+| `session_renewal` | 会话续期后重建         |
+| `bf_cache`        | 从浏览器 BFCache 恢复 |
+
+**[3] `attributes.view.url_path_group`**：用于聚合的页面路径，默认只是 URL pathname，不会自动将数字、UUID 替换为 `:id`，需要接入方配置分组逻辑。
+
+**[3]【有风险】 `attributes.view.phase`**：当前 View Span 的生命周期阶段，Schema v3 不再用一条长 Span 表达整个 View，而是发送多条瞬时生命周期 Span。
+
+
+```text
+逻辑 View：view.id=view-A
+│
+├── Span #1：version=1，phase=start
+│   │
+│   ├── 上报时机：View 创建
+│   ├── view.loading_time       = 不存在
+│   ├── view.first_byte         = 120     ← 创建时已可读取
+│   ├── view.dom_interactive    = 不存在   ← 此时还是 0
+│   ├── view.dom_content_loaded = 不存在
+│   ├── view.dom_complete       = 不存在
+│   └── view.load_event         = 不存在
+│
+│   SDK 创建 View 时读取一次 PerformanceNavigationTiming。
+│   只写入当时已经大于 0 的字段。
+│
+├── Span #2：version=2，phase=update
+│   │
+│   ├── 上报时机：Loading Time 计算完成
+│   ├── view.loading_time       = 820
+│   ├── view.first_byte         = 120
+│   ├── view.dom_interactive    = 350
+│   ├── view.dom_content_loaded = 420
+│   ├── view.dom_complete       = 680
+│   └── view.load_event         = 700
+│
+│   SDK 等待以下两个条件完成：
+│   ├── loadEventEnd 已产生
+│   └── 页面请求、资源和 DOM 活动结束
+│
+│   然后重新读取 PerformanceNavigationTiming，
+│   将六个字段一起放入 update Span。
+│
+└── Span #3：version=3，phase=end
+    │
+    ├── 上报时机：路由切换或页面离开
+    ├── view.loading_time       = 820
+    ├── view.first_byte         = 120
+    ├── view.dom_interactive    = 350
+    ├── view.dom_content_loaded = 420
+    ├── view.dom_complete       = 680
+    └── view.load_event         = 700
+
+    end Span 不会重新计算这些字段，
+    只是携带 View 当前的最终属性快照。
+```
+
+
+```text
+时间 ───────────────────────────────────────────────────────────>
+
+View A  ███████████████████████████████│
+        ├─ 查询订单 Action
+        └──── GET /api/orders ─────────┘
+                                       │ 路由切换
+View B                                 ███████████████████████│
+                                       ├─ 查询用户 Action
+                                       └── GET /api/users ────┘
+```
 
 ### j. resource
 
 
-| 字段                                           | 状态                                                         | 类型      | 描述                                                                            |
-| -------------------------------------------- | ---------------------------------------------------------- | ------- | ----------------------------------------------------------------------------- |
-| `attributes.resource.type`                   | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 所有 Resource Span 均存在；常见值包括 `img`、`script`、`xhr`、`fetch`、`link`、`css`、`iframe` |
-| `attributes.resource.url`                    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 资源 URL（已脱敏）                                                                   |
-| `attributes.resource.method`                 | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 仅 Fetch / XHR 存在                                                              |
-| `attributes.resource.status_code`            | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int     | 仅 Fetch / XHR 获取到响应状态时存在                                                      |
-| `attributes.resource.duration`               | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 仅静态资源存在，单位为毫秒；Fetch / XHR 使用 Span 原生耗时                                        |
-| `attributes.resource.decoded_body_size`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int     | 浏览器提供 PerformanceResourceTiming 时存在，单位为字节                                     |
-| `attributes.resource.encoded_body_size`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int     | 浏览器提供 PerformanceResourceTiming 时存在，单位为字节                                     |
-| `attributes.resource.size`                   | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int     | 获取到传输大小时存在，单位为字节                                                              |
-| `attributes.resource.protocol`               | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 浏览器提供下一跳协议时存在，如 `h2`                                                          |
-| `attributes.resource.cache.hit`              | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | boolean | 仅确认命中缓存时写入 `true`                                                             |
-| `attributes.resource.delivery_type`          | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 浏览器提供交付类型时存在，如 `cache`、`navigational-prefetch`                                |
-| `attributes.resource.render_blocking_status` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 浏览器提供渲染阻塞状态时存在，枚举值为 `blocking`、`non-blocking`                                 |
-| `attributes.resource.redirect.start`         | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 发生重定向且时间有效时存在，单位为毫秒                                                           |
-| `attributes.resource.redirect.duration`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 发生重定向且时间有效时存在，单位为毫秒                                                           |
-| `attributes.resource.worker.start`           | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 经过 Service Worker 且时间有效时存在，单位为毫秒                                              |
-| `attributes.resource.worker.duration`        | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 经过 Service Worker 且时间有效时存在，单位为毫秒                                              |
-| `attributes.resource.dns.start`              | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 发生 DNS 查询且时间有效时存在，单位为毫秒                                                       |
-| `attributes.resource.dns.duration`           | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 发生 DNS 查询且时间有效时存在，单位为毫秒                                                       |
-| `attributes.resource.connect.start`          | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 发生 TCP 建连且时间有效时存在，单位为毫秒                                                       |
-| `attributes.resource.connect.duration`       | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 发生 TCP 建连且时间有效时存在，单位为毫秒                                                       |
-| `attributes.resource.ssl.start`              | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 发生 TLS 握手且时间有效时存在，单位为毫秒                                                       |
-| `attributes.resource.ssl.duration`           | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 发生 TLS 握手且时间有效时存在，单位为毫秒                                                       |
-| `attributes.resource.first_byte.start`       | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 浏览器提供首字节阶段时间时存在，单位为毫秒                                                         |
-| `attributes.resource.first_byte.duration`    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 浏览器提供首字节阶段时间时存在，单位为毫秒                                                         |
-| `attributes.resource.download.start`         | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 浏览器提供下载阶段时间时存在，单位为毫秒                                                          |
-| `attributes.resource.download.duration`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 浏览器提供下载阶段时间时存在，单位为毫秒                                                          |
+| 字段                                           | 状态                                                         | 类型      | 描述                  | 备注                                                                      |
+| -------------------------------------------- | ---------------------------------------------------------- | ------- | ------------------- | ----------------------------------------------------------------------- |
+| `attributes.resource.type`                   | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | enum    | 资源类型                | --                                                                      |
+| `attributes.resource.size`                   | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int     | 资源大小                | --                                                                      |
+| `attributes.resource.transfer_size`          | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int     | 传输大小                | --                                                                      |
+| `attributes.resource.decoded_body_size`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int     | 解码后正文大小             | --                                                                      |
+| `attributes.resource.encoded_body_size`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int     | 编码后正文大小             | --                                                                      |
+| `attributes.resource.protocol`               | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 传输协议                | 浏览器提供下一跳协议时存在，如 `h2`、`h3`、`http/1.1`。                                   |
+| `attributes.resource.cache.hit`              | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | boolean | 是否缓存命中              | --                                                                      |
+| `attributes.resource.delivery_type`          | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 交付类型                | 浏览器提供交付类型时存在，如 `cache`、`navigational-prefetch`、`cache-storage`、`other`。 |
+| `attributes.resource.render_blocking_status` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 渲染阻塞状态              | 浏览器提供渲染阻塞状态时存在，枚举值为 `blocking`、`non-blocking`                           |
+| `attributes.resource.redirect.start`         | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 重定向开始时间             | --                                                                      |
+| `attributes.resource.redirect.duration`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 重定向耗时               | --                                                                      |
+| `attributes.resource.worker.start`           | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | Service Worker 开始时间 | --                                                                      |
+| `attributes.resource.worker.duration`        | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | Service Worker 耗时   | --                                                                      |
+| `attributes.resource.dns.start`              | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | DNS 查询开始时间          | --                                                                      |
+| `attributes.resource.dns.duration`           | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | DNS 查询耗时            | --                                                                      |
+| `attributes.resource.connect.start`          | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 传输连接开始时间            | --                                                                      |
+| `attributes.resource.connect.duration`       | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 传输连接耗时              | --                                                                      |
+| `attributes.resource.ssl.start`              | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | TLS 握手开始时间          | --                                                                      |
+| `attributes.resource.ssl.duration`           | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | TLS 握手耗时            | --                                                                      |
+| `attributes.resource.first_byte.start`       | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 首字节阶段开始时间           | --                                                                      |
+| `attributes.resource.first_byte.duration`    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 首字节耗时               | --                                                                      |
+| `attributes.resource.download.start`         | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 下载开始时间              | --                                                                      |
+| `attributes.resource.download.duration`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 下载耗时                | --                                                                      |
 
-### k. http
 
-| 字段                                     | 状态                                                         | 类型  | 描述                                              |
-| -------------------------------------- | ---------------------------------------------------------- | --- | ----------------------------------------------- |
-| `attributes.http.request.method`       | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 仅 `browser.resource` 的 Fetch / XHR 请求存在，使用大写方法名 |
-| `attributes.http.response.status_code` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | Resource 获取到 HTTP 响应状态时存在                       |
+**[1] `attributes.resource.type`**：
 
-### l. url
+| 值                  | 描述                                                  |
+| ------------------ | --------------------------------------------------- |
+| `fetch`            | Fetch API 请求。                                       |
+| `xhr`              | XMLHttpRequest 请求；SDK 将浏览器的 `xmlhttprequest` 归一为该值。 |
+| `script`           | `<script>`、模块或 Worker 加载的脚本资源。                      |
+| `link`             | `<link>` 加载的资源，如样式表、预加载和预取资源。                       |
+| `img` / `image`    | HTML 或 SVG 图片元素加载的资源。                               |
+| `css`              | CSS `url()`、`@import` 等规则加载的资源，不表示 CSS 文件本身。        |
+| `iframe` / `frame` | 内嵌页面加载的文档资源。                                        |
+| `other`            | 浏览器未识别发起方式、`initiatorType` 为空或未单列的其他类型。             |
+|                    |                                                     |
 
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `attributes.url.full` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | Resource、Resource Error 或 `websocket.connect` 存在，内容已脱敏 |
-| `attributes.url.previous` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | `browser.view` 存在，记录前一个 View URL |
-| `attributes.url.scheme` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 仅 `websocket.connect` 存在，枚举值为 `ws`、`wss` |
+**[2] 单位**：`xx_size` 为 bytes，`duration` & `start` 为毫秒。
 
-### m. server
 
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `attributes.server.address` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | Resource 或 `websocket.connect` 的 URL 可解析出目标主机时存在 |
-| `attributes.server.port` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | Resource URL 包含端口或接收链路能够推导端口时存在 |
+### r. action
 
-### n. document
+| 字段                                    | 状态                                                         | 类型          | 描述                                          |
+| ------------------------------------- | ---------------------------------------------------------- | ----------- | ------------------------------------------- |
+| `attributes.action.id`                | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str / str[] | Action Span 为字符串，关联 Span 为 Action ID 数组     |
+| `attributes.action.type`              | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str         | 动作类型                                        |
+| `attributes.action.name`              | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str         | 动作名称                                        |
+| `attributes.action.target.name`       | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str         | 目标元素名称                                      |
+| `attributes.action.target.tag`        | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str         | 目标元素标签                                      |
+| `attributes.action.loading_time`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number      | 点击后页面活动稳定耗时（ms）                             |
+| `attributes.action.resource.count`    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int         | Action 关联资源数                                |
+| `attributes.action.error.count`       | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int         | Action 关联错误数                                |
+| `attributes.action.long_task.count`   | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int         | Action 关联长任务数                               |
+| `attributes.action.frustration.type`  | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str[]       | 枚举值：`rage_click`、`dead_click`、`error_click` |
+| `attributes.action.frustration.count` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int         | 挫败信号数量                                      |
 
-span_name 固定为 `browser.view`。
 
-| 字段                             | 类型  | 描述            | 备注                                                                                                                                                                       |
-|--------------------------------|-----|---------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `attributes.event.source`      | str | 导航事件来源        | 初始加载固定为 `load`。                                                                                                                                                  |
-| `attributes.trace_scene`       | str | 追踪场景          | 枚举值：<br/>- page_load                                                                                                                                                     |
-| `attributes.view.end_reason`   | str | 结束原因          | 枚举值：<br/>- load（实际永不出现）<br/>- pushState<br/>- replaceState<br/>- popstate<br/>- hashchange<br/>- shutdown<br/>当 span_name 为 `browser.view` 且该 view 被后续路由或 shutdown 结束时上报 |
-| `attributes.document.referrer` | str | 文档 referrer   | 仅初始加载上报。                                                                                                                                                       |
+### l. http & [url](https://opentelemetry.io/docs/specs/semconv/registry/attributes/url/) & server
+
+| 字段                                     | 状态                                                         | 类型  | 描述           |                              |
+| -------------------------------------- | ---------------------------------------------------------- | --- | ------------ | ---------------------------- |
+| `attributes.url.full`                  | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 完整 URL       | 如 `https://example.com/apm`。 |
+| `attributes.url.previous`              | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 前一个 View URL | 如 `https://example.com/pre`。 |
+| `attributes.url.scheme`                | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 协议           | 如 `ws`、`wss`。                |
+| `attributes.http.request.method`       | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 请求方法         | 如 `GET`、`POST`。              |
+| `attributes.http.response.status_code` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | 返回码          | 如 `200`、`404`。               |
+| `attributes.server.address`            | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 地址           | 如 `example.com`。             |
+| `attributes.server.port`               | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | 端口           | --                           |
+|                                        |                                                            |     |              |                              |
+|                                        |                                                            |     |              |                              |
 
 ### o. vital
 
-| 字段                        | 类型  | 描述         | 备注                                                                    |
-|---------------------------|-----|------------|-----------------------------------------------------------------------|
-| `attributes.vital.id`     | str | Vital 唯一标识 |                                                                       |
-| `attributes.vital.metric` | str | 指标名        | 枚举值：<br/>- cls<br/>- inp<br/>- lcp<br/>- fcp<br/>- ttfb<br/>术语介绍看下方表格 |
-| `attributes.vital.rating` | str | 评级         | 枚举值：<br/>- good<br/>- needs-improvement<br/>- poor                    |
-| `attributes.vital.value`  | number | 指标测量值      |                                                                       |
+| 字段                        | 状态                                                          | 类型     | 描述         | 备注                                     |
+| ------------------------- | ----------------------------------------------------------- | ------ | ---------- | -------------------------------------- |
+| `attributes.vital.id`     | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | str    | Vital 唯一标识 |                                        |
+| `attributes.vital.metric` | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | enum   | 指标名        |                                        |
+| `attributes.vital.value`  | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | number | 指标测量值      | CLS 单位为 `1`，FCP、INP、LCP、TTFB 单位为 `ms`。 |
+| `attributes.vital.rating` | ![Deprecated](https://img.shields.io/badge/-deprecated-red) | str    | 评级         | --                                     |
+|                           |                                                             |        |            |                                        |
 
-`attributes.vital.metric` 的枚举值术语介绍如下：
+**[1] `attributes.vital.metric`**：
 
 | 值    | 描述                                                                    | 备注                                        |
-|------|-----------------------------------------------------------------------|-------------------------------------------|
+| ---- | --------------------------------------------------------------------- | ----------------------------------------- |
 | cls  | [累积布局偏移（Cumulative Layout Shift）](https://web.dev/articles/cls)       | 一个以用户为中心的重要指标，用于衡量视觉稳定性                   |
 | inp  | [交互到下一次绘制（Interaction to Next Paint）](https://web.dev/articles/inp)   | 稳定的核心网页指标，使用 Event Timing API 中的数据来评估响应速度 |
 | lcp  | [最大内容绘制（Largest Contentful Paint, LCP）](https://web.dev/articles/lcp) | Core Web Vital 中的一个重要且稳定的指标，用于衡量页面加载的速度。  |
 | fcp  | [首次内容绘制（First Contentful Paint）](https://web.dev/articles/fcp)        | 是一项以用户为中心的重要指标，用于衡量用户感知的加载速度              |
 | ttfb | [首字节时间（Time to First Byte）](https://web.dev/articles/ttfb)            | 是指从浏览器发起请求到接收到服务器返回第一个数据字节所经过的时间          |
+|      |                                                                       |                                           |
+
 
 - vital.metric=cls
 
-| 字段                                          | 类型  | 描述             | 备注                                                                                                                              |
-|---------------------------------------------|-----|----------------|---------------------------------------------------------------------------------------------------------------------------------|
-| `attributes.vital.cls.largest_shift_target` | str | 最大布局偏移的目标元素选择器 | 高基数字段，如 `body > div#app > button`，CLS 偏移的最大贡献者的 DOM 路径                                                                          |
+| 字段                                          | 类型     | 描述             | 备注                                                                                                                              |
+| ------------------------------------------- | ------ | -------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `attributes.vital.cls.largest_shift_target` | str    | 最大单次布局偏移来源元素标识 | 高基数字段，依次取 `data-bk-action-name`、`aria-label`、`name`，最后回退到小写标签名；不是 CSS 选择器。                                                      |
 | `attributes.vital.cls.largest_shift_value`  | number | 最大单次布局偏移分值     | 该元素造成的单次最大偏移分数，注意这是"最大一次"的分数，不是 CLS 累积总分（总分在 vital.value 和 target_value 里）。值越小越好，接近 0 为优                                        |
-| `attributes.vital.cls.load_state`           | str | 最大偏移发生时的页面     | 枚举值：<br/>- loading<br/>- dom-interactive<br/>- dom-content-loaded<br/>- complete<br/>用于判断 CLS 偏移发生在首屏哪个时期（体验越差时越可能在 loading 阶段） |
+| `attributes.vital.cls.load_state`           | str    | 最大偏移发生时的页面     | 枚举值：<br/>- loading<br/>- dom-interactive<br/>- dom-content-loaded<br/>- complete<br/>用于判断 CLS 偏移发生在首屏哪个时期（体验越差时越可能在 loading 阶段） |
 
 - vital.metric=inp
 
-| 字段                                         | 类型  | 描述        | 备注                                                |
-|--------------------------------------------|-----|-----------|---------------------------------------------------|
-| `attributes.vital.inp.input_delay`         | number | 输入延迟（ms）  | 用户发起交互（如点击）到事件处理器开始执行的等待时间，反映主线程繁忙程度              |
-| `attributes.vital.inp.interaction_target`  | str | 交互目标元素选择器 | 高基数字段，库提供的 DOM 选择器字符串，如 `body > div#app > button` |
-| `attributes.vital.inp.interaction_type`    | str | 交互类型      | 用户触发方式，如 `pointer`、`keyboard`，说明 INP 由什么输入方式产生    |
-| `attributes.vital.inp.presentation_delay`  | number | 呈现延迟（ms）  | 事件处理回调完成之后，到浏览器实际渲染下一帧的耗时，CSS/布局/重绘瓶颈看这里          |
-| `attributes.vital.inp.processing_duration` | number | 处理耗时（ms）  | 事件处理回调（如 click handler）本身的执行时间，JS 逻辑过重时这个值会变大     |
+| 字段                                         | 类型     | 描述           | 备注                                                                         |
+| ------------------------------------------ | ------ | ------------ | -------------------------------------------------------------------------- |
+| `attributes.vital.inp.input_delay`         | number | 输入延迟（ms）     | 用户发起交互（如点击）到事件处理器开始执行的等待时间，反映主线程繁忙程度                                       |
+| `attributes.vital.inp.interaction_target`  | str    | INP 交互目标元素标识 | 高基数字段，依次取 `data-bk-action-name`、`aria-label`、`name`，最后回退到小写标签名；不是 CSS 选择器。 |
+| `attributes.vital.inp.interaction_type`    | str    | 交互类型         | 用户触发方式，如  `keyup`、`pointerdown`、`pointerup` 等事件名。                          |
+| `attributes.vital.inp.presentation_delay`  | number | 呈现延迟（ms）     | 事件处理回调完成之后，到浏览器实际渲染下一帧的耗时，CSS/布局/重绘瓶颈看这里                                   |
+| `attributes.vital.inp.processing_duration` | number | 处理耗时（ms）     | 事件处理回调（如 click handler）本身的执行时间，JS 逻辑过重时这个值会变大                              |
 
 - vital.metric=lcp
 
@@ -354,9 +435,9 @@ span_name 固定为 `browser.view`。
 
 - vital.metric=fcp
 
-| 字段                                        | 类型  | 描述                | 备注                                                                                                             |
-|-------------------------------------------|-----|-------------------|----------------------------------------------------------------------------------------------------------------|
-| `attributes.vital.fcp.load_state`         | str | FCP 发生时的页面加载阶段    | 枚举值：<br/>- loading<br/>- dom-interactive<br/>- dom-content-loaded<br/>- complete<br/>用于判断首次内容绘制发生在页面加载的哪个时期    |
+| 字段                                        | 类型     | 描述                | 备注                                                                                                             |
+| ----------------------------------------- | ------ | ----------------- | -------------------------------------------------------------------------------------------------------------- |
+| `attributes.vital.fcp.load_state`         | str    | FCP 发生时的页面加载阶段    | 枚举值：<br/>- loading<br/>- dom-interactive<br/>- dom-content-loaded<br/>- complete<br/>用于判断首次内容绘制发生在页面加载的哪个时期    |
 | `attributes.vital.fcp.time_to_first_byte` | number | FCP 发生前的首字节时间（ms） | [a] 从导航开始到收到服务器首个响应字节的耗时<br/>[b] FCP 不可能早于 TTFB，此值揭示了"网络基座"耗时<br/>[c] 当 FCP 延迟过高时，若此值大说明是服务端/网络问题，若小则可能是前端渲染阻塞 |
 
 - vital.metric=ttfb
@@ -367,34 +448,6 @@ span_name 固定为 `browser.view`。
 | `attributes.vital.ttfb.dns_duration`        | number | DNS 解析耗时（ms）         | 解析慢通常由 DNS 服务器延迟、复杂 CNAME 链或本地 DNS 缓存失效导致。多国/多地域部署时此值可能偏高    |
 | `attributes.vital.ttfb.connection_duration` | number | TCP + TLS 连接建立耗时（ms） | 包含 TCP 三次握手和 TLS/SSL 协商。HTTPS 强制、TLS 1.3 升级、CDN 边缘节点距离都会影响此值 |
 | `attributes.vital.ttfb.request_duration`    | number | 请求发送后等待首字节耗时（ms）     | 导航请求的发送报文极小，此值主要反映网络往返 RTT 与服务器从接到请求到吐出首字节的时间                |
-
-### p. error
-
-- span_subtype == js（span_name == browser.error）
-
-| 字段                         | 类型  | 描述     | 备注  |
-| -------------------------- | --- | ------ | --- |
-| `attributes.code.column`   | int | 代码列号   |     |
-| `attributes.code.filepath` | str | 代码文件路径 |     |
-| `attributes.code.lineno`   | int | 代码行号   |     |
-|                            |     |        |     |
-
-
-- span_subtype == promise（span_name == browser.unhandledrejection）
-
-| 字段                                         | 类型      | 描述              | 备注                                                                   |
-| ------------------------------------------ | ------- | --------------- | -------------------------------------------------------------------- |
-| `attributes.error.handled`                 | boolean | 错误是否被捕获         |                                                                      |
-| `attributes.error.source`                  | str     | 错误来源            | 枚举值：<br/>- window.error（固定值）<br/>- resource<br/>- unhandledrejection |
-| `attributes.error.window_occurrence_index` | int     | 节流窗口内已上报错误的触发序号 | 总量使用 `browser.error.count` Metric。                                   |
-
-
-- span_subtype == resource_load（span_name == browser.resource_error）
-
-| 字段                    | 类型  | 描述         | 备注                |
-| --------------------- | --- | ---------- | ----------------- |
-| `attributes.html.tag` | str | 关联 HTML 标签 | 资源类错误时出现，例如 `IMG` |
-
 
 
 - span_subtype == blank_screen（span_name == browser.blank_screen）
@@ -413,81 +466,40 @@ span_name 固定为 `browser.view`。
 
 - span_subtype == csp（span_name == csp.violation）
 
-| 字段                                   | 类型     | 描述               | 备注 |
-|--------------------------------------|--------|------------------|----|
-| `attributes.csp.blocked_uri`         | str | 被拦截资源（URL 类值已脱敏） |    |
-| `attributes.csp.violated_directive`  | str | 违反的指令            |    |
-| `attributes.csp.effective_directive` | str | 生效的指令            |    |
-| `attributes.csp.disposition`         | str | enforce / report |    |
-| `attributes.csp.source_file`         | str | 触发脚本（已脱敏）        |    |
-| `attributes.csp.line_number`         | int | 触发位置行号           |    |
-| `attributes.csp.column_number`       | int | 触发位置列号           |    |
-| `attributes.csp.status_code`         | int | 状态码              |    |
-| `attributes.csp.fingerprint`         | str | 节流指纹（djb2 hash）  |    |
-| `attributes.csp.window_occurrence_index` | int | 节流窗口内已上报 Span 的触发序号 | 总量使用 `browser.csp_violation.count` Metric。 |
-| `attributes.csp.original_policy`     | str | 完整策略，仅窗口首条携带     |    |
+| 字段                                   | 类型  | 描述               | 备注  |
+| ------------------------------------ | --- | ---------------- | --- |
+| `attributes.csp.blocked_uri`         | str | 被拦截资源（URL 类值已脱敏） |     |
+| `attributes.csp.violated_directive`  | str | 违反的指令            |     |
+| `attributes.csp.effective_directive` | str | 生效的指令            |     |
+| `attributes.csp.disposition`         | str | enforce / report |     |
+| `attributes.csp.source_file`         | str | 触发脚本（已脱敏）        |     |
+| `attributes.csp.line_number`         | int | 触发位置行号           |     |
+| `attributes.csp.column_number`       | int | 触发位置列号           |     |
+| `attributes.csp.status_code`         | int | 状态码              |     |
+| `attributes.csp.original_policy`     | str | 完整策略，仅窗口首条携带     |     |
+|                                      |     |                  |     |
 
 ### q. longtask
 
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `attributes.long_task.id` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 长任务或长动画帧 ID |
-| `attributes.long_task.entry_type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 枚举值：`long-animation-frame`、`long-task` |
-| `attributes.long_task.start_time` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 相对 `performance.timeOrigin` 的开始时间（ms） |
-| `attributes.long_task.duration` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 总耗时（ms） |
-| `attributes.long_task.blocking_duration` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 主线程阻塞耗时（ms） |
-| `attributes.long_task.is_frozen_frame` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | boolean | 是否达到冻结帧阈值 |
-| `attributes.long_task.culprit` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 最重脚本、函数或归因来源 |
-| `attributes.long_task.script.count` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | LoAF 脚本数量 |
-| `attributes.long_task.first_ui_event_timestamp` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 首个 UI 事件时间（ms） |
-| `attributes.long_task.render_start` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 渲染阶段开始时间（ms） |
-| `attributes.long_task.style_and_layout_start` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 样式与布局阶段开始时间（ms） |
-| `attributes.long_task.culprit.duration` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 最重脚本耗时（ms） |
-| `attributes.long_task.culprit.forced_style_and_layout_duration` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 最重脚本强制样式与布局耗时（ms） |
-| `attributes.long_task.culprit.function_name` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 最重脚本函数名 |
-| `attributes.long_task.culprit.invoker_type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 最重脚本调用方类型 |
+| 字段                                                              | 状态                                                         | 类型      | 描述                                     |
+| --------------------------------------------------------------- | ---------------------------------------------------------- | ------- | -------------------------------------- |
+| `attributes.long_task.id`                                       | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 长任务或长动画帧 ID                            |
+| `attributes.long_task.entry_type`                               | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 枚举值：`long-animation-frame`、`long-task` |
+| `attributes.long_task.start_time`                               | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 相对 `performance.timeOrigin` 的开始时间（ms）  |
+| `attributes.long_task.duration`                                 | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 总耗时（ms）                                |
+| `attributes.long_task.blocking_duration`                        | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 主线程阻塞耗时（ms）                            |
+| `attributes.long_task.is_frozen_frame`                          | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | boolean | 是否达到冻结帧阈值                              |
+| `attributes.long_task.culprit`                                  | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 最重脚本、函数或归因来源                           |
+| `attributes.long_task.script.count`                             | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int     | LoAF 脚本数量                              |
+| `attributes.long_task.first_ui_event_timestamp`                 | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 首个 UI 事件时间（ms）                         |
+| `attributes.long_task.render_start`                             | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 渲染阶段开始时间（ms）                           |
+| `attributes.long_task.style_and_layout_start`                   | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 样式与布局阶段开始时间（ms）                        |
+| `attributes.long_task.culprit.duration`                         | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 最重脚本耗时（ms）                             |
+| `attributes.long_task.culprit.forced_style_and_layout_duration` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 最重脚本强制样式与布局耗时（ms）                      |
+| `attributes.long_task.culprit.function_name`                    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 最重脚本函数名                                |
+| `attributes.long_task.culprit.invoker_type`                     | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 最重脚本调用方类型                              |
 
-Long Task 脚本明细通过 `events.name=long_task.script` 上报：
 
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `events.attributes.long_task.script.duration` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 脚本耗时（ms） |
-| `events.attributes.long_task.script.execution_start` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 脚本执行开始时间（ms） |
-| `events.attributes.long_task.script.forced_style_and_layout_duration` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 强制样式与布局耗时（ms） |
-| `events.attributes.long_task.script.pause_duration` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 暂停耗时（ms） |
-| `events.attributes.long_task.script.source_char_position` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 源码字符位置 |
-| `events.attributes.long_task.script.start_time` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 脚本开始时间（ms） |
-| `events.attributes.long_task.script.invoker` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 调用方 |
-| `events.attributes.long_task.script.invoker_type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 调用方类型 |
-| `events.attributes.long_task.script.source_function_name` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 源函数名 |
-| `events.attributes.long_task.script.source_url` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 已脱敏的脚本 URL |
-| `events.attributes.long_task.script.window_attribution` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | Window 归因 |
-
-### r. action
-
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `attributes.action.id` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str / str[] | Action Span 为字符串，关联 Span 为 Action ID 数组 |
-| `attributes.action.type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 动作类型 |
-| `attributes.action.name` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 动作名称 |
-| `attributes.action.target.name` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 目标元素名称 |
-| `attributes.action.target.tag` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 目标元素标签 |
-| `attributes.action.loading_time` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 点击后页面活动稳定耗时（ms） |
-| `attributes.action.resource.count` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | Action 关联资源数 |
-| `attributes.action.error.count` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | Action 关联错误数 |
-| `attributes.action.long_task.count` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | Action 关联长任务数 |
-| `attributes.action.frustration.type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str[] | 枚举值：`rage_click`、`dead_click`、`error_click` |
-| `attributes.action.frustration.count` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | 挫败信号数量 |
-
-### s. route
-
-- span_name == browser.view
-
-| 字段                           | 类型     | 描述      | 备注                                                                                                                                          |
-|------------------------------|--------|---------|---------------------------------------------------------------------------------------------------------------------------------------------|
-| `attributes.event.source`    | str | 路由事件来源  | 枚举值：<br/>- pushState<br/>- replaceState<br/>- popstate<br/>- hashchange                                                                     |
-| `attributes.trace_scene`     | str | 追踪场景    | 枚举值：<br/>- route_change                                                                                                                     |
-| `attributes.view.end_reason` | str | 结束原因    | 枚举值：<br/>- load（实际永不出现）<br/>- pushState<br/>- replaceState<br/>- popstate<br/>- hashchange<br/>- shutdown<br/>当该 view 被后续路由或 shutdown 结束时上报 |
 
 ### t. custom
 
@@ -497,221 +509,3 @@ URL、Server、Network 和 Target 字段，不产生 `attributes.websocket.*` Sp
 | 字段                                        | 类型     | 描述                    | 备注          |
 |-------------------------------------------|--------|-----------------------|-------------|
 | `attributes.rum.custom.name`              | str | 自定义事件名称              | `reportCustomEvent()` |
-
-# Metric
-
-## 0x01 约束
-
-- 所有指标使用 Delta 聚合，只保留低基数维度。
-- 所有指标均包含 `view.url_path_group`，并允许通过 `context.attributes.metric` 补充自定义低基数维度。
-- `session.id`、`view.id` 和 `action.id` 不进入指标维度。
-- Counter 只统计已采样且成功导出的 Session，不能直接解释为全量次数。
-
-## 0x02 指标清单
-
-每组先列指标，再列该组指标携带的固定维度。
-
-### a. Web Vitals
-
-1）指标
-
-| 字段                           | 状态                                                         | 类型        | 描述                                |
-| ---------------------------- | ---------------------------------------------------------- | --------- | --------------------------------- |
-| `browser.web_vital.cls`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Histogram | CLS 分布，单位为 `1`，每个 View 结束时记录一次。   |
-| `browser.web_vital.duration` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Histogram | FCP、INP、LCP 和 TTFB 耗时分布，单位为 `ms`。 |
-
- 2）维度
-
-| 字段                               | 状态                                                         | 类型  | 描述                                                     |
-| -------------------------------- | ---------------------------------------------------------- | --- | ------------------------------------------------------ |
-| `attributes.view.url_path_group` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 两个指标均存在，记录低基数 View 路径模板。                               |
-| `attributes.rum.navigation.type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 两个指标均存在，记录导航类型。                                        |
-| `attributes.vital.metric`        | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | CLS 指标固定为 `cls`，Duration 指标为 `fcp`、`inp`、`lcp`、`ttfb`。 |
-| `attributes.vital.rating`        | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 两个指标均存在，枚举值为 `good`、`needs-improvement`、`poor`。        |
-
-### b. View
-
-1）指标
-
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `browser.view.loading_time` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Histogram | View 加载耗时分布，单位为 `ms`，仅启用 View Loading Time 计算且成功得到最终值时记录。 |
-
-2）维度
-
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `attributes.view.url_path_group` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 低基数 View 路径模板。 |
-| `attributes.view.loading_type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 枚举值为 `initial_load`、`route_change`、`session_renewal`、`bf_cache`。 |
-
-### c. Blank Screen
-
-1）指标
-
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `browser.blank_screen.count` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Counter | 确认白屏的次数，每个 View 最多增加 `1`。 |
-
-2）维度
-
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `attributes.view.url_path_group` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 低基数 View 路径模板。 |
-| `attributes.blank_screen.reason` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 枚举值为 `empty_viewport`、`missing_root`。 |
-| `attributes.blank_screen.root_selector` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 白屏检测使用的根元素选择器。 |
-
-### d. Error
-
-1）指标
-
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `browser.error.count` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Counter | JS、Promise 和资源加载错误总数，在 Error Span 节流前累计。 |
-| `browser.csp_violation.count` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Counter | CSP 违规总数，在 CSP Span 节流前累计，仅启用 CSP Violation 插件时记录。 |
-
-2）维度
-
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `attributes.view.url_path_group` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 两个指标均存在，记录低基数 View 路径模板。 |
-| `attributes.error.source` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 仅 Error Count 存在，枚举值为 `window.error`、`unhandledrejection`、`resource`。 |
-| `attributes.error.subtype` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 仅 Error Count 存在，枚举值为 `js`、`promise`、`resource_load`。 |
-| `attributes.csp.disposition` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 仅 CSP Violation Count 存在，枚举值为 `enforce`、`report`。 |
-| `attributes.csp.effective_directive` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 仅 CSP Violation Count 存在，记录实际触发违规的 CSP 指令。 |
-
-### e. Long Task
-
-1）指标
-
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `browser.long_task.count` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Counter | Long Task 或 Long Animation Frame 的数量，仅启用 Long Task 插件时记录。 |
-| `browser.long_task.duration` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Histogram | Long Task 或 Long Animation Frame 的总耗时分布，单位为 `ms`。 |
-| `browser.long_task.blocking_duration` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Histogram | Long Animation Frame 的阻塞耗时分布，单位为 `ms`，普通 Long Task 不记录。 |
-
-2）维度
-
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `attributes.view.url_path_group` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 三个指标均存在，记录低基数 View 路径模板。 |
-| `attributes.long_task.entry_type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 三个指标均存在，枚举值为 `long-animation-frame`、`long-task`。 |
-
-### f. WebSocket
-
-1）指标
-
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `browser.websocket.message.count` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Counter | WebSocket 收发消息数，仅启用 WebSocket 插件时记录。 |
-| `browser.websocket.message.bytes` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Counter | WebSocket 收发字节数，单位为 `By`，大于 `64 KB` 的字符串使用字符长度估算。 |
-| `browser.websocket.error.count` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Counter | WebSocket 建连或运行时错误数，不受错误日志节流影响。 |
-| `browser.websocket.connect.duration` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | Histogram | WebSocket 成功建连耗时分布，单位为 `ms`，建连失败不记录。 |
-
-2）维度
-
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `attributes.view.url_path_group` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 四个指标均存在，记录低基数 View 路径模板。 |
-| `attributes.network.protocol.name` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 四个指标均存在，固定值 `websocket`。 |
-| `attributes.server.address` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 四个指标均在 URL 可解析时记录目标 Host。 |
-| `attributes.url.scheme` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 四个指标均存在，枚举值为 `ws`、`wss`。 |
-| `attributes.websocket.direction` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 仅 Message Count 和 Message Bytes 存在，枚举值为 `in`、`out`。 |
-| `attributes.websocket.error.phase` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 仅 Error Count 存在，枚举值为 `connect`、`runtime`。 |
-
-# Log
-
-错误主数据使用 Error Span。SDK 不会为同一个 JS、Promise、资源加载或 CSP 错误重复上报 Error Log。
-
-## 0x01 公共字段
-
-### a. 顶层字段
-
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `timestamp` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | 事件发生时间。 |
-| `trace_id` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 关联 Trace ID，`browser.request.body` 显式关联请求 Span，其他日志不保证存在。 |
-| `span_id` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 关联 Span ID，`browser.request.body` 显式关联请求 Span，其他日志不保证存在。 |
-| `severity_number` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | INFO 固定为 `9`，ERROR 固定为 `17`。 |
-| `severity_text` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 当前取值为 `INFO`、`ERROR`。 |
-| `body` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 日志事件名称，取值见「日志清单」。 |
-| `event_name` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 仅 View 和 Request Body Log 显式设置，值与 `body` 相同。 |
-| `resource` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | object | 公共资源信息，字段见「Resource」。 |
-| `attributes` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | object | 运行时上下文和日志专属字段。 |
-
-### b. 运行时上下文
-
-普通日志必须具有有效的 Session 和 View 上下文。`session.start` 允许在 View 建立前上报，
-`session.rotate` 是否带 View 字段取决于轮换时的新 View 是否已经建立。
-
-浏览器、设备和网络字段复用 Span Attributes 中对应主题的定义。Schema `2` 已迁移到 Resource 的不可变字段不再重复列出。
-
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `attributes.user.id` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 接入方设置的用户 ID，未设置时不存在。 |
-| `attributes.session.id` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 日志所属 Session ID。 |
-| `attributes.session.has_replay` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | boolean | 当前固定为 `false`。 |
-| `attributes.view.id` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 日志所属 View ID，初始 `session.start` 不存在。 |
-| `attributes.view.name` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | View 名称，初始 `session.start` 不存在。 |
-| `attributes.view.url` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 已脱敏的 View URL，初始 `session.start` 不存在。 |
-| `attributes.view.url_path_group` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | View 低基数路径模板，初始 `session.start` 不存在。 |
-| `attributes.view.loading_type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | View 加载类型，初始 `session.start` 不存在。 |
-| `attributes.action.id` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str[] | 日志发生在自动 Action 活跃期间时，记录关联的 Action ID。 |
-| `attributes.rum.page.host` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 默认页面 Hook 生成的站点，仅 Session、View 和 Request Body Log 使用。 |
-| `attributes.rum.page.path` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 默认页面 Hook 生成的路径，仅 Session、View 和 Request Body Log 使用。 |
-| `attributes.<custom>` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | OTel Attribute | 页面 Hook、自定义 View 属性或事件扩展字段。 |
-
-## 0x02 日志清单
-
-### a. Session
-
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `session.start` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | INFO：当前页面首次创建新 Session 时上报，复用其他页面创建的共享 Session 时不上报。 |
-| `session.rotate` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | INFO：Session 因不活跃或达到最长生命周期而轮换时上报。 |
-| `attributes.session.start_time` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | Session 开始时间，单位为毫秒时间戳。 |
-| `attributes.session.previous_id` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 轮换前的 Session ID，仅 `session.rotate` 存在。 |
-| `attributes.session.rotate.reason` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | `session.start` 固定为 `init`，`session.rotate` 为 `inactivity`、`maxLifetime`。 |
-
-### b. View Snapshot
-
-`browser.view` 继承同一个 View Span 的 Attributes，并补充以下快照字段。
-
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `browser.view` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | INFO：View 创建、属性更新、加载时间计算完成或结束时上报快照。 |
-| `attributes.event.type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 固定值 `view`。 |
-| `attributes.view.snapshot.type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 快照类型，枚举值为 `create`、`update`、`final`。 |
-| `attributes.view.document_version` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | 当前 View 快照版本，从 `1` 开始递增。 |
-| `attributes.view.duration` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 从 View 开始到本次快照的持续时间，单位为 `ms`。 |
-| `attributes.view.is_active` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | boolean | `final` 快照为 `false`，其他快照为 `true`。 |
-| `attributes.view.loading_time` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | View 加载耗时，单位为 `ms`，计算完成后才存在。 |
-| `attributes.view.loading_time.source` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 加载耗时来源，枚举值为 `auto`、`manual`。 |
-| `attributes.view.end_reason` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | View 结束原因，仅 `final` 快照存在。 |
-
-### c. Request Body
-
-`browser.request.body` 继承对应 Resource Span 的 HTTP、Resource 和归一字段，并补充以下正文快照字段。
-
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `browser.request.body` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 显式启用 Request Body 采集后上报：错误请求为 ERROR，`capture=all` 时成功请求为 INFO。 |
-| `attributes.request.body`               | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 脱敏后的请求正文，只支持允许的文本 Content-Type。 |
-| `attributes.request.body.content_type`  | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 请求正文 Content-Type，可获取时存在。       |
-| `attributes.request.body.truncated`     | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | boolean | 请求正文是否因长度限制被截断。                 |
-| `attributes.response.body`              | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 脱敏后的响应正文，只支持允许的文本 Content-Type。 |
-| `attributes.response.body.content_type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 响应正文 Content-Type，可获取时存在。       |
-| `attributes.response.body.truncated`    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | boolean | 响应正文是否因长度限制被截断。                 |
-
-### d. WebSocket
-
-WebSocket Log 使用 Span 中定义的 URL、Server、Network 和归一字段，并补充以下事件专属字段。
-
-| 字段 | 状态 | 类型 | 描述 |
-| --- | --- | --- | --- |
-| `websocket.error` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | ERROR：WebSocket 建连或运行时错误，相同 URL 在 `60 s` 内最多上报 `5` 条。 |
-| `websocket.close` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | INFO：WebSocket 关闭时上报关闭码、原因和是否正常关闭。 |
-| `attributes.websocket.error.phase` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | 错误阶段，枚举值为 `connect`、`runtime`，仅 `websocket.error` 存在。 |
-| `attributes.websocket.error.window_occurrence_index` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | 当前节流窗口内已上报错误日志的触发序号。 |
-| `attributes.websocket.close.code` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | WebSocket 关闭码，仅 `websocket.close` 存在。 |
-| `attributes.websocket.close.reason` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str | WebSocket 关闭原因，仅 `websocket.close` 存在。 |
-| `attributes.websocket.close.was_clean` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | boolean | 是否正常关闭，仅 `websocket.close` 存在。 |
