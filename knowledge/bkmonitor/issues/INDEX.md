@@ -13,7 +13,7 @@
 | [APM 预计算适配共享数据源](./2026-05-14-apm-precalc-shared-multi-app/README.md) | `apm` `pre-calculate` `shared-datasource` `multi-app` `bmw` | 让单 BMW 预计算任务感知共享 data_id 下的多个应用，不破坏现有任务模型与持久化键 | 2026-05-22 |
 | [APM 支持跨应用共享数据源](./2026-03-03-apm-shared-datasource/README.md)                                         | `apm` `datasource` `es` `shared-storage` `migration`      | 支持多 APM 应用复用同一数据源，压缩 ES 索引数量，降低数据链路资源消耗                 | 2026-07-23 |
 | [APM Span 内置指标支持声明式引用](./2026-05-07-apm-span-builtin-metric-declarative-reference/README.md) | `apm` `span` `metric-group` `trace` `unify-query` `declarative` | 将 Trace 概览图的 Span 指标查询从手工参数拼接收敛为可复用的声明式指标算子 | 2026-05-07 |
-| [优化首页 TraceID 全局搜索的预计算延迟](./2026-05-02-overview-trace-id-low-latency-search/README.md) | `overview` `search` `apm` `trace` `pre-calculate` `low-latency` | 双路径并行收集 Trace 命中，流式累计 TopK=3，并用绝对 10s deadline 收口 | 2026-07-24 |
+| [优化首页 TraceID 全局搜索的预计算延迟](./2026-05-02-overview-trace-id-low-latency-search/README.md) | `overview` `search` `apm` `trace` `pre-calculate` `low-latency` | 双路径并行收集 Trace 命中，流式累计 TopK=3，并用绝对 5s deadline 收口 | 2026-07-24 |
 | [优化 APM 接口统计偶现查询报错](./2026-04-21-apm-endpoint-stat-hot-window-divide-by-zero/README.md) | `apm` `endpoint-stat` `hot-window` `aggregation` `bucket-inconsistency` | 修复 APM endpoint 统计在热时间窗口内因聚合分桶不一致导致的接口报错 | 2026-04-21 |
 | [优化告警详情主机日志关联准确性](./2026-04-15-alert-detail-host-collector-log-relation/README.md) | `alert` `log` `host-target` `collector` `log-relation` `accuracy` | 先修复日志类 HOST 告警的原始日志关联优先级，再接入主机关联采集项日志索引 | 2026-06-30 |
 | [APM 返回码重定义规则清空不生效](./2026-04-10-apm-code-redefine-clear-not-effective/README.md) | `apm` `code-redefine` `code-relabel` `config-refresh` | 修复 APM 返回码重定义在清空保存后未同步删除下游配置的问题 | 2026-05-24 |

@@ -2,7 +2,7 @@
 title: 优化首页 TraceID 全局搜索的预计算延迟 —— 实施方案
 tags: [overview, search, apm, trace, pre-calculate, low-latency, user-visit-record]
 issue: knowledge/bkmonitor/issues/2026-05-02-overview-trace-id-low-latency-search/README.md
-description: 双路径并行收集 Trace 命中，流式累计 TopK=3；Trace 专用绝对 10s deadline，超时保留已有 0～2 条结果并结束
+description: 双路径并行收集 Trace 命中，流式累计 TopK=3；Trace 绝对 5s deadline 与 Searcher 单项等待对齐，超时保留已有 0～2 条结果并结束
 created: 2026-05-02
 updated: 2026-07-24
 ---
@@ -33,7 +33,7 @@ updated: 2026-07-24
 | 候选应用规模 | TopN 默认 `15`，并发查询 | 与现有预计算多 cluster 并发量级一致 |
 | 直查时间窗口 | 近 `7d` | 与预计算路径对齐，便于结果合并语义统一 |
 | Trace 返回上限 | `K=3`，Trace 专用常量，不复用 `page_size` | 多应用命中只需少量候选；编码成本可忽略 |
-| Trace 收集超时 | 绝对 `10s` deadline（`time.monotonic()`） | `K` 填不满时不等待全部候选跑完；与队列空闲超时解耦 |
+| Trace 收集超时 | 绝对 `5s` deadline（`time.monotonic()`） | 与 `Searcher` 单项 `get(timeout=5)` 对齐；`K` 填不满时不扫完全部候选 |
 
 
 ### c. 边界与风险
@@ -50,13 +50,13 @@ updated: 2026-07-24
 
 ```mermaid
 flowchart TD
-    Q["TraceSearchItem.search<br/>(trace_id, bk_biz_id?)"] --> P["Path A<br/>预计算多 cluster 并发查询"]
+    Q["TraceSearchItem.iter_search<br/>(trace_id, bk_biz_id?)"] --> P["Path A<br/>预计算多 cluster 并发查询"]
     Q --> R["Path B<br/>构造候选应用集合"]
     R --> S["TopN 应用并发<br/>直查原始 Trace 表"]
     P --> M["命中队列<br/>按 application_id 去重"]
     S --> M
     M -- "累计 1→2→3" --> O["流式 yield 完整快照"]
-    M -- "K=3 / 耗尽 / 10s" --> X["trace_stop<br/>停止提交新查询"]
+    M -- "K=3 / 耗尽 / 5s" --> X["trace_stop<br/>停止提交新查询"]
 ```
 
 Path A 与 Path B 并行产出命中，互不依赖；聚合层按 `application_id` 去重后流式推送累计快照。
@@ -119,9 +119,8 @@ score = APP_WEIGHT_CURRENT + log1p(visit)                                       
 里程碑 2（本方案）：
 
 - Path A / Path B 持续产出命中；活跃并发上限仍为预计算 `5`、原始表 `8`。
-- Trace 使用专用绝对 deadline：`deadline = time.monotonic() + TRACE_SEARCH_TIMEOUT`，默认 `10s`。
-- `Searcher` 外层 `timeout` 必须 `>= TRACE_SEARCH_TIMEOUT`，默认保持 `30s`。
-- 队列 `get(timeout=...)` 只做短轮询，捕获 `queue.Empty` 后继续循环；禁止把空闲 `5s` 当成失败。
+- `Searcher` 保持流式汇聚：`output_queue.get(timeout=5)`，语义对齐现状 `results.next(timeout=5)`；`queue.Empty` 按超时跳过，不引入 `item_timeout`。
+- `TraceSearchItem` 使用绝对 `deadline = time.monotonic() + TRACE_SEARCH_TIMEOUT`，`TRACE_SEARCH_TIMEOUT=5`，与外层单项等待对齐。
 - 停止信号只阻止尚未发起的新查询；已发出的 UQ 请求依赖下游硬超时退出，线程池无法强杀。
 - 任一路径异常仅 `logger.exception`，按 miss 处理，不向上抛错。
 
@@ -135,24 +134,29 @@ score = APP_WEIGHT_CURRENT + log1p(visit)                                       
 
 ### f. 流式 TopK 查询架构
 
-改造分为两层：`Searcher` 把一次性返回扩展为流式快照；`TraceSearchItem` 把双路径命中累计为 `K=3`。
+职责分层：
+
+| 层 | 职责 | 不感知 |
+| --- | --- | --- |
+| `Searcher` | [a] 并行调度并流式 `yield` 快照<br />[b] `get(timeout=5)` 等待下一条队列消息 | Trace 的 `K`、候选耗尽、打分 |
+| `TraceSearchItem` | [a] 双路径收集并去重累计 `K=3`<br />[b] 内部绝对 `5s` deadline 收口 | `Searcher` 内部队列实现 |
 
 ```mermaid
 flowchart LR
     A["Path A<br/>预计算集群"] --> H["命中队列"]
     B["Path B<br/>候选应用"] --> H
-    H --> T["TraceSearchItem<br/>去重累计 K=3"]
+    H --> T["TraceSearchItem<br/>K=3 / 5s 收口"]
     T -- "1→2→3 完整快照" --> O["输出队列"]
-    O --> S["Searcher.search()<br/>短轮询 yield"]
+    O --> S["Searcher<br/>get timeout=5"]
     S --> V["event_stream()<br/>SSE data"]
-    T -. "K=3 / 耗尽 / 10s" .-> E["trace_stop.set()"]
+    T -. "K=3 / 耗尽 / 5s" .-> E["trace_stop.set()"]
     E --> A
     E --> B
 ```
 
 `TopN` 是 Path B 的候选探测上限；`K=3` 是 Trace 最终返回上限。二者相互独立，且 `K` 不复用 `page_size`。
 
-结束条件（任一即停）：
+`TraceSearchItem` 结束条件（任一即停）：
 
 ```text
 hit_count == 3
@@ -165,8 +169,8 @@ or stop_event.is_set()
 | --- | --- |
 | `K=3` 已满 | 立即 `trace_stop`，停止提交新查询；已 yield 的 `1→2→3` 快照保留 |
 | 候选提前耗尽 | 保留已有 `0～2` 条，正常结束 |
-| 到达 `10s` | 保留已有 `0～2` 条，停止继续查，正常发送 `event: end` |
-| 客户端断开 / 外层停止 | 设置 `request_stop`，Trace 侧同样停止提交新查询 |
+| 到达 `5s` | 保留已有 `0～2` 条，停止继续查，向 `Searcher` 发送完成信号 |
+| 客户端断开 / 外层停止 | `request_stop` 传入 Trace；停止提交新查询 |
 
 ## 0x03 开发方案
 
@@ -186,8 +190,9 @@ or stop_event.is_set()
 
 | 入口 | 职责 |
 | --- | --- |
-| `SearchItem.search` 抽象 | [a] 签名扩展 `stop_event`<br />[b] 返回 `Iterable[dict] \| None`<br />[c] 普通子类可继续返回列表 |
-| `Searcher.search` | 短轮询输出队列并 `yield` 快照；外层 `timeout >= TRACE_SEARCH_TIMEOUT` |
+| `SearchItem.search` | 保持现有一次性返回；普通子类签名同步 `stop_event` 后可忽略 |
+| `SearchItem.iter_search` | 默认包装 `search()`：列表拆成逐条 yield；`TraceSearchItem` 覆盖为真正流式 |
+| `Searcher.search` | 消费 `iter_search()`，`get(timeout=5)` 汇聚快照并 `yield` |
 
 
 #### `packages/monitor_web/overview/search.py` · `TraceSearchItem`
@@ -195,7 +200,7 @@ or stop_event.is_set()
 
 | 入口 | 职责 |
 | --- | --- |
-| `search` | 启动双路、按 `application_id` 去重累计 `K=3`、按 deadline 收口并流式 yield |
+| `iter_search` | 启动双路、按 `application_id` 去重累计 `K=3`、按 Trace `5s` deadline 收口并流式 yield |
 | `_aggregate_user_visits` | 单次 GROUP BY 查询 `UserVisitRecord`，输出 `(bk_biz_id, app_name) → count` |
 | `_collect_candidate_apps` | 候选业务并集（当前 ∪ 默认 ∪ 访问过） → 全量应用 → 统一打分截 TopN |
 | `_query_raw_apps_by_trace_id` | 直查单应用 `trace_result_table_id`，`limit=1` 仅判存在 |
@@ -216,7 +221,7 @@ or stop_event.is_set()
 | --- | --- | --- |
 | `RAW_QUERY_TOP_N` | `15` | Path B 直查应用上限 |
 | `TRACE_TOP_K` | `3` | Trace 最终返回上限，不复用 `page_size` |
-| `TRACE_SEARCH_TIMEOUT` | `10` | Trace 收集绝对超时（秒） |
+| `TRACE_SEARCH_TIMEOUT` | `5` | Trace 收集绝对超时，与 `Searcher.get(timeout=5)` 对齐 |
 | `BIZ_WEIGHT_CURRENT` | `1` | 未访问层：当前业务加分 |
 | `BIZ_WEIGHT_DEFAULT` | `1` | 未访问层：默认业务加分 |
 | `APP_WEIGHT_HAS_SERVICE` | `0.5` | 未访问层：有服务应用加分 |
@@ -224,24 +229,34 @@ or stop_event.is_set()
 
 ### d. 流式 TopK 核心流程
 
-本节落实架构结论：`Searcher` 短轮询汇聚快照；`TraceSearchItem` 用绝对 `10s` deadline 收集 `K=3`。
+本节落实：`Searcher` 回到 `get(timeout=5)` 汇聚版；`TraceSearchItem` 用 `deadline=5` 自行收口。
 
 | 变更点 | 目标 |
 | --- | --- |
-| **[Change]** `Searcher.search()` | [a] worker 内消费 `SearchItem.search()`，快照写入输出队列并立即 `yield`。<br />[b] 输出队列短轮询，捕获 `queue.Empty`；外层 `timeout >= TRACE_SEARCH_TIMEOUT`。 |
-| **[Change]** `SearchItem.search()` | [a] 返回 `Iterable[dict] \| None`，每个元素都是完整分类快照。<br />[b] 新增 `stop_event: threading.Event \| None = None`。<br />[c] 所有子类同步签名，普通搜索项忽略新增参数并继续返回列表。 |
-| **[Change]** `TraceSearchItem.search()` | [a] 创建 `deadline` 与 `trace_stop`<br />[b] 按 `application_id` 去重并 `yield` `1→2→3` 累计快照<br />[c] 满足结束条件后停止 |
-| **[Change]** `TraceSearchItem._path_precalc()` | 持续返回各预计算表命中；提交 / 发起查询前检查 `trace_stop` 与 `deadline`。 |
-| **[Change]** `TraceSearchItem._path_raw()` | 持续返回 TopN 候选命中；提交 / 发起查询前检查 `trace_stop` 与 `deadline`。 |
+| **[Add]** `SearchItem.iter_search()` | 默认把 `search()` 的列表结果逐条 yield；普通搜索项无需改实现。 |
+| **[Change]** `Searcher.search()` | [a] 消费 `iter_search()` 并写入输出队列<br />[b] `get(timeout=5)` 等待下一条，对齐现状 `next(timeout=5)` |
+| **[Change]** `SearchItem.search()` | 签名新增 `stop_event`；普通子类忽略该参数，继续返回列表。 |
+| **[Change]** `TraceSearchItem.iter_search()` | [a] 创建 Trace 专用 `deadline=5` 与 `trace_stop`<br />[b] 去重并 `yield` `1→2→3` 累计快照<br />[c] 满足结束条件后停止 |
+| **[Change]** `TraceSearchItem._path_precalc()` | 持续返回各预计算表命中；提交或发起查询前检查 `trace_stop` 与 `deadline`。 |
+| **[Change]** `TraceSearchItem._path_raw()` | 持续返回 TopN 候选命中；提交或发起查询前检查 `trace_stop` 与 `deadline`。 |
 | **[Delete]** `TraceSearchItem._first_truthy_concurrent()` | 删除“首个非空即结束”的公共收敛逻辑。 |
+
+#### [Add] `SearchItem.iter_search()`
+
+```python
+@classmethod
+def iter_search(cls, ..., stop_event=None):
+    result = cls.search(..., stop_event=stop_event)
+    for snapshot in result or []:
+        yield snapshot
+```
 
 #### [Change] `Searcher.search()`
 
 ```python
 def _consume_item(item):
     try:
-        result = item.search(..., stop_event=request_stop)
-        for snapshot in result or []:
+        for snapshot in item.iter_search(..., stop_event=request_stop):
             if request_stop.is_set():
                 break
             output_queue.put(snapshot)
@@ -249,17 +264,18 @@ def _consume_item(item):
         output_queue.put(None)
 
 
-deadline = time.monotonic() + timeout  # timeout >= TRACE_SEARCH_TIMEOUT
-
 with ThreadPool() as pool:
     try:
         for item in search_items:
             pool.apply_async(_consume_item, (item,))
 
-        while unfinished and time.monotonic() < deadline and not request_stop.is_set():
+        start_time = time.time()
+        while unfinished and time.time() - start_time <= timeout:
             try:
-                snapshot = output_queue.get(timeout=0.2)
+                snapshot = output_queue.get(timeout=5)
             except queue.Empty:
+                # 对齐现状 results.next(timeout=5) 的 TimeoutError
+                logger.error("Searcher search timeout, query: %s", query)
                 continue
             if snapshot is None:
                 unfinished -= 1
@@ -269,10 +285,12 @@ with ThreadPool() as pool:
         request_stop.set()
 ```
 
-#### [Change] `TraceSearchItem.search()`
+`Searcher` 不读取 Trace 常量。Trace 在 `5s` 内自行 `ITEM_DONE` 后，外层 `get(timeout=5)` 不会误等。
+
+#### [Change] `TraceSearchItem.iter_search()`
 
 ```python
-deadline = time.monotonic() + TRACE_SEARCH_TIMEOUT  # 10s
+deadline = time.monotonic() + TRACE_SEARCH_TIMEOUT  # 5s
 trace_stop = threading.Event()
 
 def _drain_path(path):
@@ -368,7 +386,7 @@ def _iter_hits(candidates, probe, max_workers):
 
 | 时间 | 结论性进展 |
 | --- | --- |
-| `2026-07-24 10:00` | [a] 里程碑 2 收口：`K=3` + Trace 绝对 `10s` deadline<br />[b] `Searcher` 改为短轮询，禁止把队列空闲 `5s` 当失败<br />[c] 结束条件定为 `K` 满 / 候选耗尽 / deadline / stop_event；超时保留 `0～2` 条 |
+| `2026-07-24 10:00` | [a] 里程碑 2 收口：`K=3` + Trace 绝对 `5s`<br />[b] `Searcher` 回到 `get(timeout=5)` 汇聚版，不引入 `item_timeout`<br />[c] Trace 内部 `deadline=5` 与外层单项等待对齐 |
 | `2026-05-06 16:00` | PR #10492 review 收口：预计算恢复 `MIN_START_TIME`，访问层基础分 + `log1p`，未访问层保留业务来源与服务数加权 |
 | `2026-05-03 00:00` | 里程碑 1 落地：双轨竞速 + 原始 Trace 直查 + `UserVisitRecord` 候选 |
 | `2026-05-02 00:00` | PLAN 主干定稿：双轨并行、候选不前置权限过滤、`log1p` 归一加权 |
@@ -387,4 +405,4 @@ def _iter_hits(candidates, probe, max_workers):
 | 状态 | 分支 | 里程碑 | PR |
 | --- | --- | --- | --- |
 | ✅ | `feat/apm_trace/#1010158081134011153` | 里程碑 1：首页 TraceID 检索支持原始 Trace 低延迟通道 | [TencentBlueKing/bk-monitor #10492](https://github.com/TencentBlueKing/bk-monitor/pull/10492) |
-| 🔄 | `<branch_name>` | 里程碑 2：流式 TopK=3 + Trace 绝对 10s 超时收口 | 待创建 |
+| 🔄 | `<branch_name>` | 里程碑 2：流式 TopK=3 + Trace 绝对 5s 超时收口 | 待创建 |
