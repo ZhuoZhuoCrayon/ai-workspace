@@ -107,12 +107,12 @@ return merge_log_targets(host_relation_targets, host_collector_targets)
 
 ### b. BaseTarget 公共能力
 
-| 变更点 | 目标 |
-| --- | --- |
-| **[Add]** `BaseTarget._biz_index_set_map` | 缓存业务索引集映射：`str(index_set_id) -> index_set_info`。 |
-| **[Add]** `BaseTarget._query_host_collector_log_targets(host_target)` | [a] 复用 `HostIndexQueryMixin.query_indexes()` 查询主机关联采集项索引，再补齐 `list[dict[str, Any]]` 返回项。<br />[b] 有 `bk_target_ip` 时增加 `{"field": "serverIp", "operator": "=", "value": [bk_target_ip]}` 作为过滤条件。 |
-| **[Add]** `BaseTarget._list_related_host_collector_log_targets(host_targets)` | 对多个主机目标并发查询采集项日志，并按 `host_targets` 输入顺序汇总结果。 |
-| **[Add]** `merge_log_targets(*target_groups)` | 按参数顺序合并日志来源，相同 `str(index_set_id)` 保留靠左来源。 |
+| 变更点                                                                           | 目标                                                                                                                                                                                               |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **[Add]** `BaseTarget._biz_index_set_map`                                     | 缓存业务索引集映射：`str(index_set_id) -> index_set_info`。                                                                                                                                                 |
+| **[Add]** `BaseTarget._query_host_collector_log_targets(host_target)`         | [a] 复用 `HostIndexQueryMixin.query_indexes()` 查询主机关联采集项索引，再补齐 `list[dict[str, Any]]` 返回项。<br />[b] 有 `bk_target_ip` 时增加 `{"field": "serverIp", "operator": "=", "value": [bk_target_ip]}` 作为过滤条件。 |
+| **[Add]** `BaseTarget._list_related_host_collector_log_targets(host_targets)` | 对多个主机目标并发查询采集项日志，并按 `host_targets` 输入顺序汇总结果。                                                                                                                                                     |
+| **[Add]** `merge_log_targets(*target_groups)`                                 | 按参数顺序合并日志来源，相同 `str(index_set_id)` 保留靠左来源。                                                                                                                                                       |
 
 #### `_list_related_host_collector_log_targets` 内并发请求
 
