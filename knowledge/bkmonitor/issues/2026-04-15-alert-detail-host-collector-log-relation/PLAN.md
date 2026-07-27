@@ -4,7 +4,7 @@ tags: [alert, log, host-target, collector, log-relation, accuracy]
 issue: ./README.md
 description: 先修复日志类 HOST 告警的原始日志关联优先级，再支持新版告警详情返回主机关联采集项日志
 created: 2026-04-15
-updated: 2026-06-30
+updated: 2026-07-27
 ---
 
 # 优化告警详情主机日志关联准确性 —— 实施方案
@@ -112,20 +112,26 @@ return merge_log_targets(host_relation_targets, host_collector_targets)
 | **[Add]** `BaseTarget._biz_index_set_map`                                     | 缓存业务索引集映射：`str(index_set_id) -> index_set_info`。                                                                                                                                                 |
 | **[Add]** `BaseTarget._query_host_collector_log_targets(host_target)`         | [a] 复用 `HostIndexQueryMixin.query_indexes()` 查询主机关联采集项索引，再补齐 `list[dict[str, Any]]` 返回项。<br />[b] 有 `bk_target_ip` 时增加 `{"field": "serverIp", "operator": "=", "value": [bk_target_ip]}` 作为过滤条件。 |
 | **[Add]** `BaseTarget._list_related_host_collector_log_targets(host_targets)` | 对多个主机目标并发查询采集项日志，并按 `host_targets` 输入顺序汇总结果。                                                                                                                                                     |
-| **[Add]** `merge_log_targets(*target_groups)`                                 | 按参数顺序合并日志来源，相同 `str(index_set_id)` 保留靠左来源。                                                                                                                                                       |
+| **[Add]** `merge_log_targets(*target_groups)`                                 | 按参数顺序合并日志来源，相同 `str(index_set_id)` 保留靠左来源，重复项不额外记录日志。                                                                                                                                        |
 
 #### `_list_related_host_collector_log_targets` 内并发请求
 
 ```python
-pool = ThreadPool(min(len(host_targets), 8))
-targets_iter: Iterable[list[dict[str, Any]]] = pool.imap_unordered(
-    self._query_host_collector_log_targets,
-    host_targets,
-)
-pool.close()
+if len(host_targets) == 1:
+    return merge_log_targets(self._query_host_collector_log_targets(host_targets[0]))
 
-return merge_log_targets(*targets_iter)
+with ThreadPool(min(len(host_targets), 8)) as pool:
+    target_groups = list(
+        pool.imap(
+            self._query_host_collector_log_targets,
+            host_targets,
+        )
+    )
+
+return merge_log_targets(*target_groups)
 ```
+
+`imap()` 保持 `host_targets` 输入顺序，确保同一索引集命中多台主机时优先保留靠前主机的过滤条件。
 
 ### c. HostTarget 接入
 
@@ -186,20 +192,23 @@ with ThreadPool(3) as pool:
 
 | 测试函数 | 断言重点 |
 | --- | --- |
-| `test_log_host_target_prefers_origin_log_strategy` | 日志类 HOST 告警优先返回原策略 `index_set_id`、`query_string` 和维度过滤条件，不进入主机关系反查。 |
+| `test_log_host_target_prefers_origin_log_strategy_and_skips_host_queries` | 日志类 HOST 告警优先返回原策略 `index_set_id`、`query_string` 和维度过滤条件，不进入主机关系与采集项查询。 |
 | `test_host_target_falls_back_when_origin_log_strategy_missing` | 非日志 HOST 告警或无日志策略配置时，继续走主机关系日志与主机采集项日志聚合。 |
 | `test_host_target_adds_host_collector_logs` | `HostTarget` 返回现有告警关联日志和主机采集项日志，采集项日志通过 `get_biz_index_sets_with_cache()` 补齐。 |
 | `test_host_target_deduplicates_relation_before_collector` | 现有告警关联日志与采集项命中同一 `index_set_id` 时，保留现有告警关联日志。 |
 | `test_host_target_without_origin_log_skips_host_queries_without_event_ip` | 原始日志策略未命中且 `event.ip` 为空时，`HostTarget` 不查询现有告警关联日志和主机关联采集项日志。 |
 | `test_host_collector_falls_back_to_ip_and_cloud_id_zero` | 缺少 `bk_host_id` 时使用 `bk_target_ip + bk_cloud_id` 查询，且 `bk_cloud_id=0` 不被误判为空。 |
+| `test_single_host_collector_query_skips_inner_thread_pool` | 单主机直接查询采集项日志，不创建内层线程池。 |
 | `test_k8s_target_merges_k8s_apm_and_collector_logs_in_priority` | `BaseK8STarget` 按 `k8s_relation -> apm_relation -> host_collector` 优先级合并并去重。 |
+| `test_host_collector_keeps_host_input_order_when_queries_finish_out_of_order` | 多主机请求完成顺序不影响合并优先级，结果始终按主机输入顺序去重。 |
 | `test_host_collector_query_failure_does_not_break_log_targets` | 单个主机采集项查询失败时，其它日志来源仍正常返回。 |
+| `test_host_collector_index_set_query_failure_propagates` | 业务索引集元信息查询失败时继续向上抛出，不将全局依赖异常降级为单主机失败。 |
 | `test_merge_log_targets_keeps_highest_priority_group` | 公共合并函数按参数优先级保留最高优先级来源。 |
 
 ### b. 回归命令
 
 ```bash
-pytest packages/fta_web/tests/alert_v2/test_target.py
+uv run --frozen --no-default-groups --group test pytest packages/fta_web/tests/alert_v2/test_target.py -q
 ```
 
 本方案默认不触碰旧版接口。若实现改动触及旧版主机采集项查询或接口序列化，再补充旧版接口回归测试。
@@ -208,6 +217,7 @@ pytest packages/fta_web/tests/alert_v2/test_target.py
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-07-27 15:00` | [a] [TencentBlueKing/bk-monitor #11653](https://github.com/TencentBlueKing/bk-monitor/pull/11653) 完成 review 并通过，目标测试 `16` 项与 Ruff 检查通过。<br />[b] 多主机采集项查询按输入顺序合并，单主机跳过内层线程池，业务索引集元信息失败继续向上抛出。 |
 | `2026-06-30 19:00` | [a] ✅ [TencentBlueKing/bk-monitor #11276](https://github.com/TencentBlueKing/bk-monitor/pull/11276) 已合入，合入提交为 `f26e539b`。<br />[b] 实现范围为日志类 HOST 告警原始日志优先，里程碑 2 主机关联采集项日志接入继续待创建。 |
 | `2026-06-27 12:00` | [a] 方案拆成两个里程碑：先优化日志类 HOST 告警的原始日志关联准确性，再支持主机关联采集项日志。<br />[b] 将 `_query_host_collector_log_targets(host_target)` 职责调整为查询协议，并补齐 `bk_cloud_id=0`、`addition` 初始化、去重类型归一和回退测试。 |
 | `2026-06-27 11:00` | 重写方案结构：明确 `HostTarget`、`BaseK8STarget` 的主机关联采集项日志接入方式、来源优先级、失败隔离和测试落点。 |
@@ -230,4 +240,4 @@ pytest packages/fta_web/tests/alert_v2/test_target.py
 | 状态 | 分支 | 里程碑 | PR |
 | --- | --- | --- | --- |
 | ✅ | `feat/host_alert_log_relation_accuracy/#1010158081135660831` | 里程碑 1：优化告警详情主机日志关联准确性 | [TencentBlueKing/bk-monitor #11276](https://github.com/TencentBlueKing/bk-monitor/pull/11276) |
-| 🔄 | `<branch_name>` | 里程碑 2：告警详情支持查看主机关联采集项日志 | 待创建 |
+| 🔄 | `feat/alert_relate_host_collector_log_targets/#1010158081136398811` | 里程碑 2：告警详情支持查看主机关联采集项日志 | [TencentBlueKing/bk-monitor #11653](https://github.com/TencentBlueKing/bk-monitor/pull/11653) |
