@@ -20,7 +20,7 @@
 | [APM Span 内置指标支持声明式引用](./issues/2026-05-07-apm-span-builtin-metric-declarative-reference/README.md) | `apm` `span` `metric-group` `trace` `unify-query` `declarative` | 新建 | 2026-05-07 |
 | [优化首页 TraceID 全局搜索的预计算延迟](./issues/2026-05-02-overview-trace-id-low-latency-search/README.md) | `overview` `search` `apm` `trace` `pre-calculate` `low-latency` | 里程碑 2 设计中 | 2026-07-24 |
 | [优化 APM 接口统计偶现查询报错](./issues/2026-04-21-apm-endpoint-stat-hot-window-divide-by-zero/README.md) | `apm` `endpoint-stat` `hot-window` `aggregation` `bucket-inconsistency` | 设计中 | 2026-04-21 |
-| [优化告警详情主机日志关联准确性](./issues/2026-04-15-alert-detail-host-collector-log-relation/README.md) | `alert` `log` `host-target` `collector` `log-relation` `accuracy` | ✅ 里程碑 1 已合入 | 2026-06-30 |
+| [优化告警详情主机日志关联准确性](./issues/2026-04-15-alert-detail-host-collector-log-relation/README.md) | `alert` `log` `host-target` `collector` `log-relation` `accuracy` | 里程碑 2 待合入 | 2026-07-27 |
 | [APM 返回码重定义规则清空不生效](./issues/2026-04-10-apm-code-redefine-clear-not-effective/README.md) | `apm` `code-redefine` `code-relabel` `config-refresh` | 设计中 | 2026-05-24 |
 | [APM 支持应用级别配置](./issues/2026-03-04-apm-app-level-config/README.md) | `apm` `service-config` `log-relation` `code-redefine` `code-remark` `app-level` | 设计中 | 2026-05-24 |
 | [APM 策略模板下发更新不覆盖部分非管理配置](./issues/2026-03-27-apm-strategy-template-no-overwrite/README.md) | `apm` `strategy` `template` `dispatch` | 新建 | 2026-03-27 |
