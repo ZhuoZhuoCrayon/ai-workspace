@@ -3,6 +3,7 @@
 
 | 文件                                                                                                     | 标签                                                        | 摘要                                                      | 更新日期       |
 |------|------|------|---------|
+| [APM 跨应用 Trace 检索](./2026-07-31-apm-cross-app-trace-search/README.md) | `apm` `trace` `cross-app-search` `index-set` `bklog` `celery` `unify-query` | 通过 Trace 数据源域索引集聚合同域 APM Trace 数据源，让 Trace ID 可以跨应用检索 | 2026-07-31 |
 | [日志 UnifyQuery 环境变量黑名单与 query_string 增强](./2026-03-05-log-uq-env-whitelist-and-query-string/README.md) | `log` `unify-query` `data-source` `query-string` `config` `blacklist` | 日志查询默认切换到 UnifyQuery，通过环境变量黑名单保留按业务回退能力，并对齐 query_string 处理逻辑 | 2026-07-21 |
 | [APM 关联容器日志采集项慢接口优化](./2026-07-10-apm-k8s-log-relation-cache/README.md) | `apm` `log-relation` `k8s` `cache` `latency` `index-set` | 通过后台任务预缓存服务与 K8S 容器日志索引的关联关系，消除逐服务关系查询瓶颈 | 2026-07-17 |
 | [APM Span 详情支持 Links 反向关联展示](./2026-06-04-apm-span-links-reverse-relation/README.md) | `apm` `span` `trace` `links` `relation` `otlp` | 通过 TraceID 和 SpanID 过滤正向与反向关联，并统一返回 OpenTelemetry Link 列表 | 2026-06-25 |

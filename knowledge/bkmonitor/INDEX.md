@@ -1,6 +1,6 @@
 # bkmonitor 知识库
 
-> 蓝鲸监控平台 (bk-monitor/bkmonitor)
+> 蓝鲸监控平台（bk-monitor/bkmonitor）
 
 ## 0x01 索引
 
@@ -8,6 +8,7 @@
 
 | 需求 | 标签 | 状态 | 更新日期 |
 |------|------|------|----------|
+| [APM 跨应用 Trace 检索](./issues/2026-07-31-apm-cross-app-trace-search/README.md) | `apm` `trace` `cross-app-search` `index-set` `bklog` `celery` `unify-query` | 方案完成 | 2026-07-31 |
 | [日志 UnifyQuery 环境变量黑名单与 query_string 增强](./issues/2026-03-05-log-uq-env-whitelist-and-query-string/README.md) | `log` `unify-query` `data-source` `query-string` `config` `blacklist` | 代码已合入，Helm 配置中 | 2026-07-21 |
 | [APM 关联容器日志采集项慢接口优化](./issues/2026-07-10-apm-k8s-log-relation-cache/README.md) | `apm` `log-relation` `k8s` `cache` `latency` `index-set` | 待合入 | 2026-07-17 |
 | [APM Span 详情支持 Links 反向关联展示](./issues/2026-06-04-apm-span-links-reverse-relation/README.md) | `apm` `span` `trace` `links` `relation` `otlp` | 已完成 | 2026-06-25 |
