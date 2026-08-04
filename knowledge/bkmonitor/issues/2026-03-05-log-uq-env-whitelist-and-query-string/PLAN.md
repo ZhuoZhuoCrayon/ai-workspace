@@ -52,14 +52,14 @@ updated: 2026-07-21
 - 配置格式：`LOG_UNIFY_QUERY_BLACK_BIZ_LIST=2,9,100147,-50`。
 - 删除旧的 `LOG_UNIFY_QUERY_WHITE_BIZ_LIST` 环境变量和未接入查询路由的 GlobalConfig 配置项。
 
-### b. `BaseBkMonitorLogDataSource`
+### b. `BaseBkMonitorLogDataSource` 改造
 
 `bkmonitor/data_source/data_source/__init__.py`
 
 - `_get_unify_query_string`：新增，用于自定义 `query_string`。
 - `to_unify_query_config`：`query_string` 改为调用 `self._get_unify_query_string()`。
 
-### c. `LogSearchTimeSeriesDataSource`
+### c. `LogSearchTimeSeriesDataSource` 改造
 
 `bkmonitor/data_source/data_source/__init__.py`
 
