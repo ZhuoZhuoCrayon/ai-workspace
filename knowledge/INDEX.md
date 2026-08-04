@@ -7,7 +7,8 @@
 | 项目 | 路径 | 数量 | 说明 |
 |------|------|------|------|
 | ai-workspace | [ai-workspace/](./ai-workspace/INDEX.md) | 4 篇 | AI 工作区 — 知识管理与多项目协作中枢 |
-| bkmonitor | [bkmonitor/](./bkmonitor/INDEX.md) | 44 篇 | 蓝鲸监控平台（bk-monitor/bkmonitor） |
+| bk-cli | [bk-cli/](./bk-cli/INDEX.md) | 0 篇 | 蓝鲸平台 API 命令行工具 |
+| bkmonitor | [bkmonitor/](./bkmonitor/INDEX.md) | 45 篇 | 蓝鲸监控平台（bk-monitor/bkmonitor） |
 | bkm-skills | [bkm-skills/](./bkm-skills/INDEX.md) | 6 篇 | BlueKing Monitor Skills |
 | bk-product-designs | [bk-product-designs/](./bk-product-designs/INDEX.md) | 0 篇 | 蓝鲸监控产品设计协作仓库 |
 | bkmonitor_mcp | [bkmonitor_mcp/](./bkmonitor_mcp/INDEX.md) | 1 篇 | 蓝鲸监控 MCP Server |
@@ -21,8 +22,7 @@
 ## 0x02 最近更新
 
 - 2026-07-31：新增 [APM 跨应用 Trace 检索](./bkmonitor/issues/2026-07-31-apm-cross-app-trace-search/README.md)（通过 Trace 数据源域索引集和 Celery 同步，让 Trace Detail 返回同域跨应用 Span）
+- 2026-07-31：新增 [日志、调用链与事件枚举值查询接入 UnifyQuery](./bkmonitor/issues/2026-07-31-enum-values-unify-query/README.md)（枚举值统一进入 `UnifyQuery.query_dimensions()`，复用数据查询的灰度路由）
+- 2026-07-28：更新 [RUM 数据协议](./bkmonitor/articles/2026-07-12-rum-span-data-protocol/README.md)（补齐字段状态、修复协议表格边界，并将 `network.connection.type` 对齐浏览器原始枚举）
 - 2026-07-27：更新 [优化告警详情主机日志关联准确性](./bkmonitor/issues/2026-04-15-alert-detail-host-collector-log-relation/README.md)（[TencentBlueKing/bk-monitor #11653](https://github.com/TencentBlueKing/bk-monitor/pull/11653) review 通过，进入待合入阶段）
-- 2026-07-27：更新 [RUM 数据协议](./bkmonitor/articles/2026-07-12-rum-span-data-protocol/README.md)（补充 `attributes.blank_screen.reason` 和 `attributes.long_task.entry_type` 的枚举值与语义）
-- 2026-07-26：更新 [RUM 数据协议](./bkmonitor/articles/2026-07-12-rum-span-data-protocol/README.md)（补充 `attributes.action.type` 的跨端常见值，以及 `attributes.action.frustration.type` 的取值与判定规则）
-- 2026-07-25：更新 [RUM 数据协议](./bkmonitor/articles/2026-07-12-rum-span-data-protocol/README.md)（删除 `@blueking/open-telemetry` 0.0.26 源码已移除的旧 Span 字段）
-- 2026-07-23：更新 [APM 支持跨应用共享数据源](./bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md)（补充基于访问记录与数据状态缓存筛选候选应用、后台迁移及 SaaS 元数据同步的三阶段运维流程）
+- 2026-07-27：更新 [RUM 数据协议](./bkmonitor/articles/2026-07-12-rum-span-data-protocol/README.md)（补充枚举语义，将 `attributes.document.referrer` 迁移到 View 并废弃 `attributes.outcome.reason`）
