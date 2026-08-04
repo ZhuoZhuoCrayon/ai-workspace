@@ -62,5 +62,13 @@
     "branch": "main",
     "local_path": "/Users/sandrincai/Project/Tencent/bkm/bk-product-designs",
     "language": "zh"
+  },
+  {
+    "name": "bk-cli",
+    "description": "一个用于与蓝鲸平台各个系统 API 交互的命令行工具",
+    "git_url": "https://github.com/TencentBlueKing/bk-cli.git",
+    "branch": "master",
+    "local_path": "/Users/sandrincai/Project/Github/bk/monitor/bk-cli",
+    "language": "zh"
   }
 ]
