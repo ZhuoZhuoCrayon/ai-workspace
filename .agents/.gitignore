@@ -16,3 +16,9 @@
 !skills/dev-env/**
 !skills/code-style/
 !skills/code-style/**
+!skills/rum-search/
+!skills/rum-search/**
+!skills/kube-switch/
+!skills/kube-switch/**
+!skills/collector-helper/
+!skills/collector-helper/**
