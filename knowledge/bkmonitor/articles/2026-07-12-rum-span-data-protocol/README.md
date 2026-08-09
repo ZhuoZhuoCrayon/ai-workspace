@@ -115,7 +115,7 @@ Session
 **[1] `links[].trace_id`**：满足 `attributesspan_type=resource, attributes.resource.type=xhr or fetch` 时，需将前端生成的 TraceID 记录到该字段。
 
 
-## 0x02 Attributes
+## 0x03 Attributes
 
 ### a. 基础字段
 
@@ -127,17 +127,17 @@ Session
 
 **[1] `attributes.span_type`**：
 
-| 值          | 描述                     |
-| ---------- | ---------------------- |
-| `session`  | Session 创建、轮换或结束。     |
-| `view`     | 页面首次加载或路由视图生命周期。      |
-| `resource` | 静态资源、Fetch 或 XHR 请求。   |
-| `error`    | 浏览器错误、白屏或 CSP 违规。     |
-| `vital`    | Web Vitals 指标。          |
-| `long_task` | Long Task 或长动画帧。       |
-| `action`   | 用户交互或主动上报的 Action。     |
-| `websocket` | WebSocket 生命周期事件。      |
-| `custom`   | 主动上报的自定义事件。            |
+| 值           | 描述                   |
+| ----------- | -------------------- |
+| `session`   | Session 创建、轮换或结束。    |
+| `view`      | 页面首次加载或路由视图生命周期。     |
+| `resource`  | 静态资源、Fetch 或 XHR 请求。 |
+| `error`     | 浏览器错误、白屏或 CSP 违规。    |
+| `vital`     | Web Vitals 指标。       |
+| `long_task` | Long Task 或长动画帧。     |
+| `action`    | 用户交互或主动上报的 Action。   |
+| `websocket` | WebSocket 生命周期事件。    |
+| `custom`    | 主动上报的自定义事件。          |
 
 ### b. [error](https://opentelemetry.io/docs/specs/semconv/registry/attributes/error/)
 
@@ -414,24 +414,24 @@ View B                                 █████████████�
 
 ### k. vital
 
-| 字段                                            | 状态                                                          | 类型     | 描述                   | 备注                                   |
-| --------------------------------------------- | ----------------------------------------------------------- | ------ | -------------------- | ------------------------------------ |
-| `attributes.vital.id`                         | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | str    | Vital 唯一标识           |                                      |
-| `attributes.vital.metric`                     | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | enum   | 指标名                  |                                      |
-| `attributes.vital.value`                      | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | number | 指标测量值                |                                      |
-| `attributes.vital.inp.input_delay`            | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | number | 输入延迟（ms）             | 用户发起交互（如点击）到事件处理器开始执行的等待时间，反映主线程繁忙程度 |
-| `attributes.vital.inp.interaction_target`     | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | str    | 交互目标元素标识             | 如 `div`。                             |
-| `attributes.vital.inp.interaction_type`       | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | str    | 交互类型                 | --                                   |
-| `attributes.vital.inp.processing_duration`    | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | number | 处理耗时（ms）             | --                                   |
-| `attributes.vital.inp.presentation_delay`     | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | number | 呈现延迟（ms）             | --                                   |
-| `attributes.vital.lcp.target`                 | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | str    | DOM 选择器              | 如 `div`。                             |
-| `attributes.vital.lcp.url`                    | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | str    | 元素对应资源 URL（已脱敏）      | --                                   |
-| `attributes.vital.lcp.resource_load_duration` | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | number | 资源加载耗时（ms）           | --                                   |
-| `attributes.vital.lcp.element_render_delay`   | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | number | 元素渲染延迟（ms）           | --                                   |
-| `attributes.vital.ttfb.waiting_duration`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | number | 请求就绪后的等待耗时（ms）       | --                                   |
-| `attributes.vital.ttfb.dns_duration`          | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | number | DNS 解析耗时（ms）         | --                                   |
-| `attributes.vital.ttfb.connection_duration`   | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | number | TCP + TLS 连接建立耗时（ms） | --                                   |
-| `attributes.vital.ttfb.request_duration`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | number | 请求发送后等待首字节耗时（ms）     | --                                   |
+| 字段                                            | 状态                                                         | 类型     | 描述                   | 备注                                   |
+| --------------------------------------------- | ---------------------------------------------------------- | ------ | -------------------- | ------------------------------------ |
+| `attributes.vital.id`                         | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str    | Vital 唯一标识           |                                      |
+| `attributes.vital.metric`                     | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | enum   | 指标名                  |                                      |
+| `attributes.vital.value`                      | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 指标测量值                |                                      |
+| `attributes.vital.inp.input_delay`            | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 输入延迟（ms）             | 用户发起交互（如点击）到事件处理器开始执行的等待时间，反映主线程繁忙程度 |
+| `attributes.vital.inp.interaction_target`     | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str    | 交互目标元素标识             | 如 `div`。                             |
+| `attributes.vital.inp.interaction_type`       | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str    | 交互类型                 | --                                   |
+| `attributes.vital.inp.processing_duration`    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 处理耗时（ms）             | --                                   |
+| `attributes.vital.inp.presentation_delay`     | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 呈现延迟（ms）             | --                                   |
+| `attributes.vital.lcp.target`                 | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str    | DOM 选择器              | 如 `div`。                             |
+| `attributes.vital.lcp.url`                    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str    | 元素对应资源 URL（已脱敏）      | --                                   |
+| `attributes.vital.lcp.resource_load_duration` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 资源加载耗时（ms）           | --                                   |
+| `attributes.vital.lcp.element_render_delay`   | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 元素渲染延迟（ms）           | --                                   |
+| `attributes.vital.ttfb.waiting_duration`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 请求就绪后的等待耗时（ms）       | --                                   |
+| `attributes.vital.ttfb.dns_duration`          | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | DNS 解析耗时（ms）         | --                                   |
+| `attributes.vital.ttfb.connection_duration`   | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | TCP + TLS 连接建立耗时（ms） | --                                   |
+| `attributes.vital.ttfb.request_duration`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 请求发送后等待首字节耗时（ms）     | --                                   |
 
 **[1] `attributes.vital.metric`**：
 
