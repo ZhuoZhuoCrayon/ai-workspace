@@ -1,9 +1,9 @@
 ---
 title: RUM 分层统一查询
-tags: [rum, query, span, view, session, factory, unify-query]
-description: 用 mode 将同一组 RUM 检索接口分派到 Span、View 和 Session 查询层
+tags: [rum, apm, query, span, view, session, factory, unify-query]
+description: 用统一 Target 和查询基类承接 RUM 分层检索与 APM Trace 查询
 created: 2026-08-07
-updated: 2026-08-09
+updated: 2026-08-10
 ---
 
 # RUM 分层统一查询
@@ -14,17 +14,21 @@ updated: 2026-08-09
 
 RUM 已有通用原子查询 `BaseQuery` 和 Span 查询 `SpanQuery`，但还没有承接页面接口的统一业务层。若 Resource 直接依赖查询类，View、Session 接入时会复制一套接口和分派逻辑。
 
+APM 后台仍通过独立查询基类和数据源配置字典选择原始表、预计算表与指标表，无法复用同一套查询原语和 `TraceDatasourceTarget` 协议。
+
 ### b. 目标
 
 - Resource 注册一组 RUM 检索接口，通过 `mode` 选择查询层级。
 - `RumLevelHandlerFactory` 首期注册 `span`，并为后续 `view`、`session` 保留同一映射入口。
-- Level 以 `list[TraceDatasourceTarget]` 初始化，可按需组合多个 `BaseQuery` 子类。
+- RUM Level 与 APM 的 3 类 Query 共用 `list[TraceDatasourceTarget]` 和通用查询原语。
 
 ## 0x02 实现路线
 
 ### a. 建议的方案
 
 调用链固定为：`Resource → RumLevelHandlerFactory → LevelHandler → 一个或多个 Query → BaseQuery`。
+
+APM 调用链固定为：`QueryProxy → list[TraceDatasourceTarget] → APM BaseQuery → 通用 BaseQuery`。原始表由 `table_id` 承载，预计算表由 `levels[name="trace"]` 承载。
 
 详细类关系、接口清单和代码落点见 [实施方案](./PLAN.md)。
 
