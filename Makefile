@@ -11,9 +11,10 @@ SKILLS_DIR ?= .agents/skills
 SKILLS ?= skill-creator mcp-builder docx pdf pptx xlsx webapp-testing
 SKILLS_MOUNT_TARGETS ?= .codebuddy .claude .cursor
 SKILLS_MOUNT_BLACKLIST ?=
+PROJECT_SKILLS_SCRIPT ?= $(SKILLS_DIR)/project-mgr/scripts/list_skills.py
 SKILLS_AGENT_ARGS := $(if $(strip $(SKILLS_IDE)),--agent $(SKILLS_IDE),)
 
-.PHONY: help init init-pre-commit init-skills verify verify-pre-commit verify-skills skills-update skills-mount
+.PHONY: help init init-pre-commit init-skills verify verify-pre-commit verify-skills skills-update skills-update-projects skills-mount
 
 help:
 	@printf "%s\n" \
@@ -23,12 +24,13 @@ help:
 		"  make init-skills         # 安装默认 skills" \
 		"  make verify              # 验证 pre-commit 和 skills" \
 		"  make skills-mount        # 将 .agents/skills 下的 skills 挂载到目标目录" \
-		"  make skills-update       # 重新安装默认 skills，作为更新方式" \
+		"  make skills-update       # 更新默认 skills，并挂载项目 skills" \
 		"Variables:" \
 		"  SKILLS_IDE=$(SKILLS_IDE)              # 默认仅安装到 Cursor；留空则不传 --agent" \
 		"  SKILLS_DIR=$(SKILLS_DIR)       # 当前默认 skills 目录" \
 		"  SKILLS_MOUNT_TARGETS=$(SKILLS_MOUNT_TARGETS) # 默认挂载目标目录" \
 		"  SKILLS_MOUNT_BLACKLIST=$(SKILLS_MOUNT_BLACKLIST) # 可选，跳过指定 skill（空格分隔）" \
+		"  PROJECT_SKILLS_SCRIPT=$(PROJECT_SKILLS_SCRIPT) # 项目 skill 路径解析脚本" \
 		"  UV=$(UV)                       # Python 工具统一通过 uv 运行" \
 		"  PRE_COMMIT=$(PRE_COMMIT)       # pre-commit 运行入口" \
 		"  SKILLS=$(SKILLS)"
@@ -61,6 +63,22 @@ skills-update:
 		for skill in $(SKILLS); do \
 			echo "Updating $$skill"; \
 			npx skills add $(SKILLS_SOURCE) --skill "$$skill" $(SKILLS_AGENT_ARGS) --yes; \
+		done
+	@$(MAKE) --no-print-directory skills-update-projects
+
+skills-update-projects:
+	@set -euo pipefail; \
+		workspace_root="$$(pwd)"; \
+		mkdir -p "$(SKILLS_DIR)"; \
+		python3 "$(PROJECT_SKILLS_SCRIPT)" "$$workspace_root" | while IFS= read -r skill_dir; do \
+			skill_name="$${skill_dir##*/}"; \
+			dest="$$workspace_root/$(SKILLS_DIR)/$$skill_name"; \
+			if [ -e "$$dest" ] && [ ! -L "$$dest" ]; then \
+				echo "Cannot mount project skill over directory: $$dest" >&2; \
+				exit 1; \
+			fi; \
+			ln -sfn "$$skill_dir" "$$dest"; \
+			echo "Mounted project skill $$skill_name -> $$skill_dir"; \
 		done
 
 skills-mount:

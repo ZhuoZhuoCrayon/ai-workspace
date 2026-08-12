@@ -1,9 +1,9 @@
 ---
 name: project-mgr
-title: project-mgr — 项目管理
 description: >
   通过 repos.json 注册和管理工作区中的项目。
-  当用户想要接入项目、移除项目、询问项目设置规范，或消息中提到已注册项目名并需要定位 local_path 时使用。
+  当用户想要接入项目、移除项目、注册项目提供的 skills、询问项目设置规范，
+  或消息中提到已注册项目名并需要定位 local_path 时使用。
 ---
 
 # project-mgr — 项目管理
@@ -110,3 +110,42 @@ description: >
 2）通过 `cd <local_path>` 切换到项目目录，阅读项目级别规范（如 `CONTRIBUTING.md`、`README.md`、`AGENTS.md` 等）。
 
 3）加载 `knowledge/<name>/` 下的项目知识库作为上下文，**按需**进行检索和写入。
+
+## 0x04 项目 Skills 管理
+
+项目可以在注册信息中声明需要挂载到工作区的 skills。`skills` 是项目级数组，每项对应项目内的一个 skill 根目录：
+
+```json
+{
+  "name": "ai-docs",
+  "local_path": "/Users/xxx/ai-docs",
+  "skills": [
+    {
+      "dir": "apm-rum/skills",
+      "skills": ["kube-switch"]
+    }
+  ]
+}
+```
+
+字段规则：
+
+- `skills[].dir` 必填，使用相对 `local_path` 的目录路径。
+- `skills[].skills` 选填。填写时只加载列出的 skill；省略或使用空数组时扫描 `dir` 的直接子目录，加载包含 `SKILL.md` 的目录。
+- 同一个项目可配置多个 skill 根目录。
+
+用户要求注册项目 skills 时：
+
+1. 从 `repos.json` / `private/repos.json` 定位项目；未注册时先执行 `0x01`。
+2. 确认 `dir` 存在，并检查候选目录包含 `SKILL.md`。
+3. 汇总项目、registry、`dir` 和选定 skills，向用户确认。
+4. 用户确认后写入项目的 `skills` 字段；不要在交互阶段创建符号链接。
+5. 提示用户执行 `make skills-update` 更新工作区挂载。
+
+读取内外部项目依赖的 skill 绝对路径：
+
+```bash
+python3 .agents/skills/project-mgr/scripts/list_skills.py "$(pwd)"
+```
+
+脚本只读取配置并逐行输出绝对路径。符号链接由工作区 `Makefile` 管理。
