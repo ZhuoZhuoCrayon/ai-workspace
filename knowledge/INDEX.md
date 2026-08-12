@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-08-09
+> 最后更新：2026-08-10
 
 ## 0x01 项目知识
 
@@ -21,6 +21,7 @@
 
 ## 0x02 最近更新
 
+- 2026-08-10：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（统一 APM 查询继承链、Target 协议和预计算层级）
 - 2026-08-09：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（统一 Span 接口命名、里程碑和 `/rum/search/{API}/` 路由）
 - 2026-08-08：更新 [0 点活动上线导致 RPC 指标 series 暴涨](./bkmonitor/troubleshooting/rpc-series-spike-on-activity-launch.md)（补充空投节事前预测与实测复盘，验证潜伏组合、未见服务代理和容器维度治理效果）
 - 2026-08-06：更新 [APM 跨应用 Trace 检索](./bkmonitor/issues/2026-07-31-apm-cross-app-trace-search/README.md)（[TencentBlueKing/bk-monitor #11794](https://github.com/TencentBlueKing/bk-monitor/pull/11794) review 通过，进入待合入阶段）
