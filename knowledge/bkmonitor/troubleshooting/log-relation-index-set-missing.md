@@ -1,7 +1,7 @@
 ---
 title: 服务关联索引集在日志检索页面部分缺失
 tags: [apm, log-relation, index-set, bug]
-description: 服务配置多个索引集后，日志检索页面只展示其中一个，根因是 process_service_relation 中 next() 只取首个匹配
+description: 服务配置多个索引集后，日志检索页面只展示其中一个，根因是 `process_service_relation` 中 `next()` 只取首个匹配
 created: 2026-03-10
 updated: 2026-03-10
 ---
