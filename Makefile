@@ -23,7 +23,7 @@ help:
 		"  make init-pre-commit     # 安装 git pre-commit hook" \
 		"  make init-skills         # 安装默认 skills" \
 		"  make verify              # 验证 pre-commit 和 skills" \
-		"  make skills-mount        # 将 .agents/skills 下的 skills 挂载到目标目录" \
+		"  make skills-mount        # 将 .agents/skills 下的 skills 挂载到目标目录，跳过仓库关联 skills" \
 		"  make skills-update       # 更新默认 skills，并挂载项目 skills" \
 		"Variables:" \
 		"  SKILLS_IDE=$(SKILLS_IDE)              # 默认仅安装到 Cursor；留空则不传 --agent" \
@@ -86,6 +86,10 @@ skills-mount:
 	workspace_root="$$(pwd)"; \
 	targets=($(SKILLS_MOUNT_TARGETS)); \
 	blacklist='$(strip $(SKILLS_MOUNT_BLACKLIST))'; \
+	while IFS= read -r skill_dir; do \
+		[ -n "$$skill_dir" ] || continue; \
+		blacklist="$$blacklist $${skill_dir##*/}"; \
+	done < <(python3 "$(PROJECT_SKILLS_SCRIPT)" "$$workspace_root"); \
 	for target in "$${targets[@]}"; do \
 		mkdir -p "$$target/skills"; \
 		find "$$target/skills" -maxdepth 1 -type l | while read -r link; do \
@@ -100,6 +104,7 @@ skills-mount:
 		[ -d "$$skill_dir" ] || continue; \
 		skill_name="$${skill_dir##*/}"; \
 		if [[ " $$blacklist " == *" $$skill_name "* ]]; then \
+			echo "Ignored $$skill_name"; \
 			continue; \
 		fi; \
 		src="$$workspace_root/$$skill_dir"; \

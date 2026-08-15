@@ -71,6 +71,8 @@ make skills-mount
 
 默认挂载目标由 `SKILLS_MOUNT_TARGETS` 控制。
 
+`repos.json` / `private/repos.json` 中声明的项目 skills 会自动加入 ignore，不挂到 Agent 目录。
+
 如需跳过部分 skill，可以覆盖 `SKILLS_MOUNT_BLACKLIST`。
 
 ## 0x04 提交前检查
