@@ -4,7 +4,7 @@ tags: [rum, apm, query, span, view, session, factory, unify-query]
 issue: ./README.md
 description: 通过统一 Target、查询基类和 Level 工厂收敛 RUM 与 APM 查询
 created: 2026-08-07
-updated: 2026-08-10
+updated: 2026-08-12
 ---
 
 # RUM 分层统一查询 —— 实施方案
@@ -142,30 +142,23 @@ classDiagram
 
 ### c. APM 查询适配
 
-APM 查询差异由 `TraceDatasourceTarget` 承载，并在表选择处收敛：Span 与原始 Trace 查询读取 `table_id`，预计算 Trace 查询读取 `trace` 层级表。
+APM 查询只在 Target 构造和结果表选择上保留差异；过滤、聚合与列表查询复用统一基类。
 
 ```mermaid
 flowchart LR
-    Proxy["QueryProxy"] --> Target["list[TraceDatasourceTarget]<br/>table_id · app · retention · levels"]
+    Proxy["QueryProxy"] --> Target["TraceDatasourceTarget"]
     Target -- "table_id" --> Span["SpanQuery"]
     Target -- "table_id" --> Origin["OriginTraceQuery"]
     Target -- "levels: trace" --> Trace["TraceQuery"]
 
-    Span --> APMBase["APM BaseQuery"]
+    Span --> APMBase["APM BaseQuery<br/>retention · Scope · filter"]
     Origin --> APMBase
     Trace --> APMBase
-    APMBase --> Filter["APMQueryFilterMixin"]
-    APMBase --> DataSourceBase["DataSourceBaseQuery"]
+    APMBase --> DataSourceBase["DataSourceBaseQuery<br/>aggregation · list"]
     DataSourceBase --> UQ["UnifyQuery"]
 ```
 
-`APM BaseQuery` 负责 Target 解析、保留时间范围、业务 Scope 和 APM 过滤适配。通用 `DataSourceBaseQuery` 负责 TopK、聚合、候选值和图表配置等存储查询原语。
-
-`query_field_topk()`、`query_field_aggregated_value()` 和 `query_option_values()` 统一由 `APM BaseQuery` 暴露。列表字段取决于具体表结构，`SpanQuery`、`TraceQuery` 和 `OriginTraceQuery` 各自构造 Query 列表，不增加只转发排序与字段选择的中间抽象。
-
-三类 Query 的列表查询直接复用 `DataSourceBaseQuery._query_list()` 并返回列表。`QueryProxy` 负责包装 `TraceInfoList`，兼容原协议并固定返回 `total=0`；`query_simple_info()` 遵循相同边界。
-
-APM 适配层不保留 `time_range_queryset`、`log_q`、`_get_data_page`、`build_query_q`、`get_queries()` 和单 Query 属性 `q`。查询配置统一由 `build_queries()` 构造成 `list[QueryConfigBuilder]`，再交给 `_add_query()` 或 `_query_list()` 执行。
+具体 Query 构造查询配置并返回原始列表，`QueryProxy` 只负责协议包装。
 
 ## 0x03 开发方案
 
@@ -182,8 +175,6 @@ apm/core/handlers/query/
 ├── span_query.py                             # [Change] 使用原始表
 ├── origin_trace_query.py                     # [Change] 使用原始表
 └── trace_query.py                            # [Change] 使用 trace 层级预计算表
-
-apm/resources.py                              # [Change] 候选值固定查询 Trace
 
 packages/rum_web/
 ├── constants.py                              # [Change] RumQueryMode
@@ -247,9 +238,7 @@ Factory 只负责模式校验和 Level 实例化。
 | **[Change]** APM `BaseQuery` | `apm/core/handlers/query/base.py` |
 | **[Change]** `TraceQuery` / `OriginTraceQuery` / `SpanQuery` | `apm/core/handlers/query/` |
 
-`bkmonitor.data_source.utils.query.BaseQuery` 是存储查询原语的公共抽象。RUM Query 直接继承；APM Query 通过 `BaseQuery(APMQueryFilterMixin, DataSourceBaseQuery)` 适配 APM 过滤、保留时间和 Scope。
-
-APM 的 3 个 Query 均接收 `data_sources: list[TraceDatasourceTarget]`。`QueryProxy` 统一填充原始表、应用、`retention` 和可选的 `trace` 层级表，不再传递 `DEFAULT_DATASOURCE_CONFIGS` 或覆盖函数。
+`BaseQuery` 提供存储查询原语。RUM Query 直接继承；APM Query 叠加 `APMQueryFilterMixin`，处理过滤、保留时间和 Scope。`QueryProxy` 统一构造 Target，3 类 APM Query 只接收 `list[TraceDatasourceTarget]`。
 
 基础查询层提供以下原子能力：
 
@@ -263,17 +252,6 @@ query_field_aggregated_value
 query_detail
 query_fields
 ```
-
-`query_fields` 的查询目标携带 `table_id` 和 `space_uid`，由具体 Query 按表来源构造：
-
-```text
-原始表  → (target.table_id, bk_biz_id_to_space_uid(target.app.bk_biz_id))
-层级表  → (level_table_id, None)
-```
-
-`space_uid=None` 使用 UnifyQuery 特权模式，由请求层写入 `X-Bk-Scope-Skip-Space`。
-
-APM 候选值固定查询 Trace：Span 使用原始 Trace 表，Trace 使用预计算层级表。`QueryOptionValuesSerializer` 不再暴露 `datasource_type`，内部删除指标数据源分支。
 
 ### d. Level 与 Query 交互
 
@@ -506,7 +484,7 @@ class RumFieldTopKResource(Resource):
 | `test_query.py` | [a] 已实现 Query 复用 `BaseQuery`<br />[b] 接收 `list[TraceDatasourceTarget]`<br />[c] 具备 8 项原子能力 |
 | `test_level_handler.py` | [a] 基类只保存 `data_sources`<br />[b] 具体 Level 可组合多个 Query<br />[c] TopK 方法只接收单个字段<br />[d] 9 项公共方法声明参数与返回类型<br />[e] 未知配置被拒绝，且不能覆盖公共参数或数据源 |
 | `test_query_resources.py` | [a] 9 个 URL、HTTP 方法、Resource 和 Level 方法一一对应<br />[b] Resource 不依赖公共基类<br />[c] `extra_config` 与公共参数独立传入 Level |
-| `apm/tests/test_unified_query_base.py` | [a] APM 继承通用基类<br />[b] 3 类 Query 统一接收 Target 列表<br />[c] Proxy 统一构造原始表与预计算层级<br />[d] 候选值固定使用 Trace<br />[e] 列表查询复用 `_query_list()`，Proxy 固定补 `total=0`<br />[f] 查询配置保持列表形态，多 Target 不丢表 |
+| `apm/tests/test_unified_query_base.py` | [a] APM 继承通用基类<br />[b] 3 类 Query 统一接收 Target 列表<br />[c] Proxy 统一构造原始表与预计算层级<br />[d] 列表查询复用 `_query_list()`，Proxy 固定补 `total=0`<br />[e] 查询配置保持列表形态，多 Target 不丢表 |
 
 测试门禁：
 
@@ -520,7 +498,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 - `packages/rum_web/handlers/query/` 不导入 DRF、Resource 或页面模块。
 - Factory 不读取 `TraceDatasourceTarget.table_id` 或 `levels`。
 - 客户端请求无法覆盖 `TraceDatasourceTarget` 中的结果表。
-- APM Query 模块不存在 `DEFAULT_DATASOURCE_CONFIGS`、`overwrite_datasource_configs` 或 `METRIC_DATASOURCE`。
+- APM Query 模块不存在 `DEFAULT_DATASOURCE_CONFIGS` 或 `overwrite_datasource_configs`。
 - `TraceQuery`、`OriginTraceQuery` 和 `SpanQuery` 的构造签名统一为 `data_sources`。
 - APM 适配层不存在 `time_range_queryset`、`log_q`、`_get_data_page`、`build_query_q` 或单 Query 属性 `q`。
 
@@ -528,6 +506,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-08-12 09:00` | 里程碑 6 已通过 [TencentBlueKing/bk-monitor #11877](https://github.com/TencentBlueKing/bk-monitor/pull/11877) 合入，统一 APM 查询基类和 `TraceDatasourceTarget` 协议 |
 | `2026-08-10 22:00` | 统一 APM 查询继承链与 Target 协议：分析查询下沉到 APM 基类，列表查询由具体 Query 直接构造，所有查询配置保持 `list[QueryConfigBuilder]` 形态 |
 | `2026-08-09 09:00` | 统一 Span 接口命名、里程碑和 `/rum/search/{API}/` 路由 |
 | `2026-08-08 16:00` | 统一 Level 方法的参数、返回类型、命名和扩展边界 |
@@ -552,6 +531,6 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 | 🔄 | `<branch_name>` | 里程碑 3：提供 RUM Span 列表类接口（`list_records`、`view_config`、`get_fields_option_values`、`generate_query_string`） *[1]* | 待创建 |
 | 🔄 | `<branch_name>` | 里程碑 4：提供 RUM Span 分析类接口（`field_topk`、`field_statistics_info`、`field_statistics_graph`、`download_topk`） *[1]* | 待创建 |
 | 🔄 | `<branch_name>` | 里程碑 5：提供 RUM Span 详情类接口（`record_detail`、`generate_query_string`） *[1]* | 待创建 |
-| 🔄 | `master` | 里程碑 6：统一 APM 查询基类和 `TraceDatasourceTarget` 协议 | 待创建 |
+| ✅ | `feat/apm_trace/#1010158081137031784` | 里程碑 6：统一 APM 查询基类和 `TraceDatasourceTarget` 协议 | [TencentBlueKing/bk-monitor #11877](https://github.com/TencentBlueKing/bk-monitor/pull/11877) |
 
 - *[1] 里程碑 3～5 实施期间，随接口落地逐步补充 `rum_web/docs/api/search.md`。*

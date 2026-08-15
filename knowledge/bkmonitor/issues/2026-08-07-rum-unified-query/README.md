@@ -3,7 +3,7 @@ title: RUM 分层统一查询
 tags: [rum, apm, query, span, view, session, factory, unify-query]
 description: 用统一 Target 和查询基类承接 RUM 分层检索与 APM Trace 查询
 created: 2026-08-07
-updated: 2026-08-10
+updated: 2026-08-12
 ---
 
 # RUM 分层统一查询
