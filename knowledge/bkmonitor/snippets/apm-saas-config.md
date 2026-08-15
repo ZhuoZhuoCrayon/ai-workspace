@@ -1,10 +1,10 @@
 ---
 title: APM SaaS 配置
-tags: [apm, saas-config, code-redefine, log-relation, django-shell]
-description: 记录 APM SaaS 侧返回码重定义与服务关联日志配置脚本
+tags: [apm, saas-config, code-redefine, log-relation, log-filter, django-shell]
+description: 记录 APM SaaS 侧返回码重定义、服务关联日志与全局关联日志过滤规则的配置脚本
 language: python
 created: 2026-02-09
-updated: 2026-05-24
+updated: 2026-08-14
 ---
 
 # APM SaaS 配置
@@ -13,12 +13,13 @@ updated: 2026-05-24
 
 ### a. 适用场景
 
-在 Django shell 中批量维护 APM SaaS 配置，包括返回码重定义规则和服务关联日志规则。
+在 Django shell 中批量维护 APM SaaS 配置，包括返回码重定义规则、服务关联日志规则和全局关联日志的查询过滤条件。
 
 ### b. 使用边界
 
 - 返回码重定义写库后，需要重新构建并发布 APM 配置。
 - 服务关联日志脚本使用 `scope=SyncScope.ALL` 和 `is_delete=True`，适合确认脚本已包含应用全量规则的场景。
+- 全局关联日志脚本使用 `scope=SyncScope.GLOBAL` 和 `is_delete=False`，只做增改，适合在存量配置上增量补充。
 - `LogServiceRelation.value_list` 必须使用 `int` 类型，避免后续按索引集过滤时匹配失败。
 
 ## 0x02 代码片段
@@ -145,3 +146,74 @@ for relation in LogServiceRelation.get_relations(
 
 - 服务关联日志的唯一键包含 `bk_biz_id`、`app_name`、`service_name`、`log_type` 和 `related_bk_biz_id`。
 - `scope=SyncScope.ALL` 与 `is_delete=True` 会把当前应用下的记录收敛到 `records`。
+
+### c. 增量补充全局关联日志与过滤规则
+
+为应用配置全局关联日志（`is_global=True`、`service_name=""`），并补充查询时挂上的过滤条件。脚本可重复执行。
+
+```python
+from apm_web.constants import ServiceRelationLogTypeChoices, SyncScope
+from apm_web.models import Application, LogServiceRelation
+from bkmonitor.utils.request import set_request_username
+
+# APM 应用所在业务
+BK_BIZ_ID = 0
+# 索引集所在业务
+RELATED_BK_BIZ_ID = 0
+INDEX_SET_IDS = [0, 0]
+# ${service_name} 在查询时替换为当前 APM 服务名
+ADDITION = [{"field": "__ext.annotations.apm_server_name", "operator": "=", "value": ["${service_name}"]}]
+# 留空表示该业务下全部 APM 应用
+APP_NAMES = []
+
+set_request_username("admin")
+
+SCOPE = {
+    "bk_biz_id": BK_BIZ_ID,
+    "is_global": True,
+    "log_type": ServiceRelationLogTypeChoices.BK_LOG,
+    "related_bk_biz_id": RELATED_BK_BIZ_ID,
+}
+# service_name 参与唯一键比对，sync_relations 只会自动补 bk_biz_id 和 app_name
+RECORD = {**SCOPE, "service_name": "", "value": "", "addition": ADDITION}
+
+# value_list 必须是 int；排序消除顺序抖动，避免重复执行被判定为有差异
+index_set_ids = sorted(int(index_set_id) for index_set_id in INDEX_SET_IDS)
+
+app_names = APP_NAMES or list(Application.objects.filter(bk_biz_id=BK_BIZ_ID).values_list("app_name", flat=True))
+
+# 该唯一键没有 DB 约束，一次性取出并校验重复
+relations = list(LogServiceRelation.objects.filter(**SCOPE, app_name__in=app_names).order_by("id"))
+existing = {relation.app_name: relation for relation in relations}
+assert len(relations) == len(existing), f"存在重复全局配置：{[relation.id for relation in relations]}"
+
+for app_name in app_names:
+    relation = existing.get(app_name)
+    # sync_relations 是覆盖语义，存量索引集先取并集再提交
+    exists = relation.value_list if relation else []
+    value_list = sorted({int(value) for value in exists} | set(index_set_ids))
+    result = LogServiceRelation.sync_relations(
+        bk_biz_id=BK_BIZ_ID,
+        app_name=app_name,
+        records=[{**RECORD, "value_list": value_list}],
+        scope=SyncScope.GLOBAL,
+        is_delete=False,
+    )
+    print(app_name, value_list, result)
+
+# addition 不在 DEFAULT_KEYS 中，sync_relations 只在新建时写入，存量记录统一补一次
+print("addition", LogServiceRelation.objects.filter(**SCOPE, app_name__in=app_names).update(addition=ADDITION))
+```
+
+**写入语义**
+
+- `LogServiceRelation.DEFAULT_KEYS` 只有 `value` 和 `value_list`，`addition` 不参与 diff，`sync_relations` 仅在新建记录时写入。
+- 存量记录的过滤条件靠末尾那次 `update` 补齐，这是覆盖写，会抹掉脚本之外手工添加的过滤字段。
+- `scope=SyncScope.GLOBAL` 配 `is_delete=False` 只做增改，同应用下关联其他业务的全局记录不受影响。
+
+**生效条件**
+
+- `addition` 使用日志平台格式 `field / operator / value`，不是监控条件的 `key / method / value / condition`。
+- `${service_name}` 只在带服务名查询时替换并挂上，应用级查询只返回索引集，不加过滤。
+- 从 Span / Trace 详情进入日志时，`addition` 被 `span_id` / `trace_id` 的精确过滤整体覆盖。
+- 关联结果有 `5` 分钟缓存，写库后页面不会立即变化。

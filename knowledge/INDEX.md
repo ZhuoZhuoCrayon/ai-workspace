@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-08-10
+> 最后更新：2026-08-14
 
 ## 0x01 项目知识
 
@@ -21,9 +21,8 @@
 
 ## 0x02 最近更新
 
-- 2026-08-10：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（统一 APM 查询继承链、Target 协议和预计算层级）
+- 2026-08-14：更新 [APM SaaS 配置](./bkmonitor/snippets/apm-saas-config.md)（补充全局关联日志与查询过滤规则的可重入脚本）
+- 2026-08-12：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（精简 APM 查询分层与 Target 边界，并记录里程碑 6 合入）
 - 2026-08-09：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（统一 Span 接口命名、里程碑和 `/rum/search/{API}/` 路由）
 - 2026-08-08：更新 [0 点活动上线导致 RPC 指标 series 暴涨](./bkmonitor/troubleshooting/rpc-series-spike-on-activity-launch.md)（补充空投节事前预测与实测复盘，验证潜伏组合、未见服务代理和容器维度治理效果）
 - 2026-08-06：更新 [APM 跨应用 Trace 检索](./bkmonitor/issues/2026-07-31-apm-cross-app-trace-search/README.md)（[TencentBlueKing/bk-monitor #11794](https://github.com/TencentBlueKing/bk-monitor/pull/11794) review 通过，进入待合入阶段）
-- 2026-07-31：新增 [APM 跨应用 Trace 检索](./bkmonitor/issues/2026-07-31-apm-cross-app-trace-search/README.md)（通过 Trace 数据源域索引集和 Celery 同步，让 Trace Detail 返回同域跨应用 Span）
-- 2026-07-31：新增 [日志、调用链与事件枚举值查询接入 UnifyQuery](./bkmonitor/issues/2026-07-31-enum-values-unify-query/README.md)（枚举值统一进入 `UnifyQuery.query_dimensions()`，复用数据查询的灰度路由）

@@ -1,6 +1,6 @@
 # bkmonitor Snippets 索引
 
-> 最后更新：2026-06-28
+> 最后更新：2026-08-14
 
 ## 0x01 策略 & 告警
 
@@ -26,7 +26,7 @@
 | [APM 服务发现](./apm-service-discover.md) | `apm` `service` `discover` | APM 服务节点发现、端点发现、指标发现等代码片段 | 2026-02-09 |
 | [APM 事件索引集创建](./apm-index-set.md) | `apm` `index-set` `log-search` | 创建 APM 事件索引集的代码片段 | 2026-02-09 |
 | [APM 告警通知模板](./apm-notice-template.md) | `apm` `alert` `notice` `template` | APM 告警通知模板渲染和发送测试 | 2026-02-09 |
-| [APM SaaS 配置](./apm-saas-config.md) | `apm` `saas-config` `code-redefine` `log-relation` `django-shell` | 记录 APM SaaS 侧返回码重定义与服务关联日志配置脚本 | 2026-05-24 |
+| [APM SaaS 配置](./apm-saas-config.md) | `apm` `saas-config` `code-redefine` `log-relation` `log-filter` `django-shell` | 记录 APM SaaS 侧返回码重定义、服务关联日志与全局关联日志过滤规则的配置脚本 | 2026-08-14 |
 
 ## 0x04 统一数据源查询
 
