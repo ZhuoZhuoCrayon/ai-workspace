@@ -5,7 +5,7 @@
       "source": "anthropics/skills",
       "sourceType": "github",
       "skillPath": "skills/docx/SKILL.md",
-      "computedHash": "6962db07127ee540a56e4677f65576d0727668a1d67f7da8bc978f10791c2bfe"
+      "computedHash": "59c70107f8eae818bdfca7da685a6e4111aa519638b667775b794cb74987ec47"
     },
     "mcp-builder": {
       "source": "anthropics/skills",
@@ -23,7 +23,7 @@
       "source": "anthropics/skills",
       "sourceType": "github",
       "skillPath": "skills/pptx/SKILL.md",
-      "computedHash": "6b8b859d26f93aa059c9870d1ab76b44ab69e3d6757ce4a03cc94cb760888073"
+      "computedHash": "82eaf5daede5a1779aa17ccf06597cb209a0c2bd41d3a2f18bd45e0301a387fb"
     },
     "skill-creator": {
       "source": "anthropics/skills",
@@ -41,7 +41,7 @@
       "source": "anthropics/skills",
       "sourceType": "github",
       "skillPath": "skills/xlsx/SKILL.md",
-      "computedHash": "efd0c8011cf0677d8075cf93867ecec804f9a8754a777e1d2fdb46197e9c247f"
+      "computedHash": "f5945e6e76dc7c178375e5cdf3140959b30cbcd4570ec3dc62296812259fc38d"
     }
   }
 }
