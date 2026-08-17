@@ -4,7 +4,7 @@ tags: [rum, apm, query, span, view, session, factory, unify-query]
 issue: ./README.md
 description: 通过统一 Target、查询基类和 Level 工厂收敛 RUM 与 APM 查询
 created: 2026-08-07
-updated: 2026-08-12
+updated: 2026-08-18
 ---
 
 # RUM 分层统一查询 —— 实施方案
@@ -41,7 +41,7 @@ Resource
 
 本方案确定类关系、代码位置、Level 方法、Resource 路由和调用方式。以下内容不在范围内：
 
-- 请求字段、响应字段和错误码。
+- 除 `view_config` 外的请求字段、响应字段和错误码。
 - View、Session 的预计算链路与数据生产方式。
 - View、Session 查询原子的具体实现。
 - 各 Level 页面配置和查询参数的业务细节。
@@ -473,7 +473,80 @@ class RumFieldTopKResource(Resource):
 | `POST` /rum/search/list_records/ | `RumRecordsResource` | `list_records` |
 | `POST` /rum/search/record_detail/ | `RumRecordDetailResource` | `record_detail` |
 
-## 0x04 验收与验证
+## 0x04 核心协议
+
+
+### a. view_config
+
+```json
+{
+  "default_sort": ["-end_time"],
+  "fields": [
+    {
+      "name": "span_name",
+      "alias": "Span 名称",
+      "type": "keyword",
+      "is_searchable": true,
+      "is_agg": true,
+      "supported_operations": [],
+    },
+    {
+      "name": "elapsed_time",
+      "alias": "耗时",
+      "type": "long",
+      "unit": "us",
+      "is_searchable": true,
+      "is_agg": true,
+      "supported_operations": []
+    }
+  ],
+  "groups": [    
+    {
+      "name": "DEVICE_BROWSER",
+      "alias": "终端 & 浏览器",
+      "fields": [
+        {
+          "name": "resource.user_agent.name",
+          "alias": "代理名称",
+          "type": "keyword",
+          "is_searchable": true,
+          "is_agg": true,
+          "supported_operations": []
+        }
+      ]
+    },
+    {
+      "name": "WEB_VITALS",
+      "alias": "网页指标（Web Vitals）",
+      "fields": [
+        {
+          "name": "LCP",
+          "alias": "最大内容绘制",
+          "type": "double",
+          "unit": "ms",
+          "is_searchable": true,
+          "is_agg": true,
+          "supported_operations": []
+        }
+      ]
+    }
+  ],
+  "display_fields": [
+    "span_name", 
+	"attributes.span_type", 
+	"end_time", 
+	"elapsed_time", 
+	"status.code", 
+	"attributes.view.url_template", 
+	"user.id"
+  ]
+}
+```
+
+* *[1] `unit`：为非字符串类型补充单位，便于后续前端展示。*
+* *[2] 内置字段：后续会有类似 `LCP` 这类虚拟字段，此类字段除了在分组维护，也要放到外层 `fields`。*
+
+## 0x05 验收与验证
 
 新增测试位于 `packages/rum_web/tests/query/`：
 
@@ -502,27 +575,29 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 - `TraceQuery`、`OriginTraceQuery` 和 `SpanQuery` 的构造签名统一为 `data_sources`。
 - APM 适配层不存在 `time_range_queryset`、`log_q`、`_get_data_page`、`build_query_q` 或单 Query 属性 `q`。
 
-## 0x05 实施进展
+## 0x06 实施进展
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-08-18 00:00` | 确认 `view_config` 返回协议：`default_sort`、`fields`（含 `type`、`is_searchable`、`is_agg`、`supported_operations`）、`field_groups`、`display_fields` |
 | `2026-08-12 09:00` | 里程碑 6 已通过 [TencentBlueKing/bk-monitor #11877](https://github.com/TencentBlueKing/bk-monitor/pull/11877) 合入，统一 APM 查询基类和 `TraceDatasourceTarget` 协议 |
 | `2026-08-10 22:00` | 统一 APM 查询继承链与 Target 协议：分析查询下沉到 APM 基类，列表查询由具体 Query 直接构造，所有查询配置保持 `list[QueryConfigBuilder]` 形态 |
 | `2026-08-09 09:00` | 统一 Span 接口命名、里程碑和 `/rum/search/{API}/` 路由 |
 | `2026-08-08 16:00` | 统一 Level 方法的参数、返回类型、命名和扩展边界 |
 | `2026-08-07 19:00` | 完成分层设计：Level 以 `data_sources` 初始化，并可组合主查询与 Span 兜底查询 |
 
-## 0x06 参考
+## 0x07 参考
 
 - [<源码> bk-monitor/bkmonitor/data_source/utils/apm.py](https://github.com/TencentBlueKing/bk-monitor/blob/2067bb6ca8df7f7485c4583010919f21d80d29e8/bkmonitor/bkmonitor/data_source/utils/apm.py)
 - [<源码> bk-monitor/bkmonitor/data_source/utils/query.py](https://github.com/TencentBlueKing/bk-monitor/blob/2067bb6ca8df7f7485c4583010919f21d80d29e8/bkmonitor/bkmonitor/data_source/utils/query.py)
 - [<源码> bk-monitor/apm/core/handlers/query/base.py](https://github.com/TencentBlueKing/bk-monitor/blob/2067bb6ca8df7f7485c4583010919f21d80d29e8/bkmonitor/apm/core/handlers/query/base.py)
 - [<源码> bk-monitor/apm/core/handlers/query/proxy.py](https://github.com/TencentBlueKing/bk-monitor/blob/2067bb6ca8df7f7485c4583010919f21d80d29e8/bkmonitor/apm/core/handlers/query/proxy.py)
+- [<源码> bk-monitor/constants/otel_query.py](https://github.com/TencentBlueKing/bk-monitor/blob/2067bb6ca8df7f7485c4583010919f21d80d29e8/bkmonitor/constants/otel_query.py)
 - [<源码> bk-monitor/packages/rum_web/handlers/query/span.py](https://github.com/TencentBlueKing/bk-monitor/blob/2067bb6ca8df7f7485c4583010919f21d80d29e8/bkmonitor/packages/rum_web/handlers/query/span.py)
 - [<源码> bk-monitor/packages/apm_web/trace/views.py](https://github.com/TencentBlueKing/bk-monitor/blob/2067bb6ca8df7f7485c4583010919f21d80d29e8/bkmonitor/packages/apm_web/trace/views.py)
 - [RUM 数据协议](../../articles/2026-07-12-rum-span-data-protocol/README.md)
 
-## 0x07 版本锚点
+## 0x08 版本锚点
 
 | 状态 | 分支 | 里程碑 | PR |
 | --- | --- | --- | --- |
