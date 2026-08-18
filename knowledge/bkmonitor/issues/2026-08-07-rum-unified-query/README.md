@@ -39,6 +39,7 @@ APM 调用链固定为：`QueryProxy → list[TraceDatasourceTarget] → APM Bas
 - View、Session 基础查询只确定类名和代码位置，不展开实现。
 - `BaseRumLevelHandler` 只持有 `data_sources`，查询对象由具体 Level 组合。
 - Level 公共方法使用显式参数，差异化配置统一放入 `extra_config`。
+- `extra_config` 只在服务端构造，不作为接口参数。
 - 具体 Level 校验 `extra_config`，并拒绝覆盖公共参数或数据源。
 - 三类 Level 共用一组 `/rum/search/{API}/` URL，不为层级复制接口。
 

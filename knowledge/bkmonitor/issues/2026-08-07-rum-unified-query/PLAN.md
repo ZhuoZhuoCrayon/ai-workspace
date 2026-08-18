@@ -180,6 +180,7 @@ packages/rum_web/
 ├── constants.py                              # [Change] RumQueryMode
 ├── query/
 │   ├── resources.py                          # [Add] 9 个独立 Resource
+│   ├── serializers.py                        # [Add] 请求序列化器分层
 │   ├── views.py                              # [Add] SearchViewSet
 │   └── urls.py                               # [Add] ResourceRouter，生成 search/
 ├── urls.py                                   # [Change] 在根路径挂载 rum_web.query.urls
@@ -203,15 +204,19 @@ View、Session 文件只固定类名与扩展位置，其查询实现不属于�
 Factory 只接受 `span`、`view`、`session`。首期只注册 `span`。View、Session 就绪后再注册。
 
 ```python
-class RumQueryMode:
+class RumQueryMode(CachedEnum):
     SPAN = "span"
     VIEW = "view"
     SESSION = "session"
 
+    @classmethod
+    def choices(cls) -> list[tuple[str, str]]:
+        """枚举形态承接 choices 生成与取值容错，无需逐个维护选项列表。"""
+
 
 class RumLevelHandlerFactory:
     HANDLERS = {
-        RumQueryMode.SPAN: SpanLevelHandler,
+        RumQueryMode.SPAN.value: SpanLevelHandler,
     }
 
     @classmethod
@@ -410,6 +415,8 @@ class ViewLevelHandler(BaseRumLevelHandler):
 
 `extra_config` 的边界：
 
+- 只作为 Level 层的扩展位，不进入接口协议，客户端无法传入。
+- 由 Resource 按 Level 需要在服务端构造。
 - 具体 Level 按白名单解析。
 - 不得覆盖显式参数或 `data_sources`。
 - 不得整包传给 Query。
@@ -441,13 +448,31 @@ class RumFieldTopKResource(Resource):
             limit=data["limit"],
             filters=data["filters"],
             query_string=data["query_string"],
-            extra_config=data.get("extra_config"),
         )
 ```
 
-- `data_sources` 只从授权后的 `Application` 构造，客户端不能指定结果表。
+- `data_sources` 只从 `Application` 构造，客户端不能指定结果表。
 - View、Session 接入后，也在此处补入 `levels`。
-- Resource 只校验 `extra_config` 是对象；配置项由具体 Level 校验。
+- 请求序列化器不声明 `extra_config`，Level 差异化配置在服务端构造。
+- 除 `generate_query_string` 外，所有接口按应用实例鉴权；该接口只做过滤条件到查询串的文本转换，不返回业务数据，与 APM 保持一致不做实例鉴权。
+
+请求协议按「应用上下文 → 时间范围 → 检索条件」单链继承，接口只在叶子补充自身参数：
+
+```text
+FilterSerializer                            # 存储查询侧，value 收敛为字符串
+  └── QueryStringFilterSerializer           # 查询串渲染侧，value 保留 JSON 原类型
+
+BaseRumRequestSerializer                    # bk_biz_id、app_name、mode
+  ├── RumGenerateQueryStringRequestSerializer
+  └── BaseRumTimeRangeSerializer            # start_time、end_time
+        ├── RumViewConfigRequestSerializer
+        └── BaseRumSearchSerializer         # filters、query_string
+              └── 列表类与分析类接口叶子      # offset / limit / sort / fields / field
+```
+
+- 两类 Filter 的差异只在 `value`：存储查询侧对齐 UnifyQuery condition 的字符串协议，查询串渲染侧需保留数值与布尔原类型。
+- 分页数量、TopK 数量、枚举值数量语义不同，`limit` 只在叶子声明。
+- `record_detail` 不需要时间范围，直接继承 `BaseRumRequestSerializer`。
 
 ### f. Resource 接口
 
@@ -575,7 +600,7 @@ class RumFieldTopKResource(Resource):
 | `test_level_factory.py` | [a] 合法 `mode` 返回对应 Level<br />[b] 未注册模式明确失败<br />[c] `data_sources` 原样传入 Level |
 | `test_query.py` | [a] 已实现 Query 复用 `BaseQuery`<br />[b] 接收 `list[TraceDatasourceTarget]`<br />[c] 具备 8 项原子能力 |
 | `test_level_handler.py` | [a] 基类只保存 `data_sources`<br />[b] 具体 Level 可组合多个 Query<br />[c] TopK 方法只接收单个字段<br />[d] 9 项公共方法声明参数与返回类型<br />[e] 未知配置被拒绝，且不能覆盖公共参数或数据源 |
-| `test_query_resources.py` | [a] 9 个 URL、HTTP 方法、Resource 和 Level 方法一一对应<br />[b] Resource 不依赖公共基类<br />[c] `extra_config` 与公共参数独立传入 Level |
+| `test_query_resources.py` | [a] 9 个 URL、HTTP 方法、Resource 和 Level 方法一一对应<br />[b] Resource 不依赖公共基类<br />[c] 请求协议不接受 `extra_config`，客户端无法覆盖 Level 配置 |
 | `apm/tests/test_unified_query_base.py` | [a] APM 继承通用基类<br />[b] 3 类 Query 统一接收 Target 列表<br />[c] Proxy 统一构造原始表与预计算层级<br />[d] 列表查询复用 `_query_list()`，Proxy 固定补 `total=0`<br />[e] 查询配置保持列表形态，多 Target 不丢表 |
 
 测试门禁：
@@ -598,6 +623,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-08-18 15:00` | [a] 完成里程碑 3 首轮 PR（[#11887](https://github.com/TencentBlueKing/bk-monitor/pull/11887)）review<br />[b] 明确 `extra_config` 为 Level 层扩展位，不进入接口协议<br />[c] 确定请求序列化器单链分层：应用上下文 → 时间范围 → 检索条件，过滤条件按存储查询侧与查询串渲染侧拆分两类 |
 | `2026-08-18 10:00` | 确认检索接口返回协议：`view_config` 维护字段元数据与枚举别名；`get_fields_option_values` 返回字段路径到原始值列表 |
 | `2026-08-12 09:00` | 里程碑 6 已通过 [TencentBlueKing/bk-monitor #11877](https://github.com/TencentBlueKing/bk-monitor/pull/11877) 合入，统一 APM 查询基类和 `TraceDatasourceTarget` 协议 |
 | `2026-08-10 22:00` | 统一 APM 查询继承链与 Target 协议：分析查询下沉到 APM 基类，列表查询由具体 Query 直接构造，所有查询配置保持 `list[QueryConfigBuilder]` 形态 |
@@ -622,7 +648,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 | --- | --- | --- | --- |
 | ✅ | `feat/rum_base_search_module/#1010158081136933145` | 里程碑 1：提供 RUM 基础检索模块 | [TencentBlueKing/bk-monitor #11838](https://github.com/TencentBlueKing/bk-monitor/pull/11838) |
 | 🔄 | `feat/rum_base_query_fields/#1010158081136920078` | 里程碑 2：提供 RUM 字段元数据查询（`query_fields`） | [TencentBlueKing/bk-monitor #11840](https://github.com/TencentBlueKing/bk-monitor/pull/11840) |
-| 🔄 | `<branch_name>` | 里程碑 3：提供 RUM Span 列表类接口（`list_records`、`view_config`、`get_fields_option_values`、`generate_query_string`） *[1]* | 待创建 |
+| 🔄 | `feat/rum_span_list_api/#1010158081137033151` | 里程碑 3：提供 RUM Span 列表类接口（`list_records`、`view_config`、`get_fields_option_values`、`generate_query_string`） *[1]* | [TencentBlueKing/bk-monitor #11887](https://github.com/TencentBlueKing/bk-monitor/pull/11887) |
 | 🔄 | `<branch_name>` | 里程碑 4：提供 RUM Span 分析类接口（`field_topk`、`field_statistics_info`、`field_statistics_graph`、`download_topk`） *[1]* | 待创建 |
 | 🔄 | `<branch_name>` | 里程碑 5：提供 RUM Span 详情类接口（`record_detail`、`generate_query_string`） *[1]* | 待创建 |
 | ✅ | `feat/apm_trace/#1010158081137031784` | 里程碑 6：统一 APM 查询基类和 `TraceDatasourceTarget` 协议 | [TencentBlueKing/bk-monitor #11877](https://github.com/TencentBlueKing/bk-monitor/pull/11877) |
