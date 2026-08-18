@@ -34,7 +34,7 @@ APM 调用链固定为：`QueryProxy → list[TraceDatasourceTarget] → APM Bas
 
 ### b. 约束
 
-- 接口协议见 [实施方案 · 核心协议](./PLAN.md#0x04-核心协议)，本期先记录 `view_config`。
+- 接口协议见 [实施方案 · 核心协议](./PLAN.md#0x04-核心协议)，本期先记录 `view_config`、`get_fields_option_values`。
 - 本方案不设计 View、Session 的数据生产或预计算过程。
 - View、Session 基础查询只确定类名和代码位置，不展开实现。
 - `BaseRumLevelHandler` 只持有 `data_sources`，查询对象由具体 Level 组合。

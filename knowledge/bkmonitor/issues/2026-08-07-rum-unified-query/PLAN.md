@@ -375,7 +375,7 @@ class BaseRumLevelHandler(ABC):
         filters: list[types.Filter] | None = None,
         query_string: str = "",
         extra_config: dict[str, Any] | None = None,
-    ) -> dict[str, list[str]]:
+    ) -> dict[str, list[dict[str, str]]]:
         ...
 
     @abstractmethod
@@ -461,20 +461,19 @@ class RumFieldTopKResource(Resource):
 
 `query` 是内部模块名；`search` 是对外路径。`rum_web.urls` 在根路径挂载 `rum_web.query.urls`。
 
-| URL | Resource | Level 方法 |
-| --- | --- | --- |
-| `GET` /rum/search/view_config/ | `RumViewConfigResource` | `view_config` |
-| `POST` /rum/search/generate_query_string/ | `RumGenerateQueryStringResource` | `generate_query_string` |
-| `POST` /rum/search/field_topk/ | `RumFieldTopKResource` | `field_topk` |
-| `POST` /rum/search/field_statistics_info/ | `RumFieldStatisticsInfoResource` | `field_statistics_info` |
-| `POST` /rum/search/field_statistics_graph/ | `RumFieldStatisticsGraphResource` | `field_statistics_graph` |
-| `POST` /rum/search/download_topk/ | `RumDownloadTopKResource` | `download_topk` |
-| `POST` /rum/search/get_fields_option_values/ | `RumFieldsOptionValuesResource` | `get_fields_option_values` |
-| `POST` /rum/search/list_records/ | `RumRecordsResource` | `list_records` |
-| `POST` /rum/search/record_detail/ | `RumRecordDetailResource` | `record_detail` |
+| URL                                          | Resource                          | Level 方法                   |
+| -------------------------------------------- | --------------------------------- | -------------------------- |
+| `GET` /rum/search/view_config/               | `RumViewConfigResource`           | `view_config`              |
+| `POST` /rum/search/generate_query_string/    | `RumGenerateQueryStringResource`  | `generate_query_string`    |
+| `POST` /rum/search/field_topk/               | `RumFieldTopKResource`            | `field_topk`               |
+| `POST` /rum/search/field_statistics_info/    | `RumFieldStatisticsInfoResource`  | `field_statistics_info`    |
+| `POST` /rum/search/field_statistics_graph/   | `RumFieldStatisticsGraphResource` | `field_statistics_graph`   |
+| `POST` /rum/search/download_topk/            | `RumDownloadTopKResource`         | `download_topk`            |
+| `POST` /rum/search/get_fields_option_values/ | `RumFieldsOptionValuesResource`   | `get_fields_option_values` |
+| `POST` /rum/search/list_records/             | `RumRecordsResource`              | `list_records`             |
+| `POST` /rum/search/record_detail/            | `RumRecordDetailResource`         | `record_detail`            |
 
 ## 0x04 核心协议
-
 
 ### a. view_config
 
@@ -488,6 +487,7 @@ class RumFieldTopKResource(Resource):
       "type": "keyword",
       "is_searchable": true,
       "is_agg": true,
+      "is_list": true,
       "supported_operations": [],
     },
     {
@@ -497,6 +497,7 @@ class RumFieldTopKResource(Resource):
       "unit": "us",
       "is_searchable": true,
       "is_agg": true,
+      "is_list": true,
       "supported_operations": []
     }
   ],
@@ -511,6 +512,7 @@ class RumFieldTopKResource(Resource):
           "type": "keyword",
           "is_searchable": true,
           "is_agg": true,
+          "is_list": true,
           "supported_operations": []
         }
       ]
@@ -526,6 +528,7 @@ class RumFieldTopKResource(Resource):
           "unit": "ms",
           "is_searchable": true,
           "is_agg": true,
+          "is_list": false,
           "supported_operations": []
         }
       ]
@@ -545,6 +548,28 @@ class RumFieldTopKResource(Resource):
 
 * *[1] `unit`：为非字符串类型补充单位，便于后续前端展示。*
 * *[2] 内置字段：后续会有类似 `LCP` 这类虚拟字段，此类字段除了在分组维护，也要放到外层 `fields`。*
+* *[3] `is_list`：该字段是否允许在列表中展示，部分内置字段，仅提供分析和检索，不支持添加到表头。*
+
+### b. get_fields_option_values
+
+顶层键是字段路径，值是该字段的枚举列表。
+
+```json
+{
+  "kind": [
+    {"value": "1", "alias": "内部调用"},
+    {"value": "3", "alias": "同步主调"}
+  ],
+  "attributes.span_type": [
+    {"value": "view", "alias": "视图"},
+    {"value": "resource", "alias": "资源加载"}
+  ]
+}
+```
+
+* *[1] `value`：原始枚举值。*
+* *[2] `alias`：展示名。无枚举语义时与 `value` 相同。*
+
 
 ## 0x05 验收与验证
 
@@ -579,7 +604,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 
 | 时间 | 结论性进展 |
 | --- | --- |
-| `2026-08-18 00:00` | 确认 `view_config` 返回协议：`default_sort`、`fields`（含 `type`、`is_searchable`、`is_agg`、`supported_operations`）、`field_groups`、`display_fields` |
+| `2026-08-18 09:00` | 确认检索接口返回协议：`view_config`、`get_fields_option_values`（字段路径 → `{value, alias}` 列表） |
 | `2026-08-12 09:00` | 里程碑 6 已通过 [TencentBlueKing/bk-monitor #11877](https://github.com/TencentBlueKing/bk-monitor/pull/11877) 合入，统一 APM 查询基类和 `TraceDatasourceTarget` 协议 |
 | `2026-08-10 22:00` | 统一 APM 查询继承链与 Target 协议：分析查询下沉到 APM 基类，列表查询由具体 Query 直接构造，所有查询配置保持 `list[QueryConfigBuilder]` 形态 |
 | `2026-08-09 09:00` | 统一 Span 接口命名、里程碑和 `/rum/search/{API}/` 路由 |
