@@ -21,7 +21,7 @@
 
 ## 0x02 最近更新
 
-- 2026-08-18：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（实施方案补充 `view_config`、`get_fields_option_values` 返回协议）
+- 2026-08-18：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（实施方案将枚举别名收敛到 `view_config`）
 - 2026-08-14：更新 [APM SaaS 配置](./bkmonitor/snippets/apm-saas-config.md)（补充全局关联日志与查询过滤规则的可重入脚本）
 - 2026-08-12：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（精简 APM 查询分层与 Target 边界，并记录里程碑 6 合入）
 - 2026-08-09：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（统一 Span 接口命名、里程碑和 `/rum/search/{API}/` 路由）

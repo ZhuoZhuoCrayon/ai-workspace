@@ -375,7 +375,7 @@ class BaseRumLevelHandler(ABC):
         filters: list[types.Filter] | None = None,
         query_string: str = "",
         extra_config: dict[str, Any] | None = None,
-    ) -> dict[str, list[dict[str, str]]]:
+    ) -> dict[str, list[str]]:
         ...
 
     @abstractmethod
@@ -475,7 +475,7 @@ class RumFieldTopKResource(Resource):
 
 ## 0x04 核心协议
 
-### a. view_config
+`view_config` 返回列表页字段元数据。枚举别名挂在字段的 `option_values` 上；`get_fields_option_values` 只返回原始值。
 
 ```json
 {
@@ -488,7 +488,7 @@ class RumFieldTopKResource(Resource):
       "is_searchable": true,
       "is_agg": true,
       "is_list": true,
-      "supported_operations": [],
+      "supported_operations": []
     },
     {
       "name": "elapsed_time",
@@ -499,9 +499,22 @@ class RumFieldTopKResource(Resource):
       "is_agg": true,
       "is_list": true,
       "supported_operations": []
+    },
+    {
+      "name": "attributes.span_type",
+      "alias": "Span 类型",
+      "type": "keyword",
+      "is_searchable": true,
+      "is_agg": true,
+      "is_list": true,
+      "supported_operations": [],
+      "option_values": [
+        {"value": "view", "alias": "视图"},
+        {"value": "resource", "alias": "资源加载"}
+      ]
     }
   ],
-  "groups": [    
+  "groups": [
     {
       "name": "DEVICE_BROWSER",
       "alias": "终端 & 浏览器",
@@ -535,13 +548,13 @@ class RumFieldTopKResource(Resource):
     }
   ],
   "display_fields": [
-    "span_name", 
-	"attributes.span_type", 
-	"end_time", 
-	"elapsed_time", 
-	"status.code", 
-	"attributes.view.url_template", 
-	"user.id"
+    "span_name",
+    "attributes.span_type",
+    "end_time",
+    "elapsed_time",
+    "status.code",
+    "attributes.view.url_template",
+    "user.id"
   ]
 }
 ```
@@ -549,26 +562,7 @@ class RumFieldTopKResource(Resource):
 * *[1] `unit`：为非字符串类型补充单位，便于后续前端展示。*
 * *[2] 内置字段：后续会有类似 `LCP` 这类虚拟字段，此类字段除了在分组维护，也要放到外层 `fields`。*
 * *[3] `is_list`：该字段是否允许在列表中展示，部分内置字段，仅提供分析和检索，不支持添加到表头。*
-
-### b. get_fields_option_values
-
-顶层键是字段路径，值是该字段的枚举列表。
-
-```json
-{
-  "kind": [
-    {"value": "1", "alias": "内部调用"},
-    {"value": "3", "alias": "同步主调"}
-  ],
-  "attributes.span_type": [
-    {"value": "view", "alias": "视图"},
-    {"value": "resource", "alias": "资源加载"}
-  ]
-}
-```
-
-* *[1] `value`：原始枚举值。*
-* *[2] `alias`：展示名。无枚举语义时与 `value` 相同。*
+* *[4] `option_values`：联调时需和前端同学说明，存在别名时，字段分析/候选值使用 `{alias}（{value}）` 展示，列表使用 `{alias}`。*
 
 
 ## 0x05 验收与验证
@@ -604,7 +598,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 
 | 时间 | 结论性进展 |
 | --- | --- |
-| `2026-08-18 09:00` | 确认检索接口返回协议：`view_config`、`get_fields_option_values`（字段路径 → `{value, alias}` 列表） |
+| `2026-08-18 10:00` | 确认检索接口返回协议：`view_config` 维护字段元数据与枚举别名；`get_fields_option_values` 返回字段路径到原始值列表 |
 | `2026-08-12 09:00` | 里程碑 6 已通过 [TencentBlueKing/bk-monitor #11877](https://github.com/TencentBlueKing/bk-monitor/pull/11877) 合入，统一 APM 查询基类和 `TraceDatasourceTarget` 协议 |
 | `2026-08-10 22:00` | 统一 APM 查询继承链与 Target 协议：分析查询下沉到 APM 基类，列表查询由具体 Query 直接构造，所有查询配置保持 `list[QueryConfigBuilder]` 形态 |
 | `2026-08-09 09:00` | 统一 Span 接口命名、里程碑和 `/rum/search/{API}/` 路由 |
