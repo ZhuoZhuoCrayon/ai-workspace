@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-08-19
+> 最后更新：2026-08-23
 
 ## 0x01 项目知识
 
@@ -21,8 +21,8 @@
 
 ## 0x02 最近更新
 
+- 2026-08-23：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（同步 `view_config` 结构，保留 `origin_field` 与原枚举别名展示约定）
 - 2026-08-19：更新 [RUM 数据协议](./bkmonitor/articles/2026-07-12-rum-span-data-protocol/README.md)（新增前序 View 路由模板，并补充静态资源 URL 模板脱敏规则）
 - 2026-08-19：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（`view_config` 字段对象与 BaseQuery 对齐命名）
 - 2026-08-18：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（实施方案将枚举别名收敛到 `view_config`）
 - 2026-08-14：更新 [APM SaaS 配置](./bkmonitor/snippets/apm-saas-config.md)（补充全局关联日志与查询过滤规则的可重入脚本）
-- 2026-08-12：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（精简 APM 查询分层与 Target 边界，并记录里程碑 6 合入）

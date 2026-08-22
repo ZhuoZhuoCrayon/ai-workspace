@@ -4,7 +4,7 @@ tags: [rum, apm, query, span, view, session, factory, unify-query]
 issue: ./README.md
 description: 通过统一 Target、查询基类和 Level 工厂收敛 RUM 与 APM 查询
 created: 2026-08-07
-updated: 2026-08-19
+updated: 2026-08-23
 ---
 
 # RUM 分层统一查询 —— 实施方案
@@ -500,17 +500,40 @@ BaseRumRequestSerializer                    # bk_biz_id、app_name、mode
 
 ## 0x04 核心协议
 
-`view_config` 返回列表页字段元数据。枚举别名挂在字段的 `option_values` 上；`get_fields_option_values` 只返回原始值。
+### a. view_config
 
 ```json
 {
   "default_sort": ["-end_time"],
+  "span_type_display_fields": {
+    "view": [
+      "span_name",
+      "attributes.span_type",
+      "end_time",
+      "elapsed_time",
+      "status.code",
+      "attributes.view.url_template",
+      "attributes.user.id"
+    ],
+    "resource": [
+      "span_name",
+      "attributes.span_type",
+      "end_time",
+      "elapsed_time",
+      "status.code",
+      "attributes.view.url_template",
+      "attributes.user.id",
+      "attributes.resource.type",
+      "attributes.http.request.method"
+    ]
+  },
   "fields": [
     {
       "field_name": "span_name",
       "field_alias": "Span 名称",
       "field_type": "keyword",
       "origin_field": "span_name",
+      "is_real": true,
       "is_searchable": true,
       "is_agg": true,
       "is_list": true,
@@ -522,6 +545,7 @@ BaseRumRequestSerializer                    # bk_biz_id、app_name、mode
       "field_type": "long",
       "field_unit": "us",
       "origin_field": "elapsed_time",
+      "is_real": true,
       "is_searchable": true,
       "is_agg": true,
       "is_list": true,
@@ -532,6 +556,7 @@ BaseRumRequestSerializer                    # bk_biz_id、app_name、mode
       "field_alias": "Span 类型",
       "field_type": "keyword",
       "origin_field": "attributes",
+      "is_real": true,
       "is_searchable": true,
       "is_agg": true,
       "is_list": true,
@@ -540,40 +565,46 @@ BaseRumRequestSerializer                    # bk_biz_id、app_name、mode
         {"value": "view", "alias": "视图"},
         {"value": "resource", "alias": "资源加载"}
       ]
+    },
+    {
+      "field_name": "resource.user_agent.name",
+      "field_alias": "代理名称",
+      "field_type": "keyword",
+      "origin_field": "resource",
+      "is_real": true,
+      "is_searchable": true,
+      "is_agg": true,
+      "is_list": true,
+      "supported_operations": []
+    },
+    {
+      "field_name": "LCP",
+      "field_alias": "最大内容绘制",
+      "field_type": "double",
+      "field_unit": "ms",
+      "origin_field": "LCP",
+      "is_real": false,
+      "is_searchable": true,
+      "is_agg": true,
+      "is_list": false,
+      "supported_operations": []
     }
   ],
   "groups": [
     {
       "name": "DEVICE_BROWSER",
       "alias": "终端 & 浏览器",
-      "fields": [
-        {
-          "field_name": "resource.user_agent.name",
-          "field_alias": "代理名称",
-          "field_type": "keyword",
-          "origin_field": "resource",
-          "is_searchable": true,
-          "is_agg": true,
-          "is_list": true,
-          "supported_operations": []
-        }
+      "supported_span_types": ["resource", "action"],
+      "field_names": [
+        "resource.user_agent.name"
       ]
     },
     {
       "name": "WEB_VITALS",
       "alias": "网页指标（Web Vitals）",
-      "fields": [
-        {
-          "field_name": "LCP",
-          "field_alias": "最大内容绘制",
-          "field_type": "double",
-          "field_unit": "ms",
-          "origin_field": "LCP",
-          "is_searchable": true,
-          "is_agg": true,
-          "is_list": false,
-          "supported_operations": []
-        }
+      "supported_span_types": ["vital"],
+      "field_names": [
+        "LCP"
       ]
     }
   ],
@@ -584,15 +615,17 @@ BaseRumRequestSerializer                    # bk_biz_id、app_name、mode
     "elapsed_time",
     "status.code",
     "attributes.view.url_template",
-    "user.id"
+    "attributes.user.id"
   ]
 }
 ```
 
-* *[1] `field_unit`：为非字符串类型补充单位，便于后续前端展示。*
-* *[2] 内置字段：后续会有类似 `LCP` 这类虚拟字段，此类字段除了在分组维护，也要放到外层 `fields`。*
-* *[3] `is_list`：该字段是否允许在列表中展示，部分内置字段，仅提供分析和检索，不支持添加到表头。*
-* *[4] `option_values`：联调时需和前端同学说明，存在别名时，字段分析/候选值使用 `{alias}（{value}）` 展示，列表使用 `{alias}`。*
+- *[1] `origin_field` 保留字段的原始来源标识，不能用 `is_real` 替代。*
+- *[2] `is_real` 区分原始数据中真实存在的字段与计算、虚拟字段。*
+- *[3] `field_unit` 为非字符串类型补充单位，便于后续前端展示。*
+- *[4] `groups[].supported_span_types` 与 `span_type_display_fields` 只在 Span 视图下返回。*
+- *[5] `is_list` 表示字段是否允许在列表中展示；部分内置字段只用于分析和检索。*
+- *[6] `option_values` 存在别名时，字段分析和候选值使用 `{alias}（{value}）` 展示，列表使用 `{alias}`。*
 
 
 ## 0x05 验收与验证
@@ -605,7 +638,7 @@ BaseRumRequestSerializer                    # bk_biz_id、app_name、mode
 | `test_level_factory.py` | [a] 合法 `mode` 返回对应 Level<br />[b] 未注册模式明确失败<br />[c] `data_sources` 原样传入 Level |
 | `test_query.py` | [a] 已实现 Query 复用 `BaseQuery`<br />[b] 接收 `list[TraceDatasourceTarget]`<br />[c] 具备 8 项原子能力 |
 | `test_level_handler.py` | [a] 基类只保存 `data_sources`<br />[b] 具体 Level 可组合多个 Query<br />[c] TopK 方法只接收单个字段<br />[d] 9 项公共方法声明参数与返回类型<br />[e] 未知配置被拒绝，且不能覆盖公共参数或数据源 |
-| `test_query_resources.py` | [a] 9 个 URL、HTTP 方法、Resource 和 Level 方法一一对应<br />[b] Resource 不依赖公共基类<br />[c] 请求协议不接受 `extra_config`，客户端无法覆盖 Level 配置 |
+| `test_query_resources.py` | [a] 9 个 URL、HTTP 方法、Resource 和 Level 方法一一对应<br />[b] Resource 不依赖公共基类<br />[c] 请求协议不接受 `extra_config`，客户端无法覆盖 Level 配置<br />[d] `view_config` 保留 `origin_field`，顶层维护全量字段，分组通过字段名引用<br />[e] Span 视图返回按类型配置的默认列与分组适用范围 |
 | `apm/tests/test_unified_query_base.py` | [a] APM 继承通用基类<br />[b] 3 类 Query 统一接收 Target 列表<br />[c] Proxy 统一构造原始表与预计算层级<br />[d] 列表查询复用 `_query_list()`，Proxy 固定补 `total=0`<br />[e] 查询配置保持列表形态，多 Target 不丢表 |
 
 测试门禁：
@@ -628,6 +661,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-08-23 00:00` | 对齐 `view_config` 协议：[a] 顶层维护全量字段，分组改为字段名引用<br />[b] Span 视图补充按类型的默认列与分组适用范围<br />[c] 保留 `origin_field`，枚举别名继续按原协议展示 |
 | `2026-08-18 15:00` | [a] 完成里程碑 3 首轮 PR（[#11887](https://github.com/TencentBlueKing/bk-monitor/pull/11887)）review<br />[b] 明确 `extra_config` 为 Level 层扩展位，不进入接口协议<br />[c] 确定请求序列化器单链分层：应用上下文 → 时间范围 → 检索条件，过滤条件按存储查询侧与查询串渲染侧拆分两类 |
 | `2026-08-18 10:00` | 确认检索接口返回协议：`view_config` 维护字段元数据与枚举别名；`get_fields_option_values` 返回字段路径到原始值列表 |
 | `2026-08-12 09:00` | 里程碑 6 已通过 [TencentBlueKing/bk-monitor #11877](https://github.com/TencentBlueKing/bk-monitor/pull/11877) 合入，统一 APM 查询基类和 `TraceDatasourceTarget` 协议 |
@@ -644,6 +678,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 - [<源码> bk-monitor/apm/core/handlers/query/proxy.py](https://github.com/TencentBlueKing/bk-monitor/blob/2067bb6ca8df7f7485c4583010919f21d80d29e8/bkmonitor/apm/core/handlers/query/proxy.py)
 - [<源码> bk-monitor/constants/otel_query.py](https://github.com/TencentBlueKing/bk-monitor/blob/2067bb6ca8df7f7485c4583010919f21d80d29e8/bkmonitor/constants/otel_query.py)
 - [<源码> bk-monitor/packages/rum_web/handlers/query/span.py](https://github.com/TencentBlueKing/bk-monitor/blob/2067bb6ca8df7f7485c4583010919f21d80d29e8/bkmonitor/packages/rum_web/handlers/query/span.py)
+- [<协议> bk-monitor/packages/rum_web/docs/api/search.md](https://github.com/TencentBlueKing/bk-monitor/blob/5414f0b34d982baaddbeacee21740a3b142b64a8/bkmonitor/packages/rum_web/docs/api/search.md)
 - [<源码> bk-monitor/packages/apm_web/trace/views.py](https://github.com/TencentBlueKing/bk-monitor/blob/2067bb6ca8df7f7485c4583010919f21d80d29e8/bkmonitor/packages/apm_web/trace/views.py)
 - [RUM 数据协议](../../articles/2026-07-12-rum-span-data-protocol/README.md)
 
@@ -653,7 +688,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 | --- | --- | --- | --- |
 | ✅ | `feat/rum_base_search_module/#1010158081136933145` | 里程碑 1：提供 RUM 基础检索模块 | [TencentBlueKing/bk-monitor #11838](https://github.com/TencentBlueKing/bk-monitor/pull/11838) |
 | 🔄 | `feat/rum_base_query_fields/#1010158081136920078` | 里程碑 2：提供 RUM 字段元数据查询（`query_fields`） | [TencentBlueKing/bk-monitor #11840](https://github.com/TencentBlueKing/bk-monitor/pull/11840) |
-| 🔄 | `feat/rum_span_list_api/#1010158081137033151` | 里程碑 3：提供 RUM Span 列表类接口（`list_records`、`view_config`、`get_fields_option_values`、`generate_query_string`） *[1]* | [TencentBlueKing/bk-monitor #11887](https://github.com/TencentBlueKing/bk-monitor/pull/11887) |
+| 🔄 | `feat/rum_span_list_api/#1010158081137033151` | 里程碑 3：提供 RUM Span 列表类接口（`list_records`、`view_config`、`get_fields_option_values`、`generate_query_string`） *[1]* | [TencentBlueKing/bk-monitor #11887](https://github.com/TencentBlueKing/bk-monitor/pull/11887)<br />[TencentBlueKing/bk-monitor #12086](https://github.com/TencentBlueKing/bk-monitor/pull/12086) |
 | 🔄 | `<branch_name>` | 里程碑 4：提供 RUM Span 分析类接口（`field_topk`、`field_statistics_info`、`field_statistics_graph`、`download_topk`） *[1]* | 待创建 |
 | 🔄 | `<branch_name>` | 里程碑 5：提供 RUM Span 详情类接口（`record_detail`、`generate_query_string`） *[1]* | 待创建 |
 | ✅ | `feat/apm_trace/#1010158081137031784` | 里程碑 6：统一 APM 查询基类和 `TraceDatasourceTarget` 协议 | [TencentBlueKing/bk-monitor #11877](https://github.com/TencentBlueKing/bk-monitor/pull/11877) |
