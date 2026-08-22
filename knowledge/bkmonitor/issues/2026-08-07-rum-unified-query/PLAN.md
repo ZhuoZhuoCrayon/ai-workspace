@@ -4,7 +4,7 @@ tags: [rum, apm, query, span, view, session, factory, unify-query]
 issue: ./README.md
 description: 通过统一 Target、查询基类和 Level 工厂收敛 RUM 与 APM 查询
 created: 2026-08-07
-updated: 2026-08-18
+updated: 2026-08-19
 ---
 
 # RUM 分层统一查询 —— 实施方案
@@ -507,28 +507,31 @@ BaseRumRequestSerializer                    # bk_biz_id、app_name、mode
   "default_sort": ["-end_time"],
   "fields": [
     {
-      "name": "span_name",
-      "alias": "Span 名称",
-      "type": "keyword",
+      "field_name": "span_name",
+      "field_alias": "Span 名称",
+      "field_type": "keyword",
+      "origin_field": "span_name",
       "is_searchable": true,
       "is_agg": true,
       "is_list": true,
       "supported_operations": []
     },
     {
-      "name": "elapsed_time",
-      "alias": "耗时",
-      "type": "long",
-      "unit": "us",
+      "field_name": "elapsed_time",
+      "field_alias": "耗时",
+      "field_type": "long",
+      "field_unit": "us",
+      "origin_field": "elapsed_time",
       "is_searchable": true,
       "is_agg": true,
       "is_list": true,
       "supported_operations": []
     },
     {
-      "name": "attributes.span_type",
-      "alias": "Span 类型",
-      "type": "keyword",
+      "field_name": "attributes.span_type",
+      "field_alias": "Span 类型",
+      "field_type": "keyword",
+      "origin_field": "attributes",
       "is_searchable": true,
       "is_agg": true,
       "is_list": true,
@@ -545,9 +548,10 @@ BaseRumRequestSerializer                    # bk_biz_id、app_name、mode
       "alias": "终端 & 浏览器",
       "fields": [
         {
-          "name": "resource.user_agent.name",
-          "alias": "代理名称",
-          "type": "keyword",
+          "field_name": "resource.user_agent.name",
+          "field_alias": "代理名称",
+          "field_type": "keyword",
+          "origin_field": "resource",
           "is_searchable": true,
           "is_agg": true,
           "is_list": true,
@@ -560,10 +564,11 @@ BaseRumRequestSerializer                    # bk_biz_id、app_name、mode
       "alias": "网页指标（Web Vitals）",
       "fields": [
         {
-          "name": "LCP",
-          "alias": "最大内容绘制",
-          "type": "double",
-          "unit": "ms",
+          "field_name": "LCP",
+          "field_alias": "最大内容绘制",
+          "field_type": "double",
+          "field_unit": "ms",
+          "origin_field": "LCP",
           "is_searchable": true,
           "is_agg": true,
           "is_list": false,
@@ -584,7 +589,7 @@ BaseRumRequestSerializer                    # bk_biz_id、app_name、mode
 }
 ```
 
-* *[1] `unit`：为非字符串类型补充单位，便于后续前端展示。*
+* *[1] `field_unit`：为非字符串类型补充单位，便于后续前端展示。*
 * *[2] 内置字段：后续会有类似 `LCP` 这类虚拟字段，此类字段除了在分组维护，也要放到外层 `fields`。*
 * *[3] `is_list`：该字段是否允许在列表中展示，部分内置字段，仅提供分析和检索，不支持添加到表头。*
 * *[4] `option_values`：联调时需和前端同学说明，存在别名时，字段分析/候选值使用 `{alias}（{value}）` 展示，列表使用 `{alias}`。*
