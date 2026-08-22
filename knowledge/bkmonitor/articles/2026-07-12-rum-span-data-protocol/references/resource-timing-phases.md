@@ -4,6 +4,8 @@
 
 阶段名称靠近 Chrome Timing。每段时长用已上报的 `attributes.resource.*.duration` 计算，起点用对应的 `start`，单位为毫秒，相对该资源 `startTime`。
 
+产品按 `attributes.view.id` 关联 View 生命周期快照后，可用 `attributes.view.previous_url_template` 展示资源所属页面的前序路由。该字段与 `attributes.view.url_template` 使用同一模板规则，初始 View 为空字符串；它不参与 Resource Timing 阶段计算，也不直接写入 `resource` Span。
+
 ## 0x01 W3C Resource Timing
 
 规范记录的是时间点，不是产品上的色块。浏览器按发生顺序打点，产品上的每一段是相邻两点相减。来源：[Resource Timing](https://www.w3.org/TR/resource-timing/)。

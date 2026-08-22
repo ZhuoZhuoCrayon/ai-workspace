@@ -3,7 +3,7 @@ title: RUM 数据协议
 tags: [rum, span, metric, log, data-protocol, opentelemetry, web]
 description: 归档 bkmonitor RUM Web 的 Resource、Span、Metric 和 Log 协议，供数据上报、字段消费和协议核对使用。
 created: 2026-07-12
-updated: 2026-07-28
+updated: 2026-08-19
 ---
 本文记录 `@blueking/open-telemetry` 当前上报的 Resource、Span、Metric 和 Log 字段。
 
@@ -119,11 +119,12 @@ Session
 
 ### a. 基础字段
 
-| 字段                             | 状态                                                          | 类型   | 描述          | 备注                                             |
-| ------------------------------ | ----------------------------------------------------------- | ---- | ----------- | ---------------------------------------------- |
-| `attributes.user.id`           | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | str  | 用户 ID       | --                                             |
-| `attributes.span_type` *[1]*   | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | enum | Span 类型     | --                                             |
-| `attributes.outcome.type`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen)  | enum | 执行结果        | `success`、`warning`、`error`、`timeout`、`abort`。 |
+| 字段                           | 状态                                                         | 类型   | 描述      | 备注                                             |
+| ---------------------------- | ---------------------------------------------------------- | ---- | ------- | ---------------------------------------------- |
+| `attributes.user.id`         | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str  | 用户 ID   | --                                             |
+| `attributes.span_type` *[1]* | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | enum | Span 类型 | --                                             |
+| `attributes.outcome.type`    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | enum | 执行结果    | `success`、`warning`、`error`、`timeout`、`abort`。 |
+
 
 **[1] `attributes.span_type`**：
 
@@ -225,12 +226,13 @@ Aegis 将「连接类型」「网络质量」整合成 `netType`（`wifi`、`wir
 | 字段                                    | 状态                                                             | 类型     | 描述                      | 备注                                            |
 | ------------------------------------- | -------------------------------------------------------------- | ------ | ----------------------- | --------------------------------------------- |
 | `attributes.view.id`                  | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str    | 视图 ID                   |                                               |
-| `attributes.view.name`                | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str    | 视图名称                    | 如 `/apm/home`。                                |
-| `attributes.view.loading_type`        | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str    | 视图加载类型                  | --                                            |
+| `attributes.view.name` *[1]*          | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str    | 视图名称                    | 如 `/apm/home`。                                |
+| `attributes.view.loading_type` *[2]*  | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str    | 视图加载类型                  | --                                            |
 | `attributes.view.url`                 | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str    | 视图 URL                  | 如 `https://example.com/cur`。                  |
 | `attributes.view.previous`            | ![Development](https://img.shields.io/badge/-development-blue) | str    | 视图 URL（前一个）             | 如 `https://example.com/pre`。                  |
+| `attributes.view.previous_url_template` | ![Development](https://img.shields.io/badge/-development-blue) | str  | 前序视图路径模板                | 与 `view.url_template` 使用同一规则；初始 View 为空字符串。 |
 | `attributes.view.referrer`            | ![Development](https://img.shields.io/badge/-development-blue) | str    | 初始来源页面 URL              | 仅首次加载且值非空时上报，需进行 URL 脱敏。                      |
-| `attributes.view.url_template`        | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str    | 视图路径分组                  | 如 `/apm/home`。                                |
+| `attributes.view.url_template` *[3]*  | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str    | 视图路径分组                  | 如 `/apm/home`。                                |
 | `attributes.view.loading_time`        | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | number | 视图加载耗时（ms）              | 加载时间计算完成后上报。                                  |
 | `attributes.view.loading_time_source` | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | enum   | 视图加载耗时来源                | `auto`、`manual`。                              |
 | `attributes.view.first_byte`          | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | number | 首字节时间（ms）               | 仅初始导航存在。                                      |
@@ -238,12 +240,12 @@ Aegis 将「连接类型」「网络质量」整合成 `netType`（`wifi`、`wir
 | `attributes.view.dom_content_loaded`  | ![Stable\|43](https://img.shields.io/badge/-stable-lightgreen) | number | DOMContentLoaded 时间（ms） | 仅初始导航存在。                                      |
 | `attributes.view.dom_complete`        | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | number | DOM Complete 时间（ms）     | 仅初始导航存在。                                      |
 | `attributes.view.load_event`          | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | number | Load Event 时间（ms）       | 仅初始导航存在。                                      |
-| `attributes.view.phase`               | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | enum   | 视图生命周期阶段                | 枚举值：<br>- start<br>- update<br>- end          |
+| `attributes.view.phase` *[4]*         | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | enum   | 视图生命周期阶段                | 枚举值：<br>- start<br>- update<br>- end          |
 | `attributes.view.started_at`          | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | number | 视图开始时间（ms）              | 取 `performance.timeOrigin`。                   |
 | `attributes.view.version`             | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | int    | 视图事件版本号                 | 同一 `attributes.view.id` 从 `1` 开始递增，用于排序和幂等合并。 |
 | `attributes.view.end_reason`          | ![Stable](https://img.shields.io/badge/-stable-lightgreen)     | str    | 结束原因                    | --                                            |
 
-**[1] `attributes.view.name`**：默认取 `view.url_path_group`，也可由 `startView({ name })` 或 `setViewName` 设置。
+**[1] `attributes.view.name`**：仅由 `startView({ name })` 或 `setViewName` 显式设置；未设置时，展示层可回退到 `view.url_template`。
 
 **[2] `attributes.view.loading_type`**：
 
@@ -254,9 +256,9 @@ Aegis 将「连接类型」「网络质量」整合成 `netType`（`wifi`、`wir
 | `session_renewal` | 会话续期后重建         |
 | `bf_cache`        | 从浏览器 BFCache 恢复 |
 
-**[3] `attributes.view.url_path_group`**：用于聚合的页面路径，默认只是 URL pathname，不会自动将数字、UUID 替换为 `:id`，需要接入方配置分组逻辑。
+**[3] `attributes.view.url_template`**：用于聚合的页面路径。默认把数字 ID、UUID 和长十六进制段替换为 `:id`，也可由 `tracking.view.getUrlTemplate` 自定义。
 
-**[3] `attributes.view.phase`**：当前 View Span 的生命周期阶段，Schema v3 不再用一条长 Span 表达整个 View，而是发送多条瞬时生命周期 Span。
+**[4] `attributes.view.phase`**：当前 View Span 的生命周期阶段，Schema v3 不再用一条长 Span 表达整个 View，而是发送多条瞬时生命周期 Span。
 
 
 ```text
