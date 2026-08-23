@@ -9,16 +9,9 @@ updated: 2026-08-23
 
 # RUM 分层统一查询 —— 实施方案
 
-> 基于 [README.md](./README.md) 制定。
-
 ## 0x01 方案结论
 
 ### a. 目标调用链
-
-RUM 只保留一组查询接口：
-
-- `mode` 选择 Level。
-- Factory、Level、Query 共用同一份 `list[TraceDatasourceTarget]`。
 
 ```text
 Resource
@@ -39,7 +32,7 @@ Resource
 
 ### b. 方案边界
 
-本方案确定类关系、代码位置、Level 方法、Resource 路由和调用方式。以下内容不在范围内：
+不定义以下内容：
 
 - 除 `view_config` 外的请求字段、响应字段和错误码。
 - View、Session 的预计算链路与数据生产方式。
@@ -132,17 +125,13 @@ classDiagram
 | Session | `TraceDatasourceTarget.levels` 中 `name = "session"` 的 `table_ids` |
 | APM Trace 预计算 | `TraceDatasourceTarget.levels` 中 `name = "trace"` 的 `table_ids` |
 
-目标模型遵循以下约束：
+补充约束：
 
-- `table_id` 仍表示原始表。
-- `retention` 和 `levels` 均提供默认值，兼容只使用查询隔离能力的既有调用方。
-- APM Query 要求 Target 提供 `retention`，并由 `QueryProxy` 从 Trace 数据源统一填充。
-- `LevelTarget.name` 是通用结果表标识，不绑定 RUM 的 `mode`。
-- `levels` 也可承接 `trace` 等其他预计算结果表。
+- `retention` 和 `levels` 为可选字段，仅提供 `table_id` 的调用方无需调整。
+- `QueryProxy` 从 Trace 数据源填充 `retention`，APM Query 只消费 Target。
+- `LevelTarget.name` 标识预计算层级，不与 `RumQueryMode` 绑定。
 
 ### c. APM 查询适配
-
-APM 查询只在 Target 构造和结果表选择上保留差异；过滤、聚合与列表查询复用统一基类。
 
 ```mermaid
 flowchart LR
@@ -158,7 +147,7 @@ flowchart LR
     DataSourceBase --> UQ["UnifyQuery"]
 ```
 
-具体 Query 构造查询配置并返回原始列表，`QueryProxy` 只负责协议包装。
+`SpanQuery`、`OriginTraceQuery` 和 `TraceQuery` 构造查询配置并返回结果列表，`QueryProxy` 统一包装响应协议。
 
 ## 0x03 开发方案
 
@@ -197,11 +186,7 @@ packages/rum_web/
         └── session.py                        # [Reserved] SessionLevelHandler
 ```
 
-View、Session 文件只固定类名与扩展位置，其查询实现不属于本方案。
-
 ### b. `mode` 与 Factory
-
-Factory 只接受 `span`、`view`、`session`。首期只注册 `span`。View、Session 就绪后再注册。
 
 ```python
 class RumQueryMode(CachedEnum):
@@ -230,8 +215,6 @@ class RumLevelHandlerFactory:
         return cls.HANDLERS[mode](data_sources)
 ```
 
-Factory 只负责模式校验和 Level 实例化。
-
 ### c. 基础查询层
 
 | 变更点 | 代码位置 |
@@ -243,9 +226,7 @@ Factory 只负责模式校验和 Level 实例化。
 | **[Change]** APM `BaseQuery` | `apm/core/handlers/query/base.py` |
 | **[Change]** `TraceQuery` / `OriginTraceQuery` / `SpanQuery` | `apm/core/handlers/query/` |
 
-`BaseQuery` 提供存储查询原语。RUM Query 直接继承；APM Query 叠加 `APMQueryFilterMixin`，处理过滤、保留时间和 Scope。`QueryProxy` 统一构造 Target，3 类 APM Query 只接收 `list[TraceDatasourceTarget]`。
-
-基础查询层提供以下原子能力：
+查询原语：
 
 ```text
 query_list
@@ -259,10 +240,6 @@ query_fields
 ```
 
 ### d. Level 与 Query 交互
-
-`BaseRumLevelHandler.__init__()` 只保存 `data_sources`，不创建 Query。
-
-具体 Level 按业务需要组合 Query。
 
 ```mermaid
 classDiagram
@@ -413,17 +390,13 @@ class ViewLevelHandler(BaseRumLevelHandler):
         self.span_query = SpanQuery(data_sources)
 ```
 
-`extra_config` 的边界：
+`extra_config` 仅承载服务端 Level 差异化配置：
 
-- 只作为 Level 层的扩展位，不进入接口协议，客户端无法传入。
-- 由 Resource 按 Level 需要在服务端构造。
-- 具体 Level 按白名单解析。
-- 不得覆盖显式参数或 `data_sources`。
-- 不得整包传给 Query。
+- Resource 按 `mode` 构造，请求序列化器不对外声明。
+- Level 只读取白名单字段，并将解析后的值按参数传给 Query。
+- `extra_config` 不能覆盖显式参数或 `data_sources`。
 
 ### e. Resource 与 Level 交互
-
-以 `RumFieldTopKResource` 为例：
 
 ```python
 class RumFieldTopKResource(Resource):
@@ -451,12 +424,11 @@ class RumFieldTopKResource(Resource):
         )
 ```
 
-- `data_sources` 只从 `Application` 构造，客户端不能指定结果表。
-- View、Session 接入后，也在此处补入 `levels`。
-- 请求序列化器不声明 `extra_config`，Level 差异化配置在服务端构造。
-- 除 `generate_query_string` 外，所有接口按应用实例鉴权；该接口只做过滤条件到查询串的文本转换，不返回业务数据，与 APM 保持一致不做实例鉴权。
+- Resource 使用已鉴权的 `Application` 构造 `data_sources`，请求参数不能指定结果表。
+- 除 `generate_query_string` 外，所有 Resource 均按应用实例鉴权。
+- `generate_query_string` 只转换过滤条件，不查询业务数据，因此沿用 APM 的免实例鉴权规则。
 
-请求协议按「应用上下文 → 时间范围 → 检索条件」单链继承，接口只在叶子补充自身参数：
+请求序列化器按「应用上下文 → 时间范围 → 检索条件」单链继承，接口参数只在叶子声明：
 
 ```text
 FilterSerializer                            # 存储查询侧，value 收敛为字符串
@@ -470,13 +442,14 @@ BaseRumRequestSerializer                    # bk_biz_id、app_name、mode
               └── 列表类与分析类接口叶子      # offset / limit / sort / fields / field
 ```
 
-- 两类 Filter 的差异只在 `value`：存储查询侧对齐 UnifyQuery condition 的字符串协议，查询串渲染侧需保留数值与布尔原类型。
+- `FilterSerializer` 将 `value` 元素转换为字符串，满足 UnifyQuery condition 协议。
+- `QueryStringFilterSerializer` 保留 JSON 数值和布尔类型，用于渲染查询串。
 - 分页数量、TopK 数量、枚举值数量语义不同，`limit` 只在叶子声明。
 - `record_detail` 不需要时间范围，直接继承 `BaseRumRequestSerializer`。
 
 ### f. Resource 接口
 
-路由命名：
+路由结构：
 
 ```text
 /rum/                       # 项目根路由
@@ -484,7 +457,7 @@ BaseRumRequestSerializer                    # bk_biz_id、app_name、mode
       └── {API}/              # Resource action
 ```
 
-`query` 是内部模块名；`search` 是对外路径。`rum_web.urls` 在根路径挂载 `rum_web.query.urls`。
+`query` 是内部模块名，`search` 是对外路径。`rum_web.urls` 在根路径挂载 `rum_web.query.urls`。
 
 | URL                                          | Resource                          | Level 方法                   |
 | -------------------------------------------- | --------------------------------- | -------------------------- |
@@ -620,23 +593,22 @@ BaseRumRequestSerializer                    # bk_biz_id、app_name、mode
 }
 ```
 
-- *[1] `origin_field` 保留字段的原始来源标识，不能用 `is_real` 替代。*
-- *[2] `is_real` 区分原始数据中真实存在的字段与计算、虚拟字段。*
-- *[3] `field_unit` 为非字符串类型补充单位，便于后续前端展示。*
+- *[1] `origin_field` 标识字段在原始记录中的来源，打平字段使用所属顶层对象名。*
+- *[2] `is_real` 区分原始字段与计算、虚拟字段。*
+- *[3] `field_unit` 是可选计量单位，如 `us`、`ms`。*
 - *[4] `groups[].supported_span_types` 与 `span_type_display_fields` 只在 Span 视图下返回。*
-- *[5] `is_list` 表示字段是否允许在列表中展示；部分内置字段只用于分析和检索。*
+- *[5] `is_list = false` 的字段只用于分析和检索，不进入列表字段。*
 - *[6] `option_values` 存在别名时，字段分析和候选值使用 `{alias}（{value}）` 展示，列表使用 `{alias}`。*
-
 
 ## 0x05 验收与验证
 
-新增测试位于 `packages/rum_web/tests/query/`：
+测试位于 `packages/rum_web/tests/query/`：
 
 | 测试 | 核心断言 |
 | --- | --- |
 | `test_datasource_target.py` | [a] `levels` 默认空列表<br />[b] 现有 `TraceDatasourceTarget.build()` 行为不变<br />[c] 可携带多个层级结果表 |
 | `test_level_factory.py` | [a] 合法 `mode` 返回对应 Level<br />[b] 未注册模式明确失败<br />[c] `data_sources` 原样传入 Level |
-| `test_query.py` | [a] 已实现 Query 复用 `BaseQuery`<br />[b] 接收 `list[TraceDatasourceTarget]`<br />[c] 具备 8 项原子能力 |
+| `test_query.py` | [a] Query 复用 `BaseQuery`<br />[b] 接收 `list[TraceDatasourceTarget]`<br />[c] 具备 8 项原子能力 |
 | `test_level_handler.py` | [a] 基类只保存 `data_sources`<br />[b] 具体 Level 可组合多个 Query<br />[c] TopK 方法只接收单个字段<br />[d] 9 项公共方法声明参数与返回类型<br />[e] 未知配置被拒绝，且不能覆盖公共参数或数据源 |
 | `test_query_resources.py` | [a] 9 个 URL、HTTP 方法、Resource 和 Level 方法一一对应<br />[b] Resource 不依赖公共基类<br />[c] 请求协议不接受 `extra_config`，客户端无法覆盖 Level 配置<br />[d] `view_config` 保留 `origin_field`，顶层维护全量字段，分组通过字段名引用<br />[e] Span 视图返回按类型配置的默认列与分组适用范围 |
 | `apm/tests/test_unified_query_base.py` | [a] APM 继承通用基类<br />[b] 3 类 Query 统一接收 Target 列表<br />[c] Proxy 统一构造原始表与预计算层级<br />[d] 列表查询复用 `_query_list()`，Proxy 固定补 `total=0`<br />[e] 查询配置保持列表形态，多 Target 不丢表 |
@@ -648,7 +620,7 @@ pytest packages/rum_web/tests/query -q
 pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.py -q
 ```
 
-静态依赖同时确认：
+静态依赖约束：
 
 - `packages/rum_web/handlers/query/` 不导入 DRF、Resource 或页面模块。
 - Factory 不读取 `TraceDatasourceTarget.table_id` 或 `levels`。

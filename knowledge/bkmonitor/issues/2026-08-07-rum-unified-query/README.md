@@ -19,7 +19,7 @@ APM 后台仍通过独立查询基类和数据源配置字典选择原始表、�
 ### b. 目标
 
 - Resource 注册一组 RUM 检索接口，通过 `mode` 选择查询层级。
-- `RumLevelHandlerFactory` 首期注册 `span`，并为后续 `view`、`session` 保留同一映射入口。
+- `RumLevelHandlerFactory` 通过统一映射入口分派 `span`，`view` 和 `session` 复用相同扩展结构。
 - RUM Level 与 APM 的 3 类 Query 共用 `list[TraceDatasourceTarget]` 和通用查询原语。
 
 ## 0x02 实现路线
@@ -34,7 +34,6 @@ APM 调用链固定为：`QueryProxy → list[TraceDatasourceTarget] → APM Bas
 
 ### b. 约束
 
-- 接口协议见 [实施方案 · 核心协议](./PLAN.md#0x04-核心协议)，本期先记录 `view_config`。
 - 本方案不设计 View、Session 的数据生产或预计算过程。
 - View、Session 基础查询只确定类名和代码位置，不展开实现。
 - `BaseRumLevelHandler` 只持有 `data_sources`，查询对象由具体 Level 组合。
