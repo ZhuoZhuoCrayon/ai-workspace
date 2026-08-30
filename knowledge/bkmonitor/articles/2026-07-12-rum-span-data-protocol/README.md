@@ -3,7 +3,7 @@ title: RUM 数据协议
 tags: [rum, span, metric, log, data-protocol, opentelemetry, web]
 description: 归档 bkmonitor RUM Web 的 Resource、Span、Metric 和 Log 协议，供数据上报、字段消费和协议核对使用。
 created: 2026-07-12
-updated: 2026-08-19
+updated: 2026-08-30
 ---
 本文记录 `@blueking/open-telemetry` 当前上报的 Resource、Span、Metric 和 Log 字段。
 
@@ -331,9 +331,9 @@ View B                                 █████████████�
 | `attributes.resource.decoded_body_size`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int     | 解码后正文大小             | --                                                                      |
 | `attributes.resource.encoded_body_size`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int     | 编码后正文大小             | --                                                                      |
 | `attributes.resource.protocol`               | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 传输协议                | 浏览器提供下一跳协议时存在，如 `h2`、`h3`、`http/1.1`。                                   |
-| `attributes.resource.cache.hit`              | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | boolean | 是否缓存命中              | --                                                                      |
-| `attributes.resource.delivery_type`          | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 交付类型                | 浏览器提供交付类型时存在，如 `cache`、`navigational-prefetch`、`cache-storage`、`other`。 |
-| `attributes.resource.render_blocking_status` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | enum    | 渲染阻塞状态              | 浏览器提供渲染阻塞状态时存在，枚举值为 `blocking`、`non-blocking`                           |
+| `attributes.resource.cache.hit` *[3]*        | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | boolean | 缓存命中标记              | 命中时为 `true`，未命中或无法判断时不写入。                                               |
+| `attributes.resource.delivery_type` *[4]*          | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str     | 交付类型                | 浏览器返回非空值时存在。                                                         |
+| `attributes.resource.render_blocking_status` *[5]* | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | enum    | 渲染阻塞状态              | 浏览器支持该字段时存在。                                                         |
 | `attributes.resource.redirect.start`         | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 重定向开始时间             | --                                                                      |
 | `attributes.resource.redirect.duration`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | 重定向耗时               | --                                                                      |
 | `attributes.resource.worker.start`           | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number  | Service Worker 开始时间 | --                                                                      |
@@ -364,6 +364,45 @@ View B                                 █████████████�
 | ...                | ..                                           |
 
 **[2] 单位**：`xx_size` 为 bytes，`duration` & `start` 为毫秒。
+
+**[3] `attributes.resource.cache.hit`**
+
+满足任一条件时，SDK 写入 `true`：
+
+| 条件 | 结果 |
+| --- | --- |
+| `deliveryType=cache` | `true` |
+| `transferSize=0 && decodedBodySize>0` | `true` |
+| 其他 | 不写入，不写 `false` |
+
+ETag（实体标签）是服务器提供的资源版本标识。浏览器按以下流程校验缓存：
+
+```text
+缓存 ETag → If-None-Match → 304 → 复用本地正文
+```
+
+`deliveryType=cache` 与 `transferSize>0` 不冲突。[Resource Timing](https://www.w3.org/TR/resource-timing/) 把 `validated` 缓存的 `transferSize` 记为 `300`，不是正文大小。
+
+**[4] `attributes.resource.delivery_type`**：
+
+| 常见值                     | 描述                                                         |
+| ----------------------- | ---------------------------------------------------------- |
+| `cache`                 | 由浏览器 HTTP 缓存交付，包括本地缓存和网络校验缓存。                              |
+| `navigational-prefetch` | 由导航预取缓冲区交付。                                                |
+| `cache-storage`         | 由 Cache Storage 交付，包括 Service Worker Fetch Handler 和静态路由命中。 |
+
+规范来源：[Resource Timing](https://www.w3.org/TR/resource-timing/)、[Prefetch](https://wicg.github.io/nav-speculation/prefetch.html)、[Chromium Cache Storage Timing](https://chromium.googlesource.com/chromium/src/+/lkgr/docs/experiments/service-worker-static-routing-api-timing-info.md)。
+
+SDK 原样上报浏览器返回的非空值，空值不写入。
+
+**[5] `attributes.resource.render_blocking_status`**：
+
+| 值              | 描述          |
+| -------------- | ----------- |
+| `blocking`     | 资源可能阻塞页面渲染。 |
+| `non-blocking` | 资源不会阻塞页面渲染。 |
+
+取值定义见 [Resource Timing](https://www.w3.org/TR/resource-timing/)。浏览器不支持该字段时，SDK 不写入。
 
 ### i. action
 
