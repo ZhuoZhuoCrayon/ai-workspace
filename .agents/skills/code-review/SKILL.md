@@ -128,18 +128,41 @@ PR review 场景开始前必须补齐 assignees，未完成前不得继续 revie
 
 行内评论格式：
 
-```markdown
+````markdown
 **`path/to/file.go:42`** [P1]
 > return nil
 
 问题：错误返回值未处理，可能导致空指针。
-```
+
+建议：保留失败分支并返回原始错误：
+
+~~~go
+result, err := call()
+if err != nil {
+    return nil, err
+}
+~~~
+````
 
 评论内容结构：
 
 - 必须包含明确问题、影响范围和修复方向。
+- 默认使用「简洁文字 + 简洁核心伪代码」：文字说明风险、边界和修复目标，伪代码表达关键判断、数据流或调用结构；文字足够直接不能作为省略伪代码的理由。
+- 只有极短 review 可以省略伪代码：问题与建议正文合计少于 `15` 个中文字符或 `15` 个英文单词，且只涉及变量命名、拼写、措辞、格式或同等规模的单点替换。
 - 当对话中已经确认结构代码或关键实现形态时，PR 评论必须保留这些结构信号。
 - 不要把已确认的结构方案压缩成泛化建议，导致作者无法直接落代码。
+- 核心伪代码只提示关键变更：保留必要的判断、数据流和结构信号，省略样板代码与完整实现，不写成可直接套用的 diff。
+- 非代码文件使用等价的最小结构示例：例如配置片段、协议字段或 Markdown 目标结构；与核心伪代码遵循同一省略门禁。
+- 伪代码给开发者保留实现空间：只有影响正确性的边界细节必须明确写出。
+
+极短 review 示例：
+
+```markdown
+**`path/to/file.py:42`** [P2]
+> data = load_users()
+
+Rename `data` to `users_by_id`.
+```
 
 Bad：
 
@@ -157,19 +180,16 @@ Good：
 建议：去掉早退，保留已有 events，并在命中 RPC/tRPC 错误码时额外 append 返回码 `exception` event：
 
 ~~~python
-events: list[dict[str, Any]] = span.get(OtlpKey.EVENTS) or []
+events = span.get(OtlpKey.EVENTS) or []
 span[OtlpKey.EVENTS] = events
 
-attributes: dict[str, Any] = span.get(OtlpKey.ATTRIBUTES) or {}
-status_message: str = (span.get(OtlpKey.STATUS) or {}).get("message", "")
-
 for code_field, message_field in cls.RPC_EXCEPTION_FIELDS.items():
-    code: Any | None = attributes.get(code_field)
+    code = (span.get(OtlpKey.ATTRIBUTES) or {}).get(code_field)
     # 不使用 `if not code`，避免数值型错误码 0 被误判为空。
     if code is None or code == "":
         continue
 
-    ...
+    events.append(build_rpc_exception_event(...))
 ~~~
 ````
 
@@ -187,6 +207,8 @@ for code_field, message_field in cls.RPC_EXCEPTION_FIELDS.items():
 
 - 新增问题必须以风险为主，不把风格偏好伪装成阻塞问题。
 - 每个 finding 都要有代码位置、影响说明和修复方向。
+- 逐条检查 finding：除满足「少于 `15` 个中文字符或英文单词」的极短 review 外，每条评论都必须同时包含简洁文字和简洁核心伪代码。
+- 核心伪代码必须保持提示粒度，不得膨胀为完整实现或 diff。
 - 没有发现问题时，明确说明未发现阻塞问题，并列出残余风险或未覆盖检查。
 - 发布到 PR 的评论必须和用户最终确认的草稿完全一致。
 - 发布前逐条比对最终草稿，禁止在发布时二次改写、压缩、补充或删减。
