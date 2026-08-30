@@ -1,10 +1,10 @@
 ---
 title: APM SaaS 配置
-tags: [apm, saas-config, code-redefine, log-relation, log-filter, django-shell]
-description: 记录 APM SaaS 侧返回码重定义、服务关联日志与全局关联日志过滤规则的配置脚本
+tags: [apm, saas-config, code-redefine, log-relation, log-filter, k8s, workload, django-shell]
+description: 记录 APM SaaS 侧返回码重定义、服务关联日志、全局关联日志过滤规则与容器关联导入的配置脚本
 language: python
 created: 2026-02-09
-updated: 2026-08-14
+updated: 2026-08-27
 ---
 
 # APM SaaS 配置
@@ -13,7 +13,7 @@ updated: 2026-08-14
 
 ### a. 适用场景
 
-在 Django shell 中批量维护 APM SaaS 配置，包括返回码重定义规则、服务关联日志规则和全局关联日志的查询过滤条件。
+在 Django shell 中批量维护 APM SaaS 配置，覆盖返回码重定义、服务关联日志、全局关联日志过滤条件和容器关联导入。
 
 ### b. 使用边界
 
@@ -21,6 +21,7 @@ updated: 2026-08-14
 - 服务关联日志脚本使用 `scope=SyncScope.ALL` 和 `is_delete=True`，适合确认脚本已包含应用全量规则的场景。
 - 全局关联日志脚本使用 `scope=SyncScope.GLOBAL` 和 `is_delete=False`，只做增改，适合在存量配置上增量补充。
 - `LogServiceRelation.value_list` 必须使用 `int` 类型，避免后续按索引集过滤时匹配失败。
+- 容器关联脚本默认 `DRY_RUN=True`，`is_delete=True` 只收敛该应用下的 `k8s_event`。
 
 ## 0x02 代码片段
 
@@ -217,3 +218,79 @@ print("addition", LogServiceRelation.objects.filter(**SCOPE, app_name__in=app_na
 - `${service_name}` 只在带服务名查询时替换并挂上，应用级查询只返回索引集，不加过滤。
 - 从 Span / Trace 详情进入日志时，`addition` 被 `span_id` / `trace_id` 的精确过滤整体覆盖。
 - 关联结果有 `5` 分钟缓存，写库后页面不会立即变化。
+
+### d. 按命名规则导入容器关联
+
+按应用遍历已上报服务，用服务名规范化规则匹配 `trpc-*` 命名空间的 Deployment，再按应用调用 `EventServiceRelation.sync_relations` 写入 `k8s_event`。
+
+```python
+import re
+from collections import defaultdict
+
+from apm_web.constants import SyncScope
+from apm_web.models import Application, EventServiceRelation
+from apm_web.strategy.dispatch.entity import EntitySet
+from bkmonitor.models import BCSWorkload
+from bkmonitor.utils.request import set_request_username
+from monitor_web.data_explorer.event.constants import EventCategory
+
+BK_BIZ_ID = 150
+DRY_RUN = True
+APP_NAMES: list[str] = []  # 空=全量
+
+set_request_username("admin")
+
+ENV_RE = re.compile(r"^(?P<s>.+)\.(?:test|production|development|prod|dev|gz)\.\d+\.deploy$", re.I)
+PLAIN_RE = re.compile(r"^(?P<s>.+)\.deploy$", re.I)
+
+def stem(name: str) -> str:
+    m = ENV_RE.match(name) or PLAIN_RE.match(name)
+    return m.group("s").lower() if m else ""
+
+def norm(svc: str) -> str:
+    return re.sub(r"\s+", "", svc.strip()).replace("_", "").lower()
+
+wl_map: dict[str, list[dict]] = defaultdict(list)
+for w in BCSWorkload.objects.filter(
+    bk_biz_id=BK_BIZ_ID, type="Deployment", namespace__startswith="trpc-",
+    name__endswith=".deploy", deleted_at__isnull=True,
+).values("bcs_cluster_id", "namespace", "type", "name"):
+    s = stem(w["name"])
+    if s:
+        wl_map[s].append({"bcs_cluster_id": w["bcs_cluster_id"], "namespace": w["namespace"],
+                          "kind": w["type"], "name": w["name"]})
+
+apps = APP_NAMES or list(Application.objects.filter(bk_biz_id=BK_BIZ_ID).values_list("app_name", flat=True))
+for app_name in apps:
+    records: list[dict] = []
+    for svc in EntitySet(BK_BIZ_ID, app_name).service_names:
+        n = norm(svc)
+        stems = {n, n + "cgi"}
+        if n.count(".") >= 3:
+            stems.add(".".join(n.split(".")[1:]))
+        rels, seen = [], set()
+        for st in stems:
+            for w in wl_map.get(st, []):
+                key = (w["bcs_cluster_id"], w["namespace"], w["name"])
+                if key not in seen:
+                    seen.add(key)
+                    rels.append(w)
+        if rels:
+            records.append({"service_name": svc, "is_global": False, "table": EventCategory.K8S_EVENT.value,
+                            "relations": rels, "options": {}})
+    if not records:
+        print(app_name, "skip")
+        continue
+    if DRY_RUN:
+        print(app_name, "dry", len(records), sum(len(r["relations"]) for r in records))
+        continue
+    print(app_name, EventServiceRelation.sync_relations(
+        bk_biz_id=BK_BIZ_ID, app_name=app_name, records=records,
+        scope=SyncScope.ALL, is_delete=True, table=EventCategory.K8S_EVENT.value,
+    ))
+```
+
+- 匹配规则：`stem = lower(去空白 / 下划线)`，对齐 `{stem}.deploy` 或 `{stem}.{env}.{setid}.deploy`，并补 `{stem}cgi`；服务名超过 `3` 段点号才丢掉第一段。
+- 正式环境 namespace 为 `trpc-{cgi|svr|html}-prod`，脚本不过滤环境，test / prod / dev 一并写入。
+- 先看 `dry` 输出，再把 `DRY_RUN` 改成 `False` 落库。
+- `is_delete=True` 不删除 `system_event` 和其他关联。
