@@ -1,9 +1,9 @@
 ---
 title: APM Trace 写入 ES 字段类型冲突
-tags: [apm, trace, elasticsearch, mapping, attribute-filter, as-string, index-rollover, normaltypevalueconfig, all-app-config]
-description: APM Trace 字段在 keyword/object 或 long/string 之间冲突时的定位与修复方法，覆盖独立 drop 止血、APP 全量配置和 APM_GLOBAL 配合索引轮转的类型迁移
+tags: [apm, trace, elasticsearch, mapping, dynamic-template, ignore-above, attribute-filter, as-string, index-rollover]
+description: APM Trace 字段类型冲突与超长 keyword 的修复方法，覆盖字段过滤、类型统一、ignore_above 和索引轮转
 created: 2026-07-02
-updated: 2026-07-19
+updated: 2026-08-24
 ---
 
 # APM Trace 写入 ES 字段类型冲突
@@ -450,3 +450,96 @@ print(json.dumps(config, ensure_ascii=False, indent=2))
 `APM_GLOBAL` 的优先级低于应用自己的 APP 全量配置。应用如果单独配置了 `attribute_config` 或
 `resource_filter_config`，会整体覆盖对应的 Global 配置。更新后需重新下发目标应用；确认生成结果包含目标规则后，再按
 阶段 2 轮转索引。
+
+## 0x05 将动态数值统一为 float，并处理超长字符串
+
+同一耗时字段混用 OTLP `intValue` 和 `doubleValue` 会产生 `long/double` 冲突；超长字符串映射为 `keyword` 会触发
+Lucene `immense term`。以下脚本将 `*Ms` 字段统一映射为 `float`，并为 `attributes` 和 `events` 的字符串设置
+`ignore_above: 8191`。
+
+新增模板必须排在通用 `strings_as_keywords` 前面。Elasticsearch `7.14.2` 不支持数组形式的 `path_match` 和
+`match_mapping_type`，因此字符串路径及 `long/double` 类型需要分别配置。
+
+### a. 更新配置并轮转索引
+
+在 bkmonitor SaaS 的 Django shell 中执行：
+
+```python
+import json
+
+from metadata.models import ESStorage
+
+storage = ESStorage.objects.get(
+    table_id="100231_bkapm.trace_ugc_langfuse_test",
+    bk_tenant_id="system",
+)
+
+mapping_settings = json.loads(storage.mapping_settings)
+dynamic_templates = mapping_settings["dynamic_templates"]
+dynamic_templates[:] = [
+    template
+    for template in dynamic_templates
+    if not any(
+        name in template
+        for name in (
+            "payload_strings",
+            "attribute_strings",
+            "event_strings",
+            "langfuse_ms_longs_as_float",
+            "langfuse_ms_doubles_as_float",
+        )
+    )
+]
+
+dynamic_templates[0:0] = [
+    {
+        "langfuse_ms_longs_as_float": {
+            "path_match": "attributes.langfuse.observation.metadata.*Ms",
+            "match_mapping_type": "long",
+            "mapping": {"type": "float"},
+        }
+    },
+    {
+        "langfuse_ms_doubles_as_float": {
+            "path_match": "attributes.langfuse.observation.metadata.*Ms",
+            "match_mapping_type": "double",
+            "mapping": {"type": "float"},
+        }
+    },
+    {
+        "attribute_strings": {
+            "path_match": "attributes.*",
+            "match_mapping_type": "string",
+            "mapping": {"type": "keyword", "ignore_above": 8191},
+        }
+    },
+    {
+        "event_strings": {
+            "path_match": "events.*",
+            "match_mapping_type": "string",
+            "mapping": {"type": "keyword", "ignore_above": 8191},
+        }
+    },
+]
+
+storage.mapping_settings = json.dumps(mapping_settings, ensure_ascii=False)
+storage.save(update_fields=["mapping_settings"])
+
+if storage.update_index_v2(force_rotate=True) is False:
+    raise RuntimeError(f"{storage.table_id}: 索引未启用，轮转失败")
+
+storage.create_or_update_aliases(
+    ahead_time=storage.slice_gap,
+    force_rotate=True,
+    strict=True,
+)
+
+print("配置更新并完成索引轮转")
+```
+
+### b. 生效边界
+
+- 动态模板只对新索引生效，修改后必须轮转索引。
+- `ignore_above` 不截断 `_source`，只跳过超长值的索引和 `doc_values`。
+- `float` 适合毫秒耗时；高精度数值应统一映射为 `double`。
+- 旧索引保留原 Mapping，跨新旧索引查询仍可能报告字段类型冲突，直至旧索引过期或完成重建。
