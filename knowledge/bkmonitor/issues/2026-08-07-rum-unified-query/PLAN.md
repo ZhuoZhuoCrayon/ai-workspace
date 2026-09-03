@@ -4,7 +4,7 @@ tags: [rum, apm, query, span, view, session, factory, unify-query, semconv]
 issue: ./README.md
 description: 通过统一 Target、查询基类、Level 工厂和语义字段目录收敛 RUM 与 APM 查询
 created: 2026-08-07
-updated: 2026-08-28
+updated: 2026-09-03
 ---
 
 # RUM 分层统一查询 —— 实施方案
@@ -482,6 +482,7 @@ bkmonitor/
 │       │   ├── action_attributes.py
 │       │   └── *_attributes.py          # 按 view、network 等语义分段
 │       ├── metric/
+│       │   └── web_vitals.py            # LCP 等虚拟指标字段
 │       └── trace/
 │           ├── __init__.py              # SpanSpec
 │           ├── resource.py
@@ -500,12 +501,19 @@ bkmonitor/
 ```python
 # semconv/rum/field.py
 @dataclass(frozen=True, slots=True)
+class RatingLevel:
+    rating: str
+    value: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class FieldSpec:
     field_name: str
     field_alias: str = ""
     field_unit: str | None = None
     field_display_type: str | None = None
     option_values: type[CachedEnum] | None = None
+    rating_config: tuple[RatingLevel, ...] = ()
 
     def children(self) -> Iterator["FieldSpec"]:
         return (
@@ -513,6 +521,20 @@ class FieldSpec:
             for name, candidate in vars(type(self)).items()
             if name.isupper()
         )
+
+
+# semconv/rum/metric/web_vitals.py
+LCP = FieldSpec(
+    field_name="LCP",
+    field_alias="最大内容绘制",
+    field_unit="ms",
+    field_display_type="duration",
+    rating_config=(
+        RatingLevel(rating="good", value=2500),
+        RatingLevel(rating="needs_improvement", value=4000),
+        RatingLevel(rating="poor"),
+    ),
+)
 
 
 # semconv/rum/trace/events.py
@@ -562,7 +584,7 @@ class SpanSpec(FieldSpec):
     STATUS = Status(field_name="status")
     EVENTS = Events(field_name="events")
     ATTRIBUTES = Attributes(field_name="attributes")
-    LINKS = Links(field_name="links[]")
+    LINKS = Links(field_name="links")
 
     @classmethod
     def from_field(cls, field_name: str) -> FieldSpec:
@@ -698,7 +720,12 @@ assert SpanSpec.from_field("xxx") == FieldSpec("xxx")
       "is_searchable": true,
       "is_agg": true,
       "is_list": false,
-      "supported_operations": []
+      "supported_operations": [],
+      "rating_config": [
+        {"rating": "good", "value": 2500},
+        {"rating": "needs_improvement", "value": 4000},
+        {"rating": "poor"}
+      ]
     }
   ],
   "groups": [
@@ -738,6 +765,116 @@ assert SpanSpec.from_field("xxx") == FieldSpec("xxx")
 - *[5] `groups[].supported_span_types` 与 `span_type_display_fields` 只在 Span 视图下返回。*
 - *[6] `is_list = false` 的字段只用于分析和检索，不进入列表字段。*
 - *[7] `option_values` 存在别名时，字段分析和候选值使用 `{alias}（{value}）` 展示，列表使用 `{alias}`。*
+- *[8] `rating_config` 按数组顺序匹配。`value` 是包含性上界，单位沿用字段的 `field_unit`；未设置 `value` 的末项承接剩余值。*
+
+
+### b. RecordDetail（Span.Resource）
+
+#### 1）XHR 与 Fetch
+
+#### 2）others
+
+```json
+{
+  "span_type": "resource",
+  "overview": {
+    "title": "db.svg",  // attributes.url.template
+    "badges": [
+      {"key": "elapsed_time", "value": 60.3},
+      {"key": "attributes.resource.type", "value": "script"},
+      {"key": "attributes.http.response.status_code", "value": 200}
+    ],
+    "items": [
+      {"key": "attributes.resource.type", "value": "resource"},
+      {"key": "app_name", "value": "bkop"},
+      {"key": "service_name", "value": "bk-monitor"},
+      {"key": "attributes.view.url_template", "value": "/trace/home"},
+      {"key": "attributes.session.id", "value": "sess_f3lhlawshdf"},
+      {"key": "attributes.view.id", "value": "view_f3lhlawshdf"},
+      {"key": "start_time", "value": "2026-04-29 17:51:00"},
+      {"key": "end_time", "value": "2026-04-29 17:51:00"},
+      {"key": "attributes.user.id", "value": "user-001"},
+      {"key": "deployment.environment.name", "value": "prod"},
+    ]
+  },
+  "sections": [
+    {
+      "key": "key_info",
+      "alias": "关键信息",
+      "items": [
+        {
+          "key": "result",
+          "alias": "加载结果",
+          "data": {
+            "virtual.detail.message": "协议层请求成功",
+            "attributes.outcome.type": "success",
+	        "attributes.http.response.status_code": 200
+	      }
+        },
+        {"key": "cost", "alias": "加载耗时", "data": {"elapsed_time": 60.3}},
+        {
+          "key": "transfer",
+          "alias": "传输大小",
+          "data": {
+            "attributes.resource.transfer_size": 58810,
+            "attributes.resource.decoded_body_size": 58510,
+            "attributes.resource.encoded_body_size": 58510,
+            "virtual.detail.compression_ratio_percent": 0  // 0 ~ 1
+          }
+        },
+        {
+          "key": "delivery",
+          "alias": "交付类型",
+          "data": {
+            "attributes.resource.delivery_type": "",
+            "attributes.resource.cache.hit": false,
+          }
+        },
+        {
+          "key": "blocking",
+          "alias": "渲染影响",
+          "data": {"attributes.resource.render_blocking_status": "non-blocking"}
+        }
+      ]
+    },
+    {
+      "key": "resource_info",
+      "alias": "资源详情",
+      "subject": {
+        "type": "img",
+        "alias": "图片资源",
+        "title": "db.svg"
+      },
+      "items": [
+        {"key": "attributes.resource.type", "value": "img"},
+        {"key": "attributes.url.template", "alias": "URL 模板", "value": "/static/img/db.svg"},
+        {"key": "server.address", "alias": "服务端地址", "value": "cdn.example.com"},
+        {"key": "attributes.http.request.method", "alias": "请求方法", "value": "GET"},
+        {"key": "attributes.resource.protocol", "alias": "网络协议", "value": "h2"}
+      ]
+    },
+    {
+      "key": "request_timing",
+      "alias": "请求时序",
+      "data": {
+        "unit": "ms",
+        "total_duration": 60.3,
+        "notices": [
+          "TTFB 包含请求传输、服务端处理及首字节返回时间，仅凭浏览器时序无法直接判定服务端处理耗时。"
+        ],
+        "phases": [
+          {"key": "browser_preparation", "alias": "浏览器准备", "start_ms": 0, "duration_ms": 44.1},
+          {"key": "dns", "alias": "DNS", "start_ms": 44.1, "duration_ms": 0},
+          {"key": "tcp", "alias": "TCP", "start_ms": 44.1, "duration_ms": 0},
+          {"key": "tls", "alias": "TLS", "start_ms": 44.1, "duration_ms": 0},
+          {"key": "waiting_ttfb", "alias": "等待 TTFB", "start_ms": 44.1, "duration_ms": 13.8},
+          {"key": "content_download", "alias": "内容下载", "start_ms": 57.9, "duration_ms": 2.4}
+        ]
+      }
+    }
+  ]
+}
+```
 
 ## 0x05 验收与验证
 
@@ -749,9 +886,9 @@ assert SpanSpec.from_field("xxx") == FieldSpec("xxx")
 | `test_level_factory.py`                | [a] 合法 `mode` 返回对应 Level<br />[b] 未注册模式明确失败<br />[c] `data_sources` 原样传入 Level                                                                                                                                                                       |
 | `test_query.py`                        | [a] Query 复用 `BaseQuery`<br />[b] 接收 `list[TraceDatasourceTarget]`<br />[c] 具备 8 项原子能力                                                                                                                                                               |
 | `core/tests/test_enum.py`              | `CachedEnum` 保持 `from_value()` 缓存、未知值 `label` 和动态属性行为。                                                                                                                                                                                               |
-| `semconv/rum/tests/test_span_spec.py`  | [a] 原子字段不含结构前缀，`field_alias` 默认空串<br />[b] 复合字段与叶子字段统一注册，同一 `FieldSpec` 可出现在多个路径<br />[c] `from_field()` 返回原始共享对象<br />[d] 枚举保留 `label` 和 `choices()`<br />[e] 重复路径明确失败，未知路径返回仅含原始字段名的 `FieldSpec`                                                   |
+| `semconv/rum/tests/test_span_spec.py`  | [a] 原子字段不含结构前缀，`field_alias` 默认空串<br />[b] 复合字段与叶子字段统一注册，同一 `FieldSpec` 可出现在多个路径<br />[c] `from_field()` 返回原始共享对象<br />[d] 枚举保留 `label` 和 `choices()`<br />[e] LCP 评级阈值使用字段单位，末项省略 `value` 并兜底<br />[f] 重复路径明确失败，未知路径返回仅含原始字段名的 `FieldSpec` |
 | `test_level_handler.py`                | [a] 基类只保存 `data_sources`<br />[b] 具体 Level 可组合多个 Query<br />[c] TopK 方法只接收单个字段<br />[d] 9 项公共方法声明参数与返回类型<br />[e] 未知配置被拒绝，且不能覆盖公共参数或数据源                                                                                                              |
-| `test_query_resources.py`              | [a] 9 个 URL、HTTP 方法、Resource 和 Level 方法一一对应<br />[b] Resource 不依赖公共基类<br />[c] 请求协议不接受 `extra_config`，客户端无法覆盖 Level 配置<br />[d] `view_config` 保留 `origin_field`，顶层维护全量字段，分组通过字段名引用<br />[e] Span 视图返回按类型配置的默认列与分组适用范围<br />[f] semconv 只补充别名、单位和枚举选项 |
+| `test_query_resources.py`              | [a] 9 个 URL、HTTP 方法、Resource 和 Level 方法一一对应<br />[b] Resource 不依赖公共基类<br />[c] 请求协议不接受 `extra_config`，客户端无法覆盖 Level 配置<br />[d] `view_config` 保留 `origin_field`，顶层维护全量字段，分组通过字段名引用<br />[e] Span 视图返回按类型配置的默认列与分组适用范围<br />[f] semconv 补充别名、单位、展示类型、枚举选项和评级阈值 |
 | `apm/tests/test_unified_query_base.py` | [a] APM 继承通用基类<br />[b] 3 类 Query 统一接收 Target 列表<br />[c] Proxy 统一构造原始表与预计算层级<br />[d] 列表查询复用 `_query_list()`，Proxy 固定补 `total=0`<br />[e] 查询配置保持列表形态，多 Target 不丢表                                                                                   |
 
 测试门禁：
@@ -766,6 +903,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-08-31 00:00` | `FieldSpec` 与 `view_config` 增加 Web Vitals 评级阈值，阈值沿用字段单位并按包含性上界依次匹配 |
 | `2026-08-28 00:00` | `FieldSpec` 与 `view_config` 增加 `field_display_type`，`field_unit` 只标识原始上报单位 |
 | `2026-08-26 22:00` | 完成里程碑 3 的后续实现并通过 [TencentBlueKing/bk-monitor #12094](https://github.com/TencentBlueKing/bk-monitor/pull/12094) review：`view_config` 支持省略时间范围，查询层根据 `DataSourceTarget.retention` 补齐缺失边界，RUM 与 APM Query 统一接收数据源列表 |
 | `2026-08-24 00:00` | 统一字段语义与 `view_config` 协议：[a] 原子字段与 `Attributes`、`Events` 等复合字段统一使用 `FieldSpec`，由 `SpanSpec` 组成字段树<br />[b] `FieldRegistry` 遍历字段树生成完整路径，未注册字段保留原始字段名<br />[c] `CachedEnum` 只记录代码复制关系，枚举继续使用现有 `label` 和 `choices()` 协议 |
@@ -794,11 +932,11 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 | 状态 | 分支 | 里程碑 | PR |
 | --- | --- | --- | --- |
 | ✅ | `feat/rum_base_search_module/#1010158081136933145` | 里程碑 1：提供 RUM 基础检索模块 | [TencentBlueKing/bk-monitor #11838](https://github.com/TencentBlueKing/bk-monitor/pull/11838) |
-| 🔄 | `feat/rum_base_query_fields/#1010158081136920078` | 里程碑 2：提供 RUM 字段元数据查询（`query_fields`） | [TencentBlueKing/bk-monitor #11840](https://github.com/TencentBlueKing/bk-monitor/pull/11840) |
+| ✅ | `feat/rum_base_query_fields/#1010158081136920078` | 里程碑 2：提供 RUM 字段元数据查询（`query_fields`） | [TencentBlueKing/bk-monitor #11840](https://github.com/TencentBlueKing/bk-monitor/pull/11840) |
 | ✅ | `feat/rum_span_list_api/#1010158081137033151`<br />`feat/rum_view_config_add_span_type_display_fields/#1010158081137385339`<br />`feat/rum_view_config_api_add_span_type_display_fields/#1010158081137396316` | 里程碑 3：提供 RUM Span 列表类接口（`list_records`、`view_config`、`get_fields_option_values`、`generate_query_string`） *[1]* | [TencentBlueKing/bk-monitor #11887](https://github.com/TencentBlueKing/bk-monitor/pull/11887)<br />[TencentBlueKing/bk-monitor #12086](https://github.com/TencentBlueKing/bk-monitor/pull/12086)<br />[TencentBlueKing/bk-monitor #12094](https://github.com/TencentBlueKing/bk-monitor/pull/12094) |
 | 🔄 | `<branch_name>` | 里程碑 4：提供 RUM Span 分析类接口（`field_topk`、`field_statistics_info`、`field_statistics_graph`、`download_topk`） *[1]* | 待创建 |
 | 🔄 | `<branch_name>` | 里程碑 5：提供 RUM Span 详情类接口（`record_detail`、`generate_query_string`） *[1]* | 待创建 |
 | ✅ | `feat/apm_trace/#1010158081137031784` | 里程碑 6：统一 APM 查询基类和 `TraceDatasourceTarget` 协议 | [TencentBlueKing/bk-monitor #11877](https://github.com/TencentBlueKing/bk-monitor/pull/11877) |
-| 🔄 | `<branch_name>` | 里程碑 7：提供 RUM 语义字段目录和 `SpanSpec` 访问入口 | 待创建 |
+| 🔄 | `feat/rum_span_semconv_build/#1010158081137728855`<br />`feat/rum_span_semconv_better/#1010158081137884971` | 里程碑 7：提供 RUM 语义字段目录和 `SpanSpec` 访问入口 | [TencentBlueKing/bk-monitor #12295](https://github.com/TencentBlueKing/bk-monitor/pull/12295)<br />[TencentBlueKing/bk-monitor #12326](https://github.com/TencentBlueKing/bk-monitor/pull/12326) |
 
 - *[1] 里程碑 3～5 实施期间，随接口落地逐步补充 `rum_web/docs/api/search.md`。*
