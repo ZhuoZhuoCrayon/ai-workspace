@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-08-30
+> 最后更新：2026-09-03
 
 ## 0x01 项目知识
 
@@ -21,8 +21,8 @@
 
 ## 0x02 最近更新
 
+- 2026-09-03：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（同步里程碑 2 和里程碑 7 的 PR 状态）
+- 2026-09-03：更新 [RUM 数据协议](./bkmonitor/articles/2026-07-12-rum-span-data-protocol/README.md)（将脱敏状态从字段描述移至备注）
+- 2026-09-01：更新 [RUM 数据协议](./bkmonitor/articles/2026-07-12-rum-span-data-protocol/README.md)（补充 Action 挫败类型的枚举名称与判定备注）
+- 2026-08-31：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（LCP 字段增加评级阈值配置）
 - 2026-08-30：更新 [RUM 数据协议](./bkmonitor/articles/2026-07-12-rum-span-data-protocol/README.md)（补充缓存命中、ETag、交付类型与渲染阻塞状态说明）
-- 2026-08-28：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（字段元数据和 `view_config` 增加展示类型）
-- 2026-08-27：更新 [APM SaaS 配置](./bkmonitor/snippets/apm-saas-config.md)（补入按命名规则导入容器关联的 Django shell 脚本）
-- 2026-08-26：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（里程碑 3 完成实现并通过 PR #12094 review）
-- 2026-08-24：更新 [APM Trace 写入 ES 字段类型冲突](./bkmonitor/troubleshooting/apm-trace-es-field-mapping-conflict.md)（新增数值类型统一和超长 keyword 处理）
