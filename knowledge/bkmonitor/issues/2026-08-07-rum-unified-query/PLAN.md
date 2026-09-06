@@ -4,7 +4,7 @@ tags: [rum, apm, query, span, view, session, factory, unify-query, semconv]
 issue: ./README.md
 description: 通过统一 Target、查询基类、Level 工厂和语义字段目录收敛 RUM 与 APM 查询
 created: 2026-08-07
-updated: 2026-09-06
+updated: 2026-09-07
 ---
 
 # RUM 分层统一查询 —— 实施方案
@@ -735,114 +735,196 @@ assert SpanSpec.from_field("events.name").get_full_field_name() == "events.name"
 
 ### b. RecordDetail（Span.Resource）
 
-#### 1）XHR 与 Fetch
+#### 0）通用
 
-#### 2）others
+加载时序计算方式：
+
+| 指标                    | 计算方式                                                                            |
+| --------------------- | ------------------------------------------------------------------------------- |
+| `total_duration`      | `attributes.resource.download.start + attributes.resource.download.duration`    |
+| `prepare.start`       | `attributes.resource.redirect.start`                                            |
+| `prepare.duration`    | `attributes.resource.dns.start − attributes.resource.redirect.start`            |
+| `dns.start`           | `attributes.resource.dns.start`                                                 |
+| `dns.duration`        | `attributes.resource.dns.duration`                                              |
+| `connect.start`       | `attributes.resource.connect.start`                                             |
+| `connect.duration`    | `attributes.resource.connect.duration − attributes.resource.ssl.duration` *[1]* |
+| `tls.start`           | `attributes.resource.ssl.start`                                                 |
+| `tls.duration`        | `attributes.resource.ssl.duration`                                              |
+| `first_byte.start`    | `attributes.resource.first_byte.start`                                          |
+| `first_byte.duration` | `attributes.resource.first_byte.duration`                                       |
+| `download.start`      | `attributes.resource.download.start`                                            |
+| `download.duration`   | `attributes.resource.download.duration`                                         |
+
+- *[1] TLS 分段有效时扣除其耗时，明确无 TLS 时直接取 `connect.duration`，缺少 TLS 字段不能视为未发生握手。*
+
+#### 1）XHR & Fetch
 
 ```json
 {
-  "span_id": "xxx",
-  "span_type": "resource",
-  // 原始数据非重点，省略。
   "origin_data": {},
+  "span_id": "7d2f09b6f8bc31aa",
   "overview": {
-    "title": "db.svg",  // attributes.url.template
+    "title": "POST /api/orders",
     "badges": [
-      {"key": "elapsed_time", "value": 60.3},
-      {"key": "attributes.resource.type", "value": "script"},
-      {"key": "attributes.http.response.status_code", "value": 200}
+      {"field_name": "elapsed_time", "value": 128000},
+      {"field_name": "attributes.resource.type", "value": "fetch"},
+      {"field_name": "attributes.http.response.status_code", "value": 200}
     ],
     "items": [
-      {"key": "attributes.resource.type", "value": "resource"},
-      {"key": "app_name", "value": "bkop"},
-      {"key": "service_name", "value": "bk-monitor"},
-      {"key": "attributes.view.url_template", "value": "/trace/home"},
-      {"key": "attributes.session.id", "value": "sess_f3lhlawshdf"},
-      {"key": "attributes.view.id", "value": "view_f3lhlawshdf"},
-      {"key": "start_time", "value": "2026-04-29 17:51:00"},
-      {"key": "end_time", "value": "2026-04-29 17:51:00"},
-      {"key": "attributes.user.id", "value": "user-001"},
-      {"key": "deployment.environment.name", "value": "prod"},
+      {
+	    "field_name": "display.span_type",
+	    "field_alias": "类型",
+	    "value": "Resource(fetch)",
+	    "alias": "Resource(fetch)"
+	  },
+      {"field_name": "app_name", "value": "bkop"},
+      {"field_name": "attributes.view.url_template", "value": "/order/submit"},
+      {"field_name": "attributes.session.id", "value": "sess-001"},
+      {"field_name": "attributes.view.id", "value": "view-001"},
+      {"field_name": "start_time", "value": 1788451565200000},
+      {"field_name": "end_time", "value": 1788451565328000},
+      {"field_name": "attributes.user.id", "value": "user-001"},
+      {"field_name": "resource.deployment.environment.name", "value": "prod"}
     ]
   },
   "sections": [
     {
       "key": "key_info",
-      "alias": "关键信息",
-      "items": [
-        {
-          "key": "result",
-          "alias": "加载结果",
-          "data": {
-            "virtual.detail.message": "协议层请求成功",
-            "attributes.outcome.type": "success",
-	        "attributes.http.response.status_code": 200
-	      }
+      "type": "summary_cards",
+      "data": {
+        "request": {
+          "attributes.http.request.method": "POST",
+          "attributes.url.template": "/api/orders",
+          "attributes.url.full": "https://example.com/api/orders",
+          "attributes.server.address": "example.com"
         },
-        {"key": "cost", "alias": "加载耗时", "data": {"elapsed_time": 60.3}},
-        {
-          "key": "transfer",
-          "alias": "传输大小",
-          "data": {
-            "attributes.resource.transfer_size": 58810,
-            "attributes.resource.decoded_body_size": 58510,
-            "attributes.resource.encoded_body_size": 58510,
-            "virtual.detail.compression_ratio_percent": 0  // 0 ~ 1
-          }
+        "duration": {"elapsed_time": 128000},
+        "http_result": {
+          "attributes.http.response.status_code": 200,
+          "attributes.outcome.type": "success"
         },
-        {
-          "key": "delivery",
-          "alias": "交付类型",
-          "data": {
-            "attributes.resource.delivery_type": "",
-            "attributes.resource.cache.hit": false,
-          }
-        },
-        {
-          "key": "blocking",
-          "alias": "渲染影响",
-          "data": {"attributes.resource.render_blocking_status": "non-blocking"}
+        "transfer": {
+          "display.compression_ratio": 0.6295,
+          "attributes.resource.transfer_size": 3260,
+          "attributes.resource.encoded_body_size": 3120,
+          "attributes.resource.decoded_body_size": 8420,
         }
-      ]
+      }
     },
     {
-      "key": "resource_info",
-      "alias": "资源详情",
-      "subject": {
-        "type": "img",
-        "alias": "图片资源",
-        "title": "db.svg"
-      },
-      "items": [
-        {"key": "attributes.resource.type", "value": "img"},
-        {"key": "attributes.url.template", "alias": "URL 模板", "value": "/static/img/db.svg"},
-        {"key": "server.address", "alias": "服务端地址", "value": "cdn.example.com"},
-        {"key": "attributes.http.request.method", "alias": "请求方法", "value": "GET"},
-        {"key": "attributes.resource.protocol", "alias": "网络协议", "value": "h2"}
-      ]
-    },
-    {
-      "key": "request_timing",
-      "alias": "请求时序",
+      "key": "loading_timing",
+      "type": "waterfall",
       "data": {
         "unit": "ms",
-        "total_duration": 60.3,
-        "notices": [
-          "TTFB 包含请求传输、服务端处理及首字节返回时间，仅凭浏览器时序无法直接判定服务端处理耗时。"
-        ],
+        "total_duration": 128,
         "phases": [
-          {"key": "browser_preparation", "alias": "浏览器准备", "start_ms": 0, "duration_ms": 44.1},
-          {"key": "dns", "alias": "DNS", "start_ms": 44.1, "duration_ms": 0},
-          {"key": "tcp", "alias": "TCP", "start_ms": 44.1, "duration_ms": 0},
-          {"key": "tls", "alias": "TLS", "start_ms": 44.1, "duration_ms": 0},
-          {"key": "waiting_ttfb", "alias": "等待 TTFB", "start_ms": 44.1, "duration_ms": 13.8},
-          {"key": "content_download", "alias": "内容下载", "start_ms": 57.9, "duration_ms": 2.4}
+	      {
+		    "key": "prepare",
+		    "alias": "浏览器准备",
+		    "start": 0,
+		    "duration": 1.2
+          },
+          {
+            "key": "dns",
+            "alias": "DNS",
+            "start": 1.2,
+            "duration": 3.8
+          },
+          {
+            "key": "connect",
+            "alias": "TCP",
+            "start": 5,
+            "duration": 4.1
+          },
+          {
+            "key": "tls",
+            "alias": "TLS",
+            "start": 9.1,
+            "duration": 5.9
+          },
+
+          {
+            "key": "first_byte",
+            "alias": "等待首字节",
+            "start": 15,
+            "duration": 86.7
+          },
+          {
+            "key": "download",
+            "alias": "内容",
+            "start": 101.7,
+            "duration": 26.3
+          }
         ]
       }
     }
   ]
 }
 ```
+
+#### 2）others
+
+```json
+{
+  "origin_data": {},
+  "span_id": "8e301ac709bd42bb",
+  "overview": {
+    "title": "db.svg",
+    "badges": [
+      {"field_name": "elapsed_time", "value": 60300},
+      {"field_name": "attributes.resource.type", "value": "img"},
+      {"field_name": "attributes.http.response.status_code", "value": 200}
+    ],
+    // 和 1）XHR & Fetch 一致，省略。
+    "items": []
+  },
+  "sections": [
+    {
+      "key": "key_info",
+      "type": "summary_cards",
+      "data": {
+        "http_result": {
+          "attributes.http.response.status_code": 200,
+          "attributes.outcome.type": "success"
+        },
+        "duration": {"elapsed_time": 60300},
+        "transfer": {
+          "display.compression_ratio": 0.689,
+          "attributes.resource.transfer_size": 0,
+          "attributes.resource.encoded_body_size": 280833,
+          "attributes.resource.decoded_body_size": 903000
+        },
+        "delivery": {
+          "attributes.resource.delivery_type": "cache",
+          "attributes.resource.cache.hit": true
+        },
+        "blocking": {
+          "attributes.resource.render_blocking_status": "non-blocking"
+        }
+      }
+    },
+    {
+      "key": "resource_info",
+      "type": "summary_cards",
+      "items": [
+        {"field_name": "attributes.resource.type", "value": "img"},
+        {"field_name": "attributes.url.template", "value": "/static/img/db.svg"},
+        {
+	      "field_name": "attributes.server.address",
+	      "value": "bkmonitor.bkop.woa.com"
+	    },
+        {"field_name": "attributes.http.request.method", "value": "GET"},
+        {"field_name": "attributes.resource.protocol", "value": "h2"}
+      ]
+    },
+    // 同上，不复述。
+    {"key": "loading_timing", "type": "waterfall", "data": {}}
+  ]
+}
+```
+
+
+
 
 ## 0x05 验收与验证
 
