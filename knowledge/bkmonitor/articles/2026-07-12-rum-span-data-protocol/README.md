@@ -3,7 +3,7 @@ title: RUM 数据协议
 tags: [rum, span, metric, log, data-protocol, opentelemetry, web]
 description: 归档 bkmonitor RUM Web 的 Resource、Span、Metric 和 Log 协议，供数据上报、字段消费和协议核对使用。
 created: 2026-07-12
-updated: 2026-09-03
+updated: 2026-09-06
 ---
 本文记录 `@blueking/open-telemetry` 当前上报的 Resource、Span、Metric 和 Log 字段。
 
@@ -119,11 +119,6 @@ Session
 
 ### a. 基础字段
 
-| 字段                           | 状态                                                         | 类型   | 描述      | 备注                                             |
-| ---------------------------- | ---------------------------------------------------------- | ---- | ------- | ---------------------------------------------- |
-| `attributes.user.id`         | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str  | 用户 ID   | --                                             |
-| `attributes.span_type` *[1]* | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | enum | Span 类型 | --                                             |
-| `attributes.outcome.type`    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | enum | 执行结果    | `success`、`warning`、`error`、`timeout`、`abort`。 |
 
 
 **[1] `attributes.span_type`**：
@@ -160,6 +155,7 @@ Session
 | `attributes.browser.screen.width`    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | 屏幕尺寸的宽度 | --                           |
 | `attributes.browser.viewport.height` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | 视口尺寸的高度 | Aegis 使用 `vp = 576 * 918`。   |
 | `attributes.browser.viewport.width`  | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | int | 视口尺寸的宽度 | --                           |
+|                                      |                                                            |     |         |                              |
 
 ### d. [device](https://opentelemetry.io/docs/specs/semconv/registry/attributes/device/)
 
