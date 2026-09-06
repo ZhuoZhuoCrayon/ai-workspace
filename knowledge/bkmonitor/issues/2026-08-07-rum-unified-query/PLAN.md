@@ -4,7 +4,7 @@ tags: [rum, apm, query, span, view, session, factory, unify-query, semconv]
 issue: ./README.md
 description: 通过统一 Target、查询基类、Level 工厂和语义字段目录收敛 RUM 与 APM 查询
 created: 2026-08-07
-updated: 2026-09-03
+updated: 2026-09-06
 ---
 
 # RUM 分层统一查询 —— 实施方案
@@ -220,14 +220,14 @@ class RumLevelHandlerFactory:
 
 ### c. 基础查询层
 
-| 变更点 | 代码位置 |
-| --- | --- |
-| **[Keep]** `BaseQuery` | `bkmonitor/data_source/utils/query.py` |
-| **[Change]** `SpanQuery` | `packages/rum_web/handlers/query/span.py` |
-| **[Reserved]** `ViewQuery` | `packages/rum_web/handlers/query/view.py` |
-| **[Reserved]** `SessionQuery` | `packages/rum_web/handlers/query/session.py` |
-| **[Change]** APM `BaseQuery` | `apm/core/handlers/query/base.py` |
-| **[Change]** `TraceQuery` / `OriginTraceQuery` / `SpanQuery` | `apm/core/handlers/query/` |
+| 变更点                                                       | 代码位置                                     |
+|--------------------------------------------------------------|----------------------------------------------|
+| **[Keep]** `BaseQuery`                                       | `bkmonitor/data_source/utils/query.py`       |
+| **[Change]** `SpanQuery`                                     | `packages/rum_web/handlers/query/span.py`    |
+| **[Reserved]** `ViewQuery`                                   | `packages/rum_web/handlers/query/view.py`    |
+| **[Reserved]** `SessionQuery`                                | `packages/rum_web/handlers/query/session.py` |
+| **[Change]** APM `BaseQuery`                                 | `apm/core/handlers/query/base.py`            |
+| **[Change]** `TraceQuery` / `OriginTraceQuery` / `SpanQuery` | `apm/core/handlers/query/`                   |
 
 查询原语：
 
@@ -451,8 +451,8 @@ BaseRumRequestSerializer                    # bk_biz_id、app_name、mode
 
 ### f. Resource 接口
 
-| URL                                          | Resource                          | Level 方法                   |
-| -------------------------------------------- | --------------------------------- | -------------------------- |
+| URL                                          | Resource                          | Level 方法                 |
+|----------------------------------------------|-----------------------------------|----------------------------|
 | `GET` /rum/search/view_config/               | `RumViewConfigResource`           | `view_config`              |
 | `POST` /rum/search/generate_query_string/    | `RumGenerateQueryStringResource`  | `generate_query_string`    |
 | `POST` /rum/search/field_topk/               | `RumFieldTopKResource`            | `field_topk`               |
@@ -471,18 +471,18 @@ BaseRumRequestSerializer                    # bk_biz_id、app_name、mode
 
 ```text
 bkmonitor/
-├── core/
-│   └── enum.py                          # CachedEnum
+├── constants/
+│   └── apm.py                           # CachedEnum
 ├── semconv/
+│   ├── constants.py                     # 通用字段展示、单位、Span Kind 和状态枚举
 │   └── rum/
+│       ├── constants.py                 # RUM 字段枚举和 Span 类型默认列
 │       ├── field.py                     # FieldSpec
 │       ├── registry.py                  # FieldRegistry
 │       ├── attributes/
 │       │   ├── span_attributes.py       # Span 根字段及 Span 语义字段
 │       │   ├── action_attributes.py
 │       │   └── *_attributes.py          # 按 view、network 等语义分段
-│       ├── metric/
-│       │   └── web_vitals.py            # LCP 等虚拟指标字段
 │       └── trace/
 │           ├── __init__.py              # SpanSpec
 │           ├── resource.py
@@ -494,47 +494,34 @@ bkmonitor/
     └── rum_web/                         # 消费 SpanSpec
 ```
 
-依赖方向为 `core <- semconv <- packages`。
-
 #### 2）核心模型
 
 ```python
-# semconv/rum/field.py
-@dataclass(frozen=True, slots=True)
-class RatingLevel:
-    rating: str
-    value: float | None = None
-
-
 @dataclass(frozen=True, slots=True)
 class FieldSpec:
     field_name: str
     field_alias: str = ""
     field_unit: str | None = None
+    field_type: str | None = None
     field_display_type: str | None = None
-    option_values: type[CachedEnum] | None = None
-    rating_config: tuple[RatingLevel, ...] = ()
+    is_real: bool = True
+    option_values: type[HasChoicesCachedEnum] | None = None
+    _full_field_name: str = field(default="", init=False, repr=False, compare=False)
 
     def children(self) -> Iterator["FieldSpec"]:
         return (
             candidate
             for name, candidate in vars(type(self)).items()
-            if name.isupper()
+            if name.isupper() and isinstance(candidate, FieldSpec)
         )
 
+    def get_full_field_name(self) -> str:
+        return self._full_field_name or self.field_name
 
-# semconv/rum/metric/web_vitals.py
-LCP = FieldSpec(
-    field_name="LCP",
-    field_alias="最大内容绘制",
-    field_unit="ms",
-    field_display_type="duration",
-    rating_config=(
-        RatingLevel(rating="good", value=2500),
-        RatingLevel(rating="needs_improvement", value=4000),
-        RatingLevel(rating="poor"),
-    ),
-)
+    def bind(self, full_field_name: str) -> "FieldSpec":
+        bound = replace(self)
+        object.__setattr__(bound, "_full_field_name", full_field_name)
+        return bound
 
 
 # semconv/rum/trace/events.py
@@ -549,30 +536,27 @@ class Events(FieldSpec):
 
 # semconv/rum/registry.py
 class FieldRegistry:
-    def __init__(self, root: FieldSpec):
-        fields = {}
-        self._collect(root, parent_name="", fields=fields)
-        self._fields = readonly(fields)
+    def __init__(self, root: FieldSpec) -> None:
+        self.originals: dict[str, FieldSpec] = {}
+        self.bound_fields: dict[str, FieldSpec] = {}
+        self._collect(root, parent_path="")
 
-    def _collect(
-        self,
-        field: FieldSpec,
-        parent_name: str,
-        fields: dict[str, FieldSpec],
-    ) -> None:
-        full_name = join(parent_name, field.field_name)
-        if full_name:
-            add_unique(fields, full_name, field)
+    def _collect(self, field: FieldSpec, parent_path: str) -> None:
+        full_path = f"{parent_path}.{field.field_name}" if parent_path else field.field_name
+        if full_path:
+            if full_path in self.originals:
+                raise ValueError(f"字段路径重复注册: {full_path}")
+            self.originals[full_path] = field
+            self.bound_fields[full_path] = field.bind(full_path)
         for child in field.children():
-            self._collect(
-                child,
-                parent_name=full_name,
-                fields=fields,
-            )
+            self._collect(child, parent_path=full_path)
 
     def from_field(self, field_name: str) -> FieldSpec:
-        field = self._fields.get(field_name)
-        return field if field is not None else FieldSpec(field_name)
+        spec = self.bound_fields.get(field_name)
+        return spec if spec is not None else FieldSpec(field_name)
+
+    def fields(self) -> list[FieldSpec]:
+        return list(self.bound_fields.values())
 
 
 # semconv/rum/trace/__init__.py
@@ -590,22 +574,21 @@ class SpanSpec(FieldSpec):
     def from_field(cls, field_name: str) -> FieldSpec:
         return _SPAN_FIELDS.from_field(field_name)
 
+    @classmethod
+    def fields(cls) -> list[FieldSpec]:
+        return _SPAN_FIELDS.fields()
+
 
 _SPAN_FIELDS = FieldRegistry(SpanSpec(field_name=""))
 ```
 
-`from_field()` 返回已注册的共享对象；未注册字段返回仅含输入字段名的 `FieldSpec`。
+`FieldRegistry` 为每条完整路径创建绑定副本，并保留原始 `FieldSpec` 引用。同一原始字段可以复用到多条路径，绑定副本通过
+`get_full_field_name()` 返回当前路径。`from_field()` 返回绑定副本；未注册字段返回仅含输入字段名的 `FieldSpec`。`is_real`
+默认取 `True`，只有虚拟字段显式设置为 `False`。
 
 ```python
-assert SpanSpec.from_field("kind") is SpanSpec.KIND is span_attributes.KIND
-assert SpanSpec.from_field("attributes") is SpanSpec.ATTRIBUTES
-assert SpanSpec.from_field("events") is SpanSpec.EVENTS
-assert SpanSpec.from_field("events.name") is SpanSpec.EVENTS.NAME
-assert (
-    SpanSpec.from_field("events.attributes.code.lineno")
-    is SpanSpec.EVENTS.ATTRIBUTES.CODE_LINENO
-)
-assert SpanSpec.from_field("xxx") == FieldSpec("xxx")
+assert SpanSpec.from_field("kind").get_full_field_name() == "kind"
+assert SpanSpec.from_field("events.name").get_full_field_name() == "events.name"
 ```
 
 #### 3）消费边界
@@ -614,7 +597,10 @@ assert SpanSpec.from_field("xxx") == FieldSpec("xxx")
 * 不再承担别名、候选值、单位的渲染。
 * 移除  FIELD_ALIAS_MAP_LIST、FIELD_UNITS、ENUM_FIELD_OPTION_VALUES 及相应的消费逻辑。
 
-**[2] rum_web.handlers.query.span.SpanQuery.query_fields：在此消费 SpanSpec。**
+**[2] `rum_web.handlers.query.span.SpanQuery.query_fields()`：**
+* 真实字段通过 `SpanSpec.from_field(field_name)` 补充别名、单位、展示类型和枚举候选值。
+* 虚拟字段从 `SpanSpec.fields()` 统一读取，只注入 `is_real = False` 的字段。
+* 字段名、映射键和 `origin_field` 基于 `get_full_field_name()` 生成，不再维护独立的 `VIRTUAL_FIELDS`。
 
 ## 0x04 核心协议
 
@@ -623,28 +609,7 @@ assert SpanSpec.from_field("xxx") == FieldSpec("xxx")
 ```json
 {
   "default_sort": ["-end_time"],
-  "span_type_display_fields": {
-    "view": [
-      "span_name",
-      "attributes.span_type",
-      "end_time",
-      "elapsed_time",
-      "status.code",
-      "attributes.view.url_template",
-      "attributes.user.id"
-    ],
-    "resource": [
-      "span_name",
-      "attributes.span_type",
-      "end_time",
-      "elapsed_time",
-      "status.code",
-      "attributes.view.url_template",
-      "attributes.user.id",
-      "attributes.resource.type",
-      "attributes.http.request.method"
-    ]
-  },
+  "span_type_display_fields": {"{span_type}": []},
   "fields": [
     {
       "field_name": "span_name",
@@ -776,7 +741,10 @@ assert SpanSpec.from_field("xxx") == FieldSpec("xxx")
 
 ```json
 {
+  "span_id": "xxx",
   "span_type": "resource",
+  // 原始数据非重点，省略。
+  "origin_data": {},
   "overview": {
     "title": "db.svg",  // attributes.url.template
     "badges": [
@@ -885,8 +853,8 @@ assert SpanSpec.from_field("xxx") == FieldSpec("xxx")
 | `test_datasource_target.py`            | [a] `levels` 默认空列表<br />[b] 现有 `TraceDatasourceTarget.build()` 行为不变<br />[c] 可携带多个层级结果表                                                                                                                                                              |
 | `test_level_factory.py`                | [a] 合法 `mode` 返回对应 Level<br />[b] 未注册模式明确失败<br />[c] `data_sources` 原样传入 Level                                                                                                                                                                       |
 | `test_query.py`                        | [a] Query 复用 `BaseQuery`<br />[b] 接收 `list[TraceDatasourceTarget]`<br />[c] 具备 8 项原子能力                                                                                                                                                               |
-| `core/tests/test_enum.py`              | `CachedEnum` 保持 `from_value()` 缓存、未知值 `label` 和动态属性行为。                                                                                                                                                                                               |
-| `semconv/rum/tests/test_span_spec.py`  | [a] 原子字段不含结构前缀，`field_alias` 默认空串<br />[b] 复合字段与叶子字段统一注册，同一 `FieldSpec` 可出现在多个路径<br />[c] `from_field()` 返回原始共享对象<br />[d] 枚举保留 `label` 和 `choices()`<br />[e] LCP 评级阈值使用字段单位，末项省略 `value` 并兜底<br />[f] 重复路径明确失败，未知路径返回仅含原始字段名的 `FieldSpec` |
+| `semconv/rum/tests/test_span_spec.py`  | [a] `field_alias` 默认空串，`is_real` 默认 `true`<br />[b] 同一原始 `FieldSpec` 可注册到多条路径，重复路径明确失败<br />[c] `from_field()` 返回携带完整路径的绑定副本<br />[d] `fields()` 返回全部已注册字段<br />[e] 枚举保留 `label` 和 `choices()`<br />[f] Web Vitals 评级阈值使用字段单位，末项省略 `value` 并兜底<br />[g] 未知路径返回仅含原始字段名的 `FieldSpec` |
+| `packages/rum_web/tests/query/test_span_query.py` | [a] 真实字段从 `SpanSpec` 补充语义<br />[b] 虚拟字段从 `SpanSpec.fields()` 注入并使用完整路径<br />[c] 别名按语义配置、数据源值、完整字段名依次回退<br />[d] 评级末档省略空 `value`<br />[e] 数据源已有同名字段时不重复注入 |
 | `test_level_handler.py`                | [a] 基类只保存 `data_sources`<br />[b] 具体 Level 可组合多个 Query<br />[c] TopK 方法只接收单个字段<br />[d] 9 项公共方法声明参数与返回类型<br />[e] 未知配置被拒绝，且不能覆盖公共参数或数据源                                                                                                              |
 | `test_query_resources.py`              | [a] 9 个 URL、HTTP 方法、Resource 和 Level 方法一一对应<br />[b] Resource 不依赖公共基类<br />[c] 请求协议不接受 `extra_config`，客户端无法覆盖 Level 配置<br />[d] `view_config` 保留 `origin_field`，顶层维护全量字段，分组通过字段名引用<br />[e] Span 视图返回按类型配置的默认列与分组适用范围<br />[f] semconv 补充别名、单位、展示类型、枚举选项和评级阈值 |
 | `apm/tests/test_unified_query_base.py` | [a] APM 继承通用基类<br />[b] 3 类 Query 统一接收 Target 列表<br />[c] Proxy 统一构造原始表与预计算层级<br />[d] 列表查询复用 `_query_list()`，Proxy 固定补 `total=0`<br />[e] 查询配置保持列表形态，多 Target 不丢表                                                                                   |
@@ -894,7 +862,7 @@ assert SpanSpec.from_field("xxx") == FieldSpec("xxx")
 测试门禁：
 
 ```bash
-pytest core/tests/test_enum.py semconv/rum/tests -q
+pytest semconv/rum/tests -q
 pytest packages/rum_web/tests/query -q
 pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.py -q
 ```
@@ -903,6 +871,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-09-04 13:00` | 完成里程碑 7 的语义字段模型复查（[#12326](https://github.com/TencentBlueKing/bk-monitor/pull/12326)）：[a] RUM 枚举收归 `semconv/rum/constants.py`<br />[b] 虚拟字段归入 `attributes/virtual_attributes.py`<br />[c] `FieldRegistry` 以绑定副本携带完整路径<br />[d] `SpanQuery` 通过 `SpanSpec.fields()` 统一补充虚拟字段 |
 | `2026-08-31 00:00` | `FieldSpec` 与 `view_config` 增加 Web Vitals 评级阈值，阈值沿用字段单位并按包含性上界依次匹配 |
 | `2026-08-28 00:00` | `FieldSpec` 与 `view_config` 增加 `field_display_type`，`field_unit` 只标识原始上报单位 |
 | `2026-08-26 22:00` | 完成里程碑 3 的后续实现并通过 [TencentBlueKing/bk-monitor #12094](https://github.com/TencentBlueKing/bk-monitor/pull/12094) review：`view_config` 支持省略时间范围，查询层根据 `DataSourceTarget.retention` 补齐缺失边界，RUM 与 APM Query 统一接收数据源列表 |
@@ -937,6 +906,6 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 | 🔄 | `<branch_name>` | 里程碑 4：提供 RUM Span 分析类接口（`field_topk`、`field_statistics_info`、`field_statistics_graph`、`download_topk`） *[1]* | 待创建 |
 | 🔄 | `<branch_name>` | 里程碑 5：提供 RUM Span 详情类接口（`record_detail`、`generate_query_string`） *[1]* | 待创建 |
 | ✅ | `feat/apm_trace/#1010158081137031784` | 里程碑 6：统一 APM 查询基类和 `TraceDatasourceTarget` 协议 | [TencentBlueKing/bk-monitor #11877](https://github.com/TencentBlueKing/bk-monitor/pull/11877) |
-| 🔄 | `feat/rum_span_semconv_build/#1010158081137728855`<br />`feat/rum_span_semconv_better/#1010158081137884971` | 里程碑 7：提供 RUM 语义字段目录和 `SpanSpec` 访问入口 | [TencentBlueKing/bk-monitor #12295](https://github.com/TencentBlueKing/bk-monitor/pull/12295)<br />[TencentBlueKing/bk-monitor #12326](https://github.com/TencentBlueKing/bk-monitor/pull/12326) |
+| ✅ | `feat/rum_span_semconv_build/#1010158081137728855`<br />`feat/rum_span_semconv_better/#1010158081137884971` | 里程碑 7：提供 RUM 语义字段目录和 `SpanSpec` 访问入口 | [TencentBlueKing/bk-monitor #12295](https://github.com/TencentBlueKing/bk-monitor/pull/12295)<br />[TencentBlueKing/bk-monitor #12326](https://github.com/TencentBlueKing/bk-monitor/pull/12326) |
 
 - *[1] 里程碑 3～5 实施期间，随接口落地逐步补充 `rum_web/docs/api/search.md`。*

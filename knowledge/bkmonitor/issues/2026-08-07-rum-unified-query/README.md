@@ -3,7 +3,7 @@ title: RUM 分层统一查询
 tags: [rum, apm, query, span, view, session, factory, unify-query, semconv]
 description: 用统一 Target、查询基类和语义字段目录承接 RUM 分层检索与 APM Trace 查询
 created: 2026-08-07
-updated: 2026-09-03
+updated: 2026-09-06
 ---
 
 # RUM 分层统一查询
@@ -32,6 +32,8 @@ APM 调用链固定为：`QueryProxy → list[TraceDatasourceTarget] → APM Bas
 
 详细类关系、接口清单和代码落点见 [实施方案](./PLAN.md)。
 
+Span 各类型基础详情、字段引用和异步分析接口见 [Span 详情接口协议草稿](./pre-plan.md)。
+
 ### b. 约束
 
 - 本方案不设计 View、Session 的数据生产或预计算过程。
@@ -45,6 +47,7 @@ APM 调用链固定为：`QueryProxy → list[TraceDatasourceTarget] → APM Bas
 ## 0x03 参考
 
 - [实施方案](./PLAN.md)
+- [Span 详情接口协议草稿](./pre-plan.md)
 - [RUM 数据协议](../../articles/2026-07-12-rum-span-data-protocol/README.md)
 - `packages/rum_web/handlers/query/span.py`
 - `bkmonitor/data_source/utils/query.py`
