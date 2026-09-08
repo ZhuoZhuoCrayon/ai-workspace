@@ -4,10 +4,12 @@ tags: [rum, span, record-detail, api, semconv, figma]
 issue: ./README.md
 description: 定义 RUM Span 详情构造器、各类型详情 JSON，以及需要异步查询的数据
 created: 2026-09-04
-updated: 2026-09-06
+updated: 2026-09-07
 ---
 
 # RUM Span 详情接口协议草稿
+
+本文保留早期设计，当前核心协议以 [实施方案](./PLAN.md) 为准。字段引用已调整为 `field_name`，加载时序使用 `loading_timing` / `waterfall`，View 等跨记录汇总改为异步获取。
 
 ## 0x01 公共约定
 

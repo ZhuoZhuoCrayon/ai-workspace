@@ -211,11 +211,11 @@ Aegis 将「连接类型」「网络质量」整合成 `netType`（`wifi`、`wir
 
 **[1] `attributes.session.phase`**：
 
-| 值       | 描述                     |
-| ------- | ---------------------- |
-| `start` | 创建首个 Session。          |
+| 值        | 描述                        |
+| -------- | ------------------------- |
+| `start`  | 创建首个 Session。             |
 | `rotate` | 旧 Session 到期后创建新 Session。 |
-| `end`   | 当前 Session 结束。          |
+| `end`    | 当前 Session 结束。            |
 
 ### g. view
 
@@ -462,7 +462,7 @@ SDK 原样上报浏览器返回的非空值，空值不写入。
 | `attributes.vital.inp.processing_duration`    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 处理耗时（ms）             | --                                   |
 | `attributes.vital.inp.presentation_delay`     | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 呈现延迟（ms）             | --                                   |
 | `attributes.vital.lcp.target`                 | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str    | DOM 选择器              | 如 `div`。                             |
-| `attributes.vital.lcp.url`                    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str    | 元素对应资源 URL            | 已脱敏。                                |
+| `attributes.vital.lcp.url`                    | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | str    | 元素对应资源 URL           | 已脱敏。                                 |
 | `attributes.vital.lcp.resource_load_duration` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 资源加载耗时（ms）           | --                                   |
 | `attributes.vital.lcp.element_render_delay`   | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 元素渲染延迟（ms）           | --                                   |
 | `attributes.vital.ttfb.waiting_duration`      | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | number | 请求就绪后的等待耗时（ms）       | --                                   |

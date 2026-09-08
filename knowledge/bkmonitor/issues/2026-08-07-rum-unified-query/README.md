@@ -32,7 +32,7 @@ APM 调用链固定为：`QueryProxy → list[TraceDatasourceTarget] → APM Bas
 
 详细类关系、接口清单和代码落点见 [实施方案](./PLAN.md)。
 
-Span 各类型基础详情、字段引用和异步分析接口见 [Span 详情接口协议草稿](./pre-plan.md)。
+Resource、Action、Long Task、Error、Vital 和 View 的核心详情协议、计算表与异步分析约定见 [实施方案](./PLAN.md)。[早期协议草稿](./pre-plan.md) 保留设计过程，接口以实施方案为准。
 
 ### b. 约束
 
