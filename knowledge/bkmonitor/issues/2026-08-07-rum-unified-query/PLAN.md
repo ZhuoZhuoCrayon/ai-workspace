@@ -4,7 +4,7 @@ tags: [rum, apm, query, span, view, session, factory, unify-query, semconv]
 issue: ./README.md
 description: 通过统一 Target、查询基类、Level 工厂和语义字段目录收敛 RUM 与 APM 查询
 created: 2026-08-07
-updated: 2026-09-07
+updated: 2026-09-10
 ---
 
 # RUM 分层统一查询 —— 实施方案
@@ -602,6 +602,69 @@ assert SpanSpec.from_field("events.name").get_full_field_name() == "events.name"
 * 虚拟字段从 `SpanSpec.fields()` 统一读取，只注入 `is_real = False` 的字段。
 * 字段名、映射键和 `origin_field` 基于 `get_full_field_name()` 生成，不再维护独立的 `VIRTUAL_FIELDS`。
 
+### h. Span Builder
+
+建议收敛成 **Handler 准备数据，Builder 组装协议**。
+
+```text
+SpanLevelHandler.record_detail(record_id)
+  ├─ self.query.query_list(...)          # 查询主 Span
+  ├─ self._query_related_spans(span)     # View 才补查生命周期和 Vital
+  └─ span_builder.build(span, related_spans)
+```
+
+Builder 全部放在 `packages/rum_web/handlers/builder/span.py`，接口骨架：
+
+```python
+class SpanBuilder:
+    @classmethod
+    def process(
+        cls,
+        span: dict[str, Any],
+        related_spans: Sequence[dict[str, Any]] = (),
+    ) -> dict[str, Any]:
+        ...  # 默认返回公共头部和空 sections
+
+
+# 各类型继承 SpanBuilder，实现 process。
+BUILDERS = {
+    "resource": ResourceSpanBuilder,
+    "action": ActionSpanBuilder,
+    "long_task": LongTaskSpanBuilder,
+    "error": ErrorSpanBuilder,
+    "vital": VitalSpanBuilder,
+    "view": ViewSpanBuilder,
+}
+
+
+def build(
+    span: dict[str, Any],
+    related_spans: Sequence[dict[str, Any]] = (),
+) -> dict[str, Any]:
+    builder = BUILDERS.get(
+        get_value(span, "attributes.span_type"), SpanBuilder
+    )
+    return builder.process(span, related_spans)
+```
+
+| 位置                                      | 职责                                               |
+| --------------------------------------- | ------------------------------------------------ |
+| `SpanLevelHandler.record_detail`        | 查询主 Span，处理记录不存在，调用 `build`                      |
+| `SpanLevelHandler._query_related_spans` | 使用 `self.query.query_list` 查询关联记录，返回平铺的 Span 列表  |
+| `SpanBuilder.process`                   | 组装 `origin_data`、`span_id`、`overview`、`sections` |
+| 各类型 Builder                             | 按 `PLAN.md` 构造对应区块、评级配置及加载时序                     |
+
+`_query_related_spans` 仅对 View 执行：
+
+| 关联记录 | 过滤条件 | 选取 |
+| --- | --- | --- |
+| View 生命周期 | 同 View ID、`span_type=view` | 按 `view.version` 降序取最新一条 |
+| Web Vitals | 同 View ID、`span_type=vital` | 每个指标按 `end_time` 降序取最新一条 |
+
+- *[1] 关联查询沿用应用及 Session 范围，时间覆盖后续生命周期；其他类型返回空列表。*
+- *[2] `ViewSpanBuilder` 用最新快照构造展示数据，`origin_data`、`span_id` 保留主记录。*
+- *[3] Builder 不持有 Query，不引入 Context；计数和影响面仍由 `statistics` 获取。字段访问复用轻量取值函数，协议与计算公式直接遵循 `PLAN.md`，不在草稿重复维护。*
+
 ## 0x04 核心协议
 
 ### a. view_config
@@ -733,7 +796,7 @@ assert SpanSpec.from_field("events.name").get_full_field_name() == "events.name"
 - *[8] `rating_config` 按数组顺序匹配。`value` 是包含性上界，单位沿用字段的 `field_unit`；未设置 `value` 的末项承接剩余值。*
 
 
-### b. RecordDetail（Span.Resource）
+### b. RecordDetail（Resource）
 
 #### 0）通用
 
@@ -851,7 +914,7 @@ assert SpanSpec.from_field("events.name").get_full_field_name() == "events.name"
           },
           {
             "key": "download",
-            "alias": "内容",
+            "alias": "内容下载",
             "start": 101.7,
             "duration": 26.3
           }
@@ -917,14 +980,13 @@ assert SpanSpec.from_field("events.name").get_full_field_name() == "events.name"
         {"field_name": "attributes.resource.protocol", "value": "h2"}
       ]
     },
-    // 同上，不复述。
+    // 同 1）XHR & Fetch，不复述。
     {"key": "loading_timing", "type": "waterfall", "data": {}}
   ]
 }
 ```
 
-
-### c. RecordDetail（Span.Action）
+### c. RecordDetail（Action）
 
 ```json
 {
@@ -949,31 +1011,25 @@ assert SpanSpec.from_field("events.name").get_full_field_name() == "events.name"
         "target": {
           "attributes.action.target.name": ".submit-btn",
           "attributes.action.target.tag": "button"
-        },
-        // 需异步拉取的数据。
-        "requests": {
-          "display.request_count": 0
-        },
-        "errors": {"display.error_count": 0},
-        "long_tasks": {"display.long_task_count": 0}
+        }
       }
     }
   ]
 }
 ```
 
-异步
 
-| 指标                        | 额外过滤条件                            | 统计              |
-| ------------------------- | --------------------------------- | --------------- |
-| `display.request_count`   | `attributes.span_type: resource`  | `count(_index)` |
-| `display.error_count`     | `attributes.span_type: error`     | `count(_index)` |
-| `display.long_task_count` | `attributes.span_type: long_task` | `count(_index)` |
-|                           |                                   |                 |
-* *[1] 统一过滤条件：`attributes.action.id: {当前 Action ID}`*。
-* *[2] 统一时间过滤条件：`t ∈ [end − 4h, end + 4h)`。
+需异步拉取的「关键信息」：
 
-### d. RecordDetail（Span.LongTask）
+| 关联信息        | API          | 额外过滤条件                            | 统计                            |
+| ----------- | ------------ | --------------------------------- | ----------------------------- |
+| 触发请求数       | `statistics` | `attributes.span_type: resource`  | `count(attributes.span_type)` |
+| 错误数         | `statistics` | `attributes.span_type: error`     | `count(attributes.span_type)` |
+| LongTasks 数 | `statistics` | `attributes.span_type: long_task` | `count(attributes.span_type)` |
+* *[1] 统一过滤条件：`attributes.action.id: {当前 Action ID}`。*
+* *[2] 查询时间范围：[end_time - 1d, end_time + 1d]。*
+
+### d. RecordDetail（LongTask）
 
 ```json
 {
@@ -985,6 +1041,7 @@ assert SpanSpec.from_field("events.name").get_full_field_name() == "events.name"
       {"field_name": "elapsed_time", "value": 123500},
       {"field_name": "attributes.outcome.type", "value": "warning"}
     ],
+    // 省略，同 Resource。
     "items": []
   },
   "sections": [
@@ -996,12 +1053,10 @@ assert SpanSpec.from_field("events.name").get_full_field_name() == "events.name"
           "elapsed_time": 123500,
           "attributes.long_task.blocking_duration": 42.5
         },
-        "action": {"display.long_task.action": "未关联 Action"},
+        "action": {"attributes.action.id": "xxxxxx"},
         "attribution": {
           "attributes.long_task.entry_type": "long-animation-frame",
           "attributes.long_task.name": "long-animation-frame",
-          "display.long_task.attribution": "long-animation-frame",
-          "display.long_task.attribution_confidence": "低可信度"
         }
       }
     }
@@ -1009,11 +1064,15 @@ assert SpanSpec.from_field("events.name").get_full_field_name() == "events.name"
 }
 ```
 
-- *[1] 阻塞贡献缺失时省略，不用任务耗时减 `50 ms` 补齐。*
-- *[2] 归因优先取耗时最大 `long_task.script` 的函数名或 URL；回退到 Entry 名称时标「低可信度」。*
-- *[3] 有关联交互时，`action` 改用 `attributes.action.id`；SDK 未上报 Long Task 状态，不展示「异常」徽标。*
+*[1] 根据 `attributes.action.id` 异步补齐名称和时间。*
 
-### e. RecordDetail（Span.Error）
+异步拉取的「关键信息」：
+
+| 关联信息      | API            | 过滤条件                                                         |
+| --------- | -------------- | ------------------------------------------------------------ |
+| 关联 Action | `list_records` | `attributes.span_type: action AND attributes.action.id: xxx` |
+
+### e. RecordDetail（Error）
 
 ```json
 {
@@ -1022,8 +1081,10 @@ assert SpanSpec.from_field("events.name").get_full_field_name() == "events.name"
   "overview": {
     "title": "TypeError: Cannot read properties of undefined (reading 'name')",
     "badges": [
+      {"field_name": "elapsed_time", "value": 123500},
       {"field_name": "attributes.outcome.type", "value": "error"}
     ],
+    // 省略，同 Resource。
     "items": []
   },
   "sections": [
@@ -1036,76 +1097,27 @@ assert SpanSpec.from_field("events.name").get_full_field_name() == "events.name"
           "attributes.code.filepath": "https://example.com/static/js/app.js",
           "attributes.code.lineno": 9,
           "attributes.code.column": 654249
-        },
-        "users": {"display.error.affected_users": 128},
-        "occurrences": {"display.error.occurrences": 1234}
-      }
-    },
-    {
-      "key": "error_impact",
-      "type": "summary_cards",
-      "data": {
-        "users": {
-          "display.error.affected_users": 128,
-          "display.error.affected_users_change_ratio": 3
-        },
-        "sessions": {"display.error.affected_sessions": 160}
-      }
-    },
-    {
-      "key": "error_trend",
-      "type": "bar_chart",
-      "data": {
-        "interval": 3600,
-        "points": [
-          {"timestamp": 1788364800, "value": 12},
-          {"timestamp": 1788368400, "value": 18},
-          {"timestamp": 1788372000, "value": 25}
-        ]
+        }
       }
     }
   ]
 }
 ```
 
-统计口径（异步）：
+异步拉取的「关键信息」「影响面统计」：
 
-```text
-error_key = (
-  a.error.source,
-  COALESCE(a.error.message, exception.message),
-  exception.type,
-  a.code.filepath, a.code.lineno, a.code.column,
-  a.view.url_template
-)
-filter: a.span_type = 'error' AND error_key IS NOT DISTINCT FROM current.error_key
+| 关联信息    | API          | 聚合                                | 额外                                           |
+| :------ | :----------- | --------------------------------- | -------------------------------------------- |
+| 影响用户数   | `statistics` | `distinct(attributes.user.id)`    | `time_shifts=["0s", "{end - start}s"]`（计算环比） |
+| 发生次数    | `statistics` | `count(attributes.span_type)`     |                                              |
+| 影响会话数   | `statistics` | `distinct(attributes.session.id)` |                                              |
+| 24 小时趋势 | `statistics` | `count(attributes.span_type)`     | `interval=3600`（按 1h 分桶）                     |
 
-user_key = CASE
-  WHEN a.user.id IS NOT NULL THEN ('user', a.user.id)
-  WHEN a.device.id IS NOT NULL THEN ('device', a.device.id)
-  ELSE NULL
-END
-```
+* *[1] 统一过滤条件：`attributes.code.lineno: "xx" AND attributes.code.filepath: "xxx" AND attributes.code.column: "xxx" AND events.attributes.exception.type: "xxx" AND attributes.span_type: "error"`。*
+* *[2] 影响面统计查询时间范围：[end_time - 1d, end_time + 1d]。*
+* *[3] 24 小时趋势查询时间范围：[end_time - 1d, end_time]。*
 
-| 指标                                              | 时间过滤                           | 聚合                                                                   |
-| ----------------------------------------------- | ------------------------------ | -------------------------------------------------------------------- |
-| `display.error.occurrences`                     | `t ∈ [start, end)`             | `COUNT_DISTINCT(span_id)`                                            |
-| `display.error.affected_users`（`current_users`） | `t ∈ [start, end)`             | `COUNT_DISTINCT(user_key)`                                           |
-| `previous_users`                                | `t ∈ [2 × start − end, start)` | `COUNT_DISTINCT(user_key)`                                           |
-| `display.error.affected_sessions`               | `t ∈ [start, end)`             | `COUNT_DISTINCT(a.session.id)`                                       |
-| `error_trend.points[].value`                    | `t ∈ [end − 86400, end)`       | `COUNT_DISTINCT(span_id) GROUP BY FLOOR((t − (end − 86400)) / 3600)` |
-
-环比计算方式：
-
-| 指标 | 计算方式 |
-| --- | --- |
-| `display.error.affected_users_change_ratio` | `(current_users − previous_users) / previous_users`，`previous_users = 0` 时省略 |
-
-- *[1] `start/end` 为请求的 `start_time/end_time`（秒）；`exception` 取首个同名事件；`IS NOT DISTINCT FROM` 将两侧 `NULL` 视为相等。*
-- *[2] 分组使用原始文件/行/列，Source Map 还原不改变分组；两处影响用户卡片复用同一统计结果。标题中的类型前缀不重复拼接。*
-- *[3] 桶编号 `k ∈ [0, 23]`，`timestamp = end − 86400 + k × 3600`；示例省略后 `21` 个桶。*
-
-### f. RecordDetail（Span.Vital）
+### f. RecordDetail（Vital）
 
 ```json
 {
@@ -1114,36 +1126,60 @@ END
   "overview": {
     "title": "LCP",
     "badges": [
-      {"field_name": "LCP", "value": 2840}
+      {"field_name": "elapsed_time", "value": 2840},
+      {
+        "field_name": "display.rateing_level",
+        "value": "needs_improvement",
+        "alias": "需改进"
+
+      }
     ],
+    // 省略，同 Resource。
     "items": []
   },
   "sections": [
     {
       "key": "vital_rating",
       "type": "rating_bar",
-      "data": {"field_name": "LCP", "value": 2840}
+      "data": {
+        "attributes.vital.metric": "lcp",
+        "attributes.vital.value": 2840,
+        "display.rating_config": [
+          {"rating": "good", "value": 2500, "alias": "良好"},
+          {"rating": "needs_improvement", "value": 4000, "alias": "需改进"},
+          {"rating": "poor", "alias": "差"}
+	    ]
+      }
     },
-    {
-      "key": "metric_detail",
-      "type": "field_group",
-      "items": [
-        {"field_name": "attributes.vital.lcp.target", "value": "img.hero"},
-        {"field_name": "attributes.vital.lcp.url", "value": "https://example.com/hero.webp"},
-        {"field_name": "attributes.vital.lcp.resource_load_duration", "value": 700},
-        {"field_name": "attributes.vital.lcp.element_render_delay", "value": 140}
-      ]
-    }
   ]
 }
 ```
 
-- *[1] 虚拟字段名为 `upper(attributes.vital.metric)`，值为 `attributes.vital.value`；单位、评级复用 `view_config`。*
-- *[2] `metric_detail` 仅返回对应指标已上报的附加字段，无则省略。CLS 无量纲，图中的毫秒值及阈值对应 LCP。*
+### g. RecordDetail（View）
 
-### g. RecordDetail（Span.View）
+加载时序计算方式：
 
-本节为 `mode = span` 的 View 快照详情，`record_id` 为 Span ID。
+| 指标                        | 计算方式                                                                    |
+| ------------------------- | ----------------------------------------------------------------------- |
+| `total_duration`          | `attributes.view.loading_time`                                          |
+| `prepare.start`           | `0`                                                                     |
+| `prepare.duration`        | `attributes.vital.ttfb.waiting_duration`                                |
+| `dns.start`               | `connect.start − dns.duration`                                          |
+| `dns.duration`            | `attributes.vital.ttfb.dns_duration`                                    |
+| `connect.start`           | `first_byte.start − connect.duration`                                   |
+| `connect.duration`        | `attributes.vital.ttfb.connection_duration`                             |
+| `first_byte.start`        | `attributes.vital.value − first_byte.duration`                          |
+| `first_byte.duration`     | `attributes.vital.ttfb.request_duration`                                |
+| `dom_processing.start`    | `attributes.view.first_byte`                                            |
+| `dom_processing.duration` | `attributes.view.dom_content_loaded − attributes.view.first_byte` *[1]* |
+| `resource_load.start`     | `attributes.view.dom_content_loaded`                                    |
+| `resource_load.duration`  | `attributes.view.load_event − attributes.view.dom_content_loaded` *[1]* |
+| `page_stable.start`       | `attributes.view.load_event`                                            |
+| `page_stable.duration`    | `attributes.view.loading_time − attributes.view.load_event` *[2]*       |
+
+- *[1] 内容传输与 DOM 处理包含 HTML 接收、解析、阻塞脚本和 DOMContentLoaded 事件处理，剩余资源加载包含其后至 Load 完成的资源等待、脚本及事件处理，均为加载进程区间，不是纯下载或解析耗时。*
+- *[2] 页面趋于稳定仅在 `attributes.view.loading_time_source = auto` 时返回，手动值可作为加载总耗时，并在关键信息中保留来源。
+- *[3] 仅对 `initial_load` 使用最新 View 快照和同次导航的 Vital 组装时序。*
 
 ```json
 {
@@ -1151,11 +1187,26 @@ END
   "span_id": "34e3b6ff1943346c",
   "overview": {
     "title": "view-001",
-    "badges": [
-      {"field_name": "display.view.duration", "value": 60300, "alias": "60.3 s"}
-    ],
+    "badges": [{"field_name": "elapsed_time", "value": 123500}],
     "items": [
-      {"field_name": "attributes.view.previous_url_template", "value": "/order/list"}
+      {
+	    "field_name": "display.span_type",
+	    "field_alias": "类型",
+	    "value": "View",
+	    "alias": "View"
+	  },
+      {"field_name": "app_name", "value": "bkop"},
+      {"field_name": "attributes.view.url_template", "value": "/order/submit"},
+      {
+        "field_name": "attributes.view.previous_url_template",
+        "value": "/product/:id/"
+      },
+      {"field_name": "attributes.session.id", "value": "sess-001"},
+      {"field_name": "attributes.view.id", "value": "view-001"},
+      {"field_name": "start_time", "value": 1788451565200000},
+      {"field_name": "end_time", "value": 1788451565328000},
+      {"field_name": "attributes.user.id", "value": "user-001"},
+      {"field_name": "resource.deployment.environment.name", "value": "prod"}
     ]
   },
   "sections": [
@@ -1164,43 +1215,125 @@ END
       "type": "summary_cards",
       "data": {
         "duration": {"display.view.duration": 60300},
-        "requests": {"display.view.request_count": 3},
-        "errors": {"display.view.error_count": 2},
-        "spans": {"display.view.span_count": 10}
+        "loading": {
+          "attributes.view.loading_time": 200,
+          "attributes.view.loading_time_source": "auto",
+          "attributes.view.loading_type": "initial_load",
+          "attributes.view.first_byte": 101.7,
+          "attributes.view.dom_content_loaded": 140,
+          "attributes.view.load_event": 175
+        }
       }
     },
     {
       "key": "web_vitals",
       "type": "summary_cards",
-      "items": [
-        {"field_name": "TTFB", "value": 710},
-        {"field_name": "FCP", "value": 760},
-        {"field_name": "LCP", "value": 790},
-        {"field_name": "INP", "value": 86},
-        {"field_name": "CLS", "value": 0.023}
-      ]
+      "data": {
+        "ttfb": {
+          "attributes.vital.metric": "ttfb",
+          "attributes.vital.value": 101.7,
+          "attributes.vital.ttfb.waiting_duration": 1.2,
+          "attributes.vital.ttfb.dns_duration": 3.8,
+          "attributes.vital.ttfb.connection_duration": 10,
+          "attributes.vital.ttfb.request_duration": 83.7,
+          "display.rating_config": [
+            {"rating": "good", "value": 800, "alias": "良好"},
+            {"rating": "needs_improvement", "value": 1800, "alias": "需改进"},
+            {"rating": "poor", "alias": "差"}
+          ]
+        },
+        "fcp": {
+          "attributes.vital.metric": "fcp",
+          "attributes.vital.value": 120,
+          "display.rating_config": [
+            {"rating": "good", "value": 1800, "alias": "良好"},
+            {"rating": "needs_improvement", "value": 3000, "alias": "需改进"},
+            {"rating": "poor", "alias": "差"}
+          ]
+        },
+        "lcp": {
+          "attributes.vital.metric": "lcp",
+          "attributes.vital.value": 250,
+          "display.rating_config": [
+            {"rating": "good", "value": 2500, "alias": "良好"},
+            {"rating": "needs_improvement", "value": 4000, "alias": "需改进"},
+            {"rating": "poor", "alias": "差"}
+          ]
+        },
+        "inp": {
+          "attributes.vital.metric": "inp",
+          "attributes.vital.value": 86,
+          "display.rating_config": [
+            {"rating": "good", "value": 200, "alias": "良好"},
+            {"rating": "needs_improvement", "value": 500, "alias": "需改进"},
+            {"rating": "poor", "alias": "差"}
+          ]
+        },
+        "cls": {
+          "attributes.vital.metric": "cls",
+          "attributes.vital.value": 0.023,
+          "display.rating_config": [
+            {"rating": "good", "value": 0.1, "alias": "良好"},
+            {"rating": "needs_improvement", "value": 0.25, "alias": "需改进"},
+            {"rating": "poor", "alias": "差"}
+          ]
+        }
+      }
     },
     {
       "key": "loading_timing",
       "type": "waterfall",
       "data": {
         "unit": "ms",
-        "total_duration": 1070,
+        "total_duration": 200,
         "phases": [
-          {"key": "prepare", "alias": "浏览器准备与重定向", "start": 0, "duration": 120},
-          {"key": "dns", "alias": "DNS", "start": 120, "duration": 20},
-          {"key": "connect", "alias": "连接（含 TLS）", "start": 140, "duration": 50},
-          {"key": "first_byte", "alias": "请求发送与首字节响应", "start": 190, "duration": 520}
+          {
+            "key": "prepare",
+            "alias": "浏览器准备",
+            "start": 0,
+            "duration": 1.2
+          },
+          {
+            "key": "dns",
+            "alias": "DNS 查询",
+            "start": 4.2,
+            "duration": 3.8
+          },
+          {
+            "key": "connect",
+            "alias": "网络连接建立",
+            "start": 8,
+            "duration": 10
+          },
+          {
+            "key": "first_byte",
+            "alias": "等待首字节",
+            "start": 18,
+            "duration": 83.7
+          },
+          {
+            "key": "dom_processing",
+            "alias": "内容传输与 DOM 处理",
+            "start": 101.7,
+            "duration": 38.3
+          },
+          {
+            "key": "resource_load",
+            "alias": "剩余资源加载",
+            "start": 140,
+            "duration": 35
+          },
+          {
+            "key": "page_stable",
+            "alias": "页面趋于稳定",
+            "start": 175,
+            "duration": 25
+          }
         ],
         "markers": [
-          {"key": "TTFB", "field_name": "TTFB", "value": 710},
-          {"key": "dom_interactive", "field_name": "attributes.view.dom_interactive", "value": 720},
-          {"key": "FCP", "field_name": "FCP", "value": 760},
-          {"key": "LCP", "field_name": "LCP", "value": 790},
-          {"key": "dom_content_loaded", "field_name": "attributes.view.dom_content_loaded", "value": 861},
-          {"key": "dom_complete", "field_name": "attributes.view.dom_complete", "value": 970},
-          {"key": "load_event", "field_name": "attributes.view.load_event", "value": 970},
-          {"key": "loading_complete", "field_name": "attributes.view.loading_time", "value": 1070}
+          {"key": "TTFB", "field_name": "TTFB", "value": 101.7},
+          {"key": "FCP", "field_name": "FCP", "value": 120},
+          {"key": "LCP", "field_name": "LCP", "value": 250}
         ]
       }
     }
@@ -1208,83 +1341,27 @@ END
 }
 ```
 
-停留时长计算方式：
 
-| 指标 | 计算方式 |
-| --- | --- |
-| `display.view.duration`（ms） | 所选 View 快照的 `end_time / 1000 − attributes.view.started_at` |
+异步拉取的「关键信息」：
 
-统计口径（异步）：
+| 关联信息   | API          | 额外                                                                            |
+| :----- | :----------- | ----------------------------------------------------------------------------- |
+| 触发请求数  | `statistics` | `attributes.span_type: resource AND attributes.resource.type: (xhr OR fetch)` |
+| 错误数    | `statistics` | `attributes.span_type: error`                                                 |
+| Span 数 | `statistics` | `NOT attributes.span_type: (view OR vital OR session)`                        |
 
-```text
-filter: a.view.id = current.a.view.id
-        AND t ∈ [current.a.view.started_at / 1000, current.end_time / 1000000]
-```
+- *[1] 统一过滤条件：`attributes.view.id: {当前 View ID}`；应用及 Session 与主记录一致。*
+- *[2] 统一聚合方式：`count(attributes.span_type)`。*
+- *[3] 查询时间范围：[end_time - 1d, end_time + 1d]。*
 
-| 指标 | 附加过滤 | 聚合 |
-| --- | --- | --- |
-| `display.view.request_count` | `a.span_type = 'resource' AND a.resource.type IN ('xhr', 'fetch')` | `COUNT_DISTINCT(span_id)` |
-| `display.view.error_count` | `a.span_type = 'error'` | `COUNT_DISTINCT(span_id)` |
-| `display.view.span_count` | `a.span_type NOT IN ('view', 'vital', 'session')` | `COUNT_DISTINCT(span_id)` |
-| Web Vitals | `a.span_type = 'vital'` | `ARG_MAX(a.vital.value, (end_time, span_id)) GROUP BY a.vital.metric` |
+View Span 关联信息获取（后端）：
 
-- *[1] `ARG_MAX` 按 `(end_time, span_id)` 取最大排序键对应的值；明细与计数使用相同条件。*
-- *[2] TTFB 缺失时回退到 `attributes.view.first_byte`，其他 Vital 缺失时省略。*
-
-加载时序计算方式（输入省略 `attributes.vital.ttfb.` 前缀）：
-
-| 指标                    | 计算方式                                                    |
-| --------------------- | ------------------------------------------------------- |
-| `total_duration`      | `attributes.view.loading_time`                          |
-| `prepare.start`       | `0`                                                     |
-| `prepare.duration`    | `waiting_duration`                                      |
-| `dns.start`           | `waiting_duration`                                      |
-| `dns.duration`        | `dns_duration`                                          |
-| `connect.start`       | `waiting_duration + dns_duration`                       |
-| `connect.duration`    | `connection_duration`，已包含 TLS                           |
-| `first_byte.start`    | `waiting_duration + dns_duration + connection_duration` |
-| `first_byte.duration` | `request_duration`                                      |
-
-- *[1] 仅适用于 `initial_load`；TTFB 分段异步获取，缺少分量时不推算后续起点。*
-- *[2] `markers` 为毫秒偏移，不参与求和；导航与 Vital 时间原点无法对齐时不合并展示，分段合计不覆盖原始 TTFB。*
-- *[3] SDK 缺少 HTML 下载、DOM 解析和 Load 事件的完整边界，仅展示已知里程碑；`loading_time` 不等同于页面稳定时间。*
-
-### h. 异步分析
-
-建议新增 `POST /rum/search/record_detail_analysis/`（待实现），基础详情返回后独立加载。
-
-| 页面 | `analysis_keys` | 获取内容 | 异步原因 |
-| --- | --- | --- | --- |
-| Action | `action_related_counts` | 请求、错误和 Long Task 计数 | 按 Action ID 聚合关联 Span |
-| Error | `error_impact` | 发生次数、影响用户/会话和环比 | 同类错误过滤、去重及前一等长区间查询 |
-| Error | `error_trend` | `24 h` 趋势 | 时间分桶聚合 |
-| View | `view_related_summary` | 关联计数、Web Vitals 和 TTFB 分段 | 按 View 查询关联记录，按指标取最新值 |
-| Error | `error_source_location`（可选） | Source Map 还原后的位置 | 读取构建产物并解析映射，依赖 Source Map 服务能力 |
-
-```json
-{
-  "bk_biz_id": 2,
-  "app_name": "bkop",
-  "mode": "span",
-  "record_id": "9d199175096474e4",
-  "start_time": 1788364800,
-  "end_time": 1788451200,
-  "analysis_keys": ["error_impact", "error_trend"]
-}
-```
-
-请求与响应约定：
-
-| 项目 | 约定 |
-| --- | --- |
-| 查询范围 | 限定已鉴权应用；Action/View 的关联 ID、Session（若有）及观察边界从主记录解析 |
-| Error 时间范围 | 秒级 `[start_time, end_time)`；环比取紧邻的前一等长区间 |
-| 响应合并 | 返回 `span_id`、`sections`；按区块 `key` 合并，`type` 一致，`data` 合并第一层键，数组整体替换 |
-| 加载状态 | 未加载或失败时省略异步字段，成功统计为空才显示 `0`；切换记录或时间范围后丢弃旧响应 |
-| Source Map | 还原结果使用 `display.error.source_file/source_line/source_column`，保留原始 `attributes.code.*` |
-
-- *[1] 关联查询使用聚合或分页；链路上下文与关联明细按需加载，Long Task/Vital 的基础详情无需异步。*
-- *[2] 字段依据：本地 `bk-rum` OT SDK `0.0.29` 工作区（含未提交修改）；参见 [RUM 数据协议](../../articles/2026-07-12-rum-span-data-protocol/README.md)。*
+| 补齐信息       | 额外过滤条件                                                             |
+| :--------- | ------------------------------------------------------------------ |
+| View 生命周期  | `attributes.span_type: view AND attributes.view.id: {当前 View ID}`  |
+| Web Vitals | `attributes.span_type: vital AND attributes.view.id: {当前 View ID}` |
+* *[1] 用最新 View 快照补齐头部时间及加载字段，原始记录保留在 `origin_data`。*
+* *[2] 未取得 `phase=end` 时，停留时长仅表示已观测时长。*
 
 ## 0x05 验收与验证
 
@@ -1300,6 +1377,7 @@ filter: a.view.id = current.a.view.id
 | `test_level_handler.py`                | [a] 基类只保存 `data_sources`<br />[b] 具体 Level 可组合多个 Query<br />[c] TopK 方法只接收单个字段<br />[d] 9 项公共方法声明参数与返回类型<br />[e] 未知配置被拒绝，且不能覆盖公共参数或数据源                                                                                                              |
 | `test_query_resources.py`              | [a] 9 个 URL、HTTP 方法、Resource 和 Level 方法一一对应<br />[b] Resource 不依赖公共基类<br />[c] 请求协议不接受 `extra_config`，客户端无法覆盖 Level 配置<br />[d] `view_config` 保留 `origin_field`，顶层维护全量字段，分组通过字段名引用<br />[e] Span 视图返回按类型配置的默认列与分组适用范围<br />[f] semconv 补充别名、单位、展示类型、枚举选项和评级阈值 |
 | Span 详情验收（待实现） | [a] 五类详情复用字段元数据<br />[b] Long Task 保留上报的阻塞贡献<br />[c] Vital 不使用 Span 耗时，CLS 无单位<br />[d] View 快照停留时长与导航时间点口径一致 |
+| View 加载时序验收（待实现） | [a] 前四段复用同条 TTFB 耗时，连接不拆 TLS，倒推起点保留空隙<br />[b] View 三段按首字节、DOMContentLoaded、Load 和自动 Loading Time 的边界计算并返回到 `phases`<br />[c] `markers` 仅包含 TTFB、FCP、LCP，缺失指标不补造<br />[d] 非首次加载、原点不一致、非法数值和倒序边界不组装伪时序，手动 Loading Time 不生成稳定阶段<br />[e] `total_duration` 等于有效的 `view.loading_time`，缺失或非法时省略，有效零值保留，标记超出总耗时仅扩展横轴 |
 | 异步分析验收（待实现） | [a] 基础详情不等待关联聚合<br />[b] 未加载、失败与统计为零可区分<br />[c] 应用、关联 ID 和时间边界一致，记录去重<br />[d] 区块合并保留基础字段，切换记录后丢弃旧响应 |
 | `apm/tests/test_unified_query_base.py` | [a] APM 继承通用基类<br />[b] 3 类 Query 统一接收 Target 列表<br />[c] Proxy 统一构造原始表与预计算层级<br />[d] 列表查询复用 `_query_list()`，Proxy 固定补 `total=0`<br />[e] 查询配置保持列表形态，多 Target 不丢表                                                                                   |
 
@@ -1315,6 +1393,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-09-10 00:00` | 确认 View 加载时序协议：TTFB 四段与 View 三段统一放入 `phases`，`markers` 仅保留可定位的 Vital 指标，加载总耗时直接取 Loading Time，与绘图横轴范围分离 |
 | `2026-09-04 13:00` | 完成里程碑 7 的语义字段模型复查（[#12326](https://github.com/TencentBlueKing/bk-monitor/pull/12326)）：[a] RUM 枚举收归 `semconv/rum/constants.py`<br />[b] 虚拟字段归入 `attributes/virtual_attributes.py`<br />[c] `FieldRegistry` 以绑定副本携带完整路径<br />[d] `SpanQuery` 通过 `SpanSpec.fields()` 统一补充虚拟字段 |
 | `2026-08-31 00:00` | `FieldSpec` 与 `view_config` 增加 Web Vitals 评级阈值，阈值沿用字段单位并按包含性上界依次匹配 |
 | `2026-08-28 00:00` | `FieldSpec` 与 `view_config` 增加 `field_display_type`，`field_unit` 只标识原始上报单位 |
@@ -1336,20 +1415,22 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 - [<源码> bk-monitor/packages/rum_web](https://github.com/TencentBlueKing/bk-monitor/tree/master/bkmonitor/packages/rum_web)
 - [<源码> bk-monitor/packages/apm_web/trace](https://github.com/TencentBlueKing/bk-monitor/tree/master/bkmonitor/packages/apm_web/trace)
 - [RUM 数据协议](../../articles/2026-07-12-rum-span-data-protocol/README.md)
+- [web-vitals 5.2.0 TTFB 归因](https://github.com/GoogleChrome/web-vitals/blob/v5.2.0/src/attribution/onTTFB.ts)
+- [HTML 解析结束与加载事件](https://html.spec.whatwg.org/multipage/parsing.html#the-end)
 - [OpenTelemetry Tracing API](https://opentelemetry.io/docs/specs/otel/trace/api/)
 - [OpenTelemetry Semantic Attribute Naming](https://opentelemetry.io/docs/specs/semconv/general/naming/)
 - [OpenTelemetry Semantic Convention Guidelines](https://opentelemetry.io/docs/specs/semconv/how-to-write-conventions/)
 
 ## 0x08 版本锚点
 
-| 状态 | 分支 | 里程碑 | PR |
-| --- | --- | --- | --- |
-| ✅ | `feat/rum_base_search_module/#1010158081136933145` | 里程碑 1：提供 RUM 基础检索模块 | [TencentBlueKing/bk-monitor #11838](https://github.com/TencentBlueKing/bk-monitor/pull/11838) |
-| ✅ | `feat/rum_base_query_fields/#1010158081136920078` | 里程碑 2：提供 RUM 字段元数据查询（`query_fields`） | [TencentBlueKing/bk-monitor #11840](https://github.com/TencentBlueKing/bk-monitor/pull/11840) |
-| ✅ | `feat/rum_span_list_api/#1010158081137033151`<br />`feat/rum_view_config_add_span_type_display_fields/#1010158081137385339`<br />`feat/rum_view_config_api_add_span_type_display_fields/#1010158081137396316` | 里程碑 3：提供 RUM Span 列表类接口（`list_records`、`view_config`、`get_fields_option_values`、`generate_query_string`） *[1]* | [TencentBlueKing/bk-monitor #11887](https://github.com/TencentBlueKing/bk-monitor/pull/11887)<br />[TencentBlueKing/bk-monitor #12086](https://github.com/TencentBlueKing/bk-monitor/pull/12086)<br />[TencentBlueKing/bk-monitor #12094](https://github.com/TencentBlueKing/bk-monitor/pull/12094) |
-| 🔄 | `<branch_name>` | 里程碑 4：提供 RUM Span 分析类接口（`field_topk`、`field_statistics_info`、`field_statistics_graph`、`download_topk`） *[1]* | 待创建 |
-| 🔄 | `<branch_name>` | 里程碑 5：提供 RUM Span 详情类接口（`record_detail`、`generate_query_string`） *[1]* | 待创建 |
-| ✅ | `feat/apm_trace/#1010158081137031784` | 里程碑 6：统一 APM 查询基类和 `TraceDatasourceTarget` 协议 | [TencentBlueKing/bk-monitor #11877](https://github.com/TencentBlueKing/bk-monitor/pull/11877) |
-| ✅ | `feat/rum_span_semconv_build/#1010158081137728855`<br />`feat/rum_span_semconv_better/#1010158081137884971` | 里程碑 7：提供 RUM 语义字段目录和 `SpanSpec` 访问入口 | [TencentBlueKing/bk-monitor #12295](https://github.com/TencentBlueKing/bk-monitor/pull/12295)<br />[TencentBlueKing/bk-monitor #12326](https://github.com/TencentBlueKing/bk-monitor/pull/12326) |
+| 状态  | 分支                                                                                                                                                                                                            | 里程碑                                                                                                            | PR                                                                                                                                                                                                                                                                                                  |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ✅   | `feat/rum_base_search_module/#1010158081136933145`                                                                                                                                                            | 里程碑 1：提供 RUM 基础检索模块                                                                                            | [TencentBlueKing/bk-monitor #11838](https://github.com/TencentBlueKing/bk-monitor/pull/11838)                                                                                                                                                                                                       |
+| ✅   | `feat/rum_base_query_fields/#1010158081136920078`                                                                                                                                                             | 里程碑 2：提供 RUM 字段元数据查询（`query_fields`）                                                                           | [TencentBlueKing/bk-monitor #11840](https://github.com/TencentBlueKing/bk-monitor/pull/11840)                                                                                                                                                                                                       |
+| ✅   | `feat/rum_span_list_api/#1010158081137033151`<br />`feat/rum_view_config_add_span_type_display_fields/#1010158081137385339`<br />`feat/rum_view_config_api_add_span_type_display_fields/#1010158081137396316` | 里程碑 3：提供 RUM Span 列表类接口（`list_records`、`view_config`、`get_fields_option_values`、`generate_query_string`） *[1]* | [TencentBlueKing/bk-monitor #11887](https://github.com/TencentBlueKing/bk-monitor/pull/11887)<br />[TencentBlueKing/bk-monitor #12086](https://github.com/TencentBlueKing/bk-monitor/pull/12086)<br />[TencentBlueKing/bk-monitor #12094](https://github.com/TencentBlueKing/bk-monitor/pull/12094) |
+| 🔄  | `<branch_name>`                                                                                                                                                                                               | 里程碑 4：提供 RUM Span 分析类接口（`field_topk`、`field_statistics_info`、`field_statistics_graph`、`download_topk`） *[1]*   | 待创建                                                                                                                                                                                                                                                                                                 |
+| 🔄  | `<branch_name>`                                                                                                                                                                                               | 里程碑 5：提供 RUM Span 详情类接口（`record_detail`） *[1]*                                                                 | 待创建                                                                                                                                                                                                                                                                                                 |
+| ✅   | `feat/apm_trace/#1010158081137031784`                                                                                                                                                                         | 里程碑 6：统一 APM 查询基类和 `TraceDatasourceTarget` 协议                                                                  | [TencentBlueKing/bk-monitor #11877](https://github.com/TencentBlueKing/bk-monitor/pull/11877)                                                                                                                                                                                                       |
+| ✅   | `feat/rum_span_semconv_build/#1010158081137728855`<br />`feat/rum_span_semconv_better/#1010158081137884971`                                                                                                   | 里程碑 7：提供 RUM 语义字段目录和 `SpanSpec` 访问入口                                                                           | [TencentBlueKing/bk-monitor #12295](https://github.com/TencentBlueKing/bk-monitor/pull/12295)<br />[TencentBlueKing/bk-monitor #12326](https://github.com/TencentBlueKing/bk-monitor/pull/12326)                                                                                                    |
 
 - *[1] 里程碑 3～5 实施期间，随接口落地逐步补充 `rum_web/docs/api/search.md`。*

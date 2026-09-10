@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-09-07
+> 最后更新：2026-09-10
 
 ## 0x01 项目知识
 
@@ -21,8 +21,8 @@
 
 ## 0x02 最近更新
 
+- 2026-09-10：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（统一 View 七段加载时序，加载总耗时取 Loading Time 并与横轴范围分离，markers 仅保留可定位的 Vital 指标；补充 Span Builder 类与查询分工方案）
 - 2026-09-07：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（补齐 Action、Long Task、Error、Vital、View 核心详情协议与简洁计算表，标明关联统计、趋势及 Source Map 还原需异步获取）
 - 2026-09-06：更新 [RUM 数据协议](./bkmonitor/articles/2026-07-12-rum-span-data-protocol/README.md)（调整基础字段与浏览器字段表）
 - 2026-09-06：更新 [Agent 工作原理中的 Message、Part 与 Span](./bkmonitor/articles/2026-09-06-agent-message-part-span-conversation/README.md)（将 Span 边界说明融入天气查询示例，整合为连贯文章）
 - 2026-09-06：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（补充 Span 详情协议草稿，核实里程碑 PR 合入状态并将里程碑 7 标记为 ✅）
-- 2026-09-03：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（同步里程碑 2 和里程碑 7 的 PR 状态）
