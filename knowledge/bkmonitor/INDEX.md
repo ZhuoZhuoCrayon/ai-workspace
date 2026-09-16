@@ -8,7 +8,9 @@
 
 | 需求 | 标签 | 状态 | 更新日期 |
 |------|------|------|----------|
-| [RUM 分层统一查询](./issues/2026-08-07-rum-unified-query/README.md) | `rum` `apm` `query` `span` `view` `session` `factory` `unify-query` `semconv` | 实现中 | 2026-09-10 |
+| [RUM 分层统一查询](./issues/2026-08-07-rum-unified-query/README.md) | `rum` `apm` `query` `span` `view` `session` `factory` `unify-query` `semconv` | 实现中 | 2026-09-16 |
+| [APM 服务数据状态下沉到后台服务发现](./issues/2026-09-16-apm-service-data-status-heartbeat/README.md) | `apm` `data-status` `discover` `heartbeat` `topo-node` `log` `profiling` | 方案完成 | 2026-09-16 |
+| [指标元信息存储与 SaaS/APM 自定义指标改造](./issues/2026-09-15-custom-metric-metadata/README.md) | `metadata` `custom-metric` `apm` `histogram` | 方案完成 | 2026-09-15 |
 | [APM 跨应用 Trace 检索](./issues/2026-07-31-apm-cross-app-trace-search/README.md) | `apm` `trace` `cross-app-search` `index-set` `bklog` `celery` `unify-query` | 待合入 | 2026-08-06 |
 | [日志、调用链与事件枚举值查询接入 UnifyQuery](./issues/2026-07-31-enum-values-unify-query/README.md) | `unify-query` `enum-values` `dimension-query` `log` `trace` `event` | 方案完成 | 2026-07-31 |
 | [日志 UnifyQuery 环境变量黑名单与 query_string 增强](./issues/2026-03-05-log-uq-env-whitelist-and-query-string/README.md) | `log` `unify-query` `data-source` `query-string` `config` `blacklist` | 代码已合入，Helm 配置中 | 2026-07-21 |
