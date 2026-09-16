@@ -4,7 +4,7 @@ tags: [rum, apm, query, span, view, session, factory, unify-query, semconv]
 issue: ./README.md
 description: 通过统一 Target、查询基类、Level 工厂和语义字段目录收敛 RUM 与 APM 查询
 created: 2026-08-07
-updated: 2026-09-10
+updated: 2026-09-16
 ---
 
 # RUM 分层统一查询 —— 实施方案
@@ -1178,8 +1178,9 @@ def build(
 | `page_stable.duration`    | `attributes.view.loading_time − attributes.view.load_event` *[2]*       |
 
 - *[1] 内容传输与 DOM 处理包含 HTML 接收、解析、阻塞脚本和 DOMContentLoaded 事件处理，剩余资源加载包含其后至 Load 完成的资源等待、脚本及事件处理，均为加载进程区间，不是纯下载或解析耗时。*
-- *[2] 页面趋于稳定仅在 `attributes.view.loading_time_source = auto` 时返回，手动值可作为加载总耗时，并在关键信息中保留来源。
-- *[3] 仅对 `initial_load` 使用最新 View 快照和同次导航的 Vital 组装时序。*
+- *[2] `page_stable` 只在 `attributes.view.loading_time_source = auto` 时返回，手动来源不生成这一段。*
+
+`loading_timing` 只在 `attributes.view.loading_type = initial_load` 时返回。非首次加载没有导航时间原点，也不产生 TTFB、FCP 和 LCP，`phases` 和 `markers` 都不构造。
 
 ```json
 {
@@ -1356,12 +1357,13 @@ def build(
 
 View Span 关联信息获取（后端）：
 
-| 补齐信息       | 额外过滤条件                                                             |
-| :--------- | ------------------------------------------------------------------ |
-| View 生命周期  | `attributes.span_type: view AND attributes.view.id: {当前 View ID}`  |
-| Web Vitals | `attributes.span_type: vital AND attributes.view.id: {当前 View ID}` |
-* *[1] 用最新 View 快照补齐头部时间及加载字段，原始记录保留在 `origin_data`。*
-* *[2] 未取得 `phase=end` 时，停留时长仅表示已观测时长。*
+| 补齐信息       | 额外过滤条件                                                             | 补齐字段                                                                                                                                                                                  |
+| :--------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| View 生命周期  | `attributes.span_type: view AND attributes.view.id: {当前 View ID}`  | [a] 头部时间：`end_time`、`elapsed_time` 和 `display.view.duration`<br />[b] 加载字段：`attributes.view` 下的 `loading_time`、`loading_time_source`、`loading_type`、`first_byte`、`dom_content_loaded` 和 `load_event` |
+| Web Vitals | `attributes.span_type: vital AND attributes.view.id: {当前 View ID}` | TTFB 四段耗时，以及 FCP、LCP、INP 和 CLS 的 `attributes.vital.value`                                                                                                                              |
+
+* *[1] `origin_data` 和 `span_id` 保留主记录，补齐字段只覆盖展示值。*
+* *[2] `start_time` 取导航开始时间，不随快照更新。未取得 `phase=end` 时，停留时长仅表示已观测时长。*
 
 ## 0x05 验收与验证
 
@@ -1377,7 +1379,7 @@ View Span 关联信息获取（后端）：
 | `test_level_handler.py`                | [a] 基类只保存 `data_sources`<br />[b] 具体 Level 可组合多个 Query<br />[c] TopK 方法只接收单个字段<br />[d] 9 项公共方法声明参数与返回类型<br />[e] 未知配置被拒绝，且不能覆盖公共参数或数据源                                                                                                              |
 | `test_query_resources.py`              | [a] 9 个 URL、HTTP 方法、Resource 和 Level 方法一一对应<br />[b] Resource 不依赖公共基类<br />[c] 请求协议不接受 `extra_config`，客户端无法覆盖 Level 配置<br />[d] `view_config` 保留 `origin_field`，顶层维护全量字段，分组通过字段名引用<br />[e] Span 视图返回按类型配置的默认列与分组适用范围<br />[f] semconv 补充别名、单位、展示类型、枚举选项和评级阈值 |
 | Span 详情验收（待实现） | [a] 五类详情复用字段元数据<br />[b] Long Task 保留上报的阻塞贡献<br />[c] Vital 不使用 Span 耗时，CLS 无单位<br />[d] View 快照停留时长与导航时间点口径一致 |
-| View 加载时序验收（待实现） | [a] 前四段复用同条 TTFB 耗时，连接不拆 TLS，倒推起点保留空隙<br />[b] View 三段按首字节、DOMContentLoaded、Load 和自动 Loading Time 的边界计算并返回到 `phases`<br />[c] `markers` 仅包含 TTFB、FCP、LCP，缺失指标不补造<br />[d] 非首次加载、原点不一致、非法数值和倒序边界不组装伪时序，手动 Loading Time 不生成稳定阶段<br />[e] `total_duration` 等于有效的 `view.loading_time`，缺失或非法时省略，有效零值保留，标记超出总耗时仅扩展横轴 |
+| View 加载时序验收（待实现） | [a] 前四段复用同条 TTFB 耗时，连接不拆 TLS，倒推起点保留空隙<br />[b] View 三段按首字节、DOMContentLoaded、Load 和自动 Loading Time 的边界计算并返回到 `phases`<br />[c] `markers` 仅包含 TTFB、FCP、LCP，缺失指标不补造<br />[d] 非首次加载不返回 `loading_timing`，原点不一致、非法数值和倒序边界不组装伪时序，手动 Loading Time 不生成 `page_stable`<br />[e] `total_duration` 等于有效的 `view.loading_time`，缺失或非法时省略，有效零值保留，标记超出总耗时仅扩展横轴 |
 | 异步分析验收（待实现） | [a] 基础详情不等待关联聚合<br />[b] 未加载、失败与统计为零可区分<br />[c] 应用、关联 ID 和时间边界一致，记录去重<br />[d] 区块合并保留基础字段，切换记录后丢弃旧响应 |
 | `apm/tests/test_unified_query_base.py` | [a] APM 继承通用基类<br />[b] 3 类 Query 统一接收 Target 列表<br />[c] Proxy 统一构造原始表与预计算层级<br />[d] 列表查询复用 `_query_list()`，Proxy 固定补 `total=0`<br />[e] 查询配置保持列表形态，多 Target 不丢表                                                                                   |
 
@@ -1393,15 +1395,15 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 
 | 时间 | 结论性进展 |
 | --- | --- |
-| `2026-09-10 00:00` | 确认 View 加载时序协议：TTFB 四段与 View 三段统一放入 `phases`，`markers` 仅保留可定位的 Vital 指标，加载总耗时直接取 Loading Time，与绘图横轴范围分离 |
-| `2026-09-04 13:00` | 完成里程碑 7 的语义字段模型复查（[#12326](https://github.com/TencentBlueKing/bk-monitor/pull/12326)）：[a] RUM 枚举收归 `semconv/rum/constants.py`<br />[b] 虚拟字段归入 `attributes/virtual_attributes.py`<br />[c] `FieldRegistry` 以绑定副本携带完整路径<br />[d] `SpanQuery` 通过 `SpanSpec.fields()` 统一补充虚拟字段 |
+| `2026-09-16 17:00` | 确认 View 加载时序协议：[a] TTFB 四段与 View 三段统一放入 `phases`，`markers` 仅保留可定位的 Vital 指标<br />[b] 加载总耗时直接取 Loading Time，与绘图横轴范围分离<br />[c] `loading_timing` 返回范围由 `loading_type` 和 `loading_time_source` 决定，非首次加载整块不返回<br />[d] 最新 View 快照只补齐头部时间和 View 侧加载字段，Vital 字段由 Web Vitals 关联查询补齐 |
+| `2026-09-04 13:00` | 完成里程碑 5 的语义字段模型复查（[#12326](https://github.com/TencentBlueKing/bk-monitor/pull/12326)）：[a] RUM 枚举收归 `semconv/rum/constants.py`<br />[b] 虚拟字段归入 `attributes/virtual_attributes.py`<br />[c] `FieldRegistry` 以绑定副本携带完整路径<br />[d] `SpanQuery` 通过 `SpanSpec.fields()` 统一补充虚拟字段 |
 | `2026-08-31 00:00` | `FieldSpec` 与 `view_config` 增加 Web Vitals 评级阈值，阈值沿用字段单位并按包含性上界依次匹配 |
 | `2026-08-28 00:00` | `FieldSpec` 与 `view_config` 增加 `field_display_type`，`field_unit` 只标识原始上报单位 |
-| `2026-08-26 22:00` | 完成里程碑 3 的后续实现并通过 [TencentBlueKing/bk-monitor #12094](https://github.com/TencentBlueKing/bk-monitor/pull/12094) review：`view_config` 支持省略时间范围，查询层根据 `DataSourceTarget.retention` 补齐缺失边界，RUM 与 APM Query 统一接收数据源列表 |
+| `2026-08-26 22:00` | 完成里程碑 2 的后续实现并通过 [TencentBlueKing/bk-monitor #12094](https://github.com/TencentBlueKing/bk-monitor/pull/12094) review：`view_config` 支持省略时间范围，查询层根据 `DataSourceTarget.retention` 补齐缺失边界，RUM 与 APM Query 统一接收数据源列表 |
 | `2026-08-24 00:00` | 统一字段语义与 `view_config` 协议：[a] 原子字段与 `Attributes`、`Events` 等复合字段统一使用 `FieldSpec`，由 `SpanSpec` 组成字段树<br />[b] `FieldRegistry` 遍历字段树生成完整路径，未注册字段保留原始字段名<br />[c] `CachedEnum` 只记录代码复制关系，枚举继续使用现有 `label` 和 `choices()` 协议 |
-| `2026-08-18 15:00` | [a] 完成里程碑 3 首轮 PR（[#11887](https://github.com/TencentBlueKing/bk-monitor/pull/11887)）review<br />[b] 明确 `extra_config` 为 Level 层扩展位，不进入接口协议<br />[c] 确定请求序列化器单链分层：应用上下文 → 时间范围 → 检索条件，过滤条件按存储查询侧与查询串渲染侧拆分两类 |
+| `2026-08-18 15:00` | [a] 完成里程碑 2 首轮 PR（[#11887](https://github.com/TencentBlueKing/bk-monitor/pull/11887)）review<br />[b] 明确 `extra_config` 为 Level 层扩展位，不进入接口协议<br />[c] 确定请求序列化器单链分层：应用上下文 → 时间范围 → 检索条件，过滤条件按存储查询侧与查询串渲染侧拆分两类 |
 | `2026-08-18 10:00` | 确认检索接口返回协议：`view_config` 维护字段元数据与枚举别名；`get_fields_option_values` 返回字段路径到原始值列表 |
-| `2026-08-12 09:00` | 里程碑 6 已通过 [TencentBlueKing/bk-monitor #11877](https://github.com/TencentBlueKing/bk-monitor/pull/11877) 合入，统一 APM 查询基类和 `TraceDatasourceTarget` 协议 |
+| `2026-08-12 09:00` | 里程碑 4 已通过 [TencentBlueKing/bk-monitor #11877](https://github.com/TencentBlueKing/bk-monitor/pull/11877) 合入，统一 APM 查询基类和 `TraceDatasourceTarget` 协议 |
 | `2026-08-10 22:00` | 统一 APM 查询继承链与 Target 协议：分析查询下沉到 APM 基类，列表查询由具体 Query 直接构造，所有查询配置保持 `list[QueryConfigBuilder]` 形态 |
 | `2026-08-09 09:00` | 统一 Span 接口命名、里程碑和 `/rum/search/{API}/` 路由 |
 | `2026-08-08 16:00` | 统一 Level 方法的参数、返回类型、命名和扩展边界 |
@@ -1423,14 +1425,17 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 
 ## 0x08 版本锚点
 
-| 状态  | 分支                                                                                                                                                                                                            | 里程碑                                                                                                            | PR                                                                                                                                                                                                                                                                                                  |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ✅   | `feat/rum_base_search_module/#1010158081136933145`                                                                                                                                                            | 里程碑 1：提供 RUM 基础检索模块                                                                                            | [TencentBlueKing/bk-monitor #11838](https://github.com/TencentBlueKing/bk-monitor/pull/11838)                                                                                                                                                                                                       |
-| ✅   | `feat/rum_base_query_fields/#1010158081136920078`                                                                                                                                                             | 里程碑 2：提供 RUM 字段元数据查询（`query_fields`）                                                                           | [TencentBlueKing/bk-monitor #11840](https://github.com/TencentBlueKing/bk-monitor/pull/11840)                                                                                                                                                                                                       |
-| ✅   | `feat/rum_span_list_api/#1010158081137033151`<br />`feat/rum_view_config_add_span_type_display_fields/#1010158081137385339`<br />`feat/rum_view_config_api_add_span_type_display_fields/#1010158081137396316` | 里程碑 3：提供 RUM Span 列表类接口（`list_records`、`view_config`、`get_fields_option_values`、`generate_query_string`） *[1]* | [TencentBlueKing/bk-monitor #11887](https://github.com/TencentBlueKing/bk-monitor/pull/11887)<br />[TencentBlueKing/bk-monitor #12086](https://github.com/TencentBlueKing/bk-monitor/pull/12086)<br />[TencentBlueKing/bk-monitor #12094](https://github.com/TencentBlueKing/bk-monitor/pull/12094) |
-| 🔄  | `<branch_name>`                                                                                                                                                                                               | 里程碑 4：提供 RUM Span 分析类接口（`field_topk`、`field_statistics_info`、`field_statistics_graph`、`download_topk`） *[1]*   | 待创建                                                                                                                                                                                                                                                                                                 |
-| 🔄  | `<branch_name>`                                                                                                                                                                                               | 里程碑 5：提供 RUM Span 详情类接口（`record_detail`） *[1]*                                                                 | 待创建                                                                                                                                                                                                                                                                                                 |
-| ✅   | `feat/apm_trace/#1010158081137031784`                                                                                                                                                                         | 里程碑 6：统一 APM 查询基类和 `TraceDatasourceTarget` 协议                                                                  | [TencentBlueKing/bk-monitor #11877](https://github.com/TencentBlueKing/bk-monitor/pull/11877)                                                                                                                                                                                                       |
-| ✅   | `feat/rum_span_semconv_build/#1010158081137728855`<br />`feat/rum_span_semconv_better/#1010158081137884971`                                                                                                   | 里程碑 7：提供 RUM 语义字段目录和 `SpanSpec` 访问入口                                                                           | [TencentBlueKing/bk-monitor #12295](https://github.com/TencentBlueKing/bk-monitor/pull/12295)<br />[TencentBlueKing/bk-monitor #12326](https://github.com/TencentBlueKing/bk-monitor/pull/12326)                                                                                                    |
+| 状态 | 分支 | 里程碑 | PR |
+| --- | --- | --- | --- |
+| ✅ | `feat/rum_base_search_module/#1010158081136933145` | 里程碑 0：提供 RUM 基础检索模块 | [TencentBlueKing/bk-monitor #11838](https://github.com/TencentBlueKing/bk-monitor/pull/11838) |
+| ✅ | `feat/rum_base_query_fields/#1010158081136920078` | 里程碑 1：提供 RUM 字段元数据查询（`query_fields`） | [TencentBlueKing/bk-monitor #11840](https://github.com/TencentBlueKing/bk-monitor/pull/11840) |
+| ✅ | `feat/rum_span_list_api/#1010158081137033151`<br />`feat/rum_view_config_add_span_type_display_fields/#1010158081137385339`<br />`feat/rum_view_config_api_add_span_type_display_fields/#1010158081137396316` | 里程碑 2：提供 RUM Span 列表类接口（`list_records`、`view_config`、`get_fields_option_values`、`generate_query_string`） *[1]* | [TencentBlueKing/bk-monitor #11887](https://github.com/TencentBlueKing/bk-monitor/pull/11887)<br />[TencentBlueKing/bk-monitor #12086](https://github.com/TencentBlueKing/bk-monitor/pull/12086)<br />[TencentBlueKing/bk-monitor #12094](https://github.com/TencentBlueKing/bk-monitor/pull/12094) |
+| ✅ | — | 里程碑 3：提供 RUM Span 分析类接口（`field_topk`、`field_statistics_info`、`field_statistics_graph`、`download_topk`） *[1]* | — |
+| ✅ | `feat/apm_trace/#1010158081137031784` | 里程碑 4：统一 APM 查询基类和 `TraceDatasourceTarget` 协议 | [TencentBlueKing/bk-monitor #11877](https://github.com/TencentBlueKing/bk-monitor/pull/11877) |
+| ✅ | `feat/rum_span_semconv_build/#1010158081137728855`<br />`feat/rum_span_semconv_better/#1010158081137884971` | 里程碑 5：提供 RUM 语义字段目录和 `SpanSpec` 访问入口 | [TencentBlueKing/bk-monitor #12295](https://github.com/TencentBlueKing/bk-monitor/pull/12295)<br />[TencentBlueKing/bk-monitor #12326](https://github.com/TencentBlueKing/bk-monitor/pull/12326) |
+| 🔄 | `<branch_name>` | 里程碑 6：提供 RUM 详情 Mock 接口 *[2]* | 待创建 |
+| 🔄 | `<branch_name>` | 里程碑 7：提供 RUM Span 详情类接口（`record_detail`） *[1]* | 待创建 |
+| 🔄 | `<branch_name>` | 里程碑 8：提供 RUM 分析接口（`statistic`） *[1]* | 待创建 |
 
-- *[1] 里程碑 3～5 实施期间，随接口落地逐步补充 `rum_web/docs/api/search.md`。*
+- *[1] RUM 接口里程碑实施期间，随接口落地补充 `rum_web/docs/api/search.md`。*
+- *[2] Mock 数据为每种 Span 类型分配固定 `span_id`；详情请求根据 `record_id` 返回对应类型的 Mock 数据。*
