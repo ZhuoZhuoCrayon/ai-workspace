@@ -102,6 +102,8 @@ description: >
 
 1）从 `repos.json` / `private/repos.json` 读取 `local_path`、`language`。
 
+同名项目同时存在于 public 和 private 时，用户未明确指定操作目标就默认使用 public（`repos.json`）；仅提供内网参考链接不算指定 private。
+
 * `local_path` 使模型能直接访问项目源码，`knowledge/<name>/` 提供项目级知识，两者结合即可完成项目任务。
 * **【CRITICAL（必须执行不可协商）】** `language`：
   - 对话：以工作区项目配置的 language 字段为准，默认中文。
