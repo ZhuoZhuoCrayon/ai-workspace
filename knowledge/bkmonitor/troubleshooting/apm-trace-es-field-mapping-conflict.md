@@ -3,7 +3,7 @@ title: APM Trace 写入 ES 字段类型冲突
 tags: [apm, trace, elasticsearch, mapping, dynamic-template, ignore-above, attribute-filter, as-string, index-rollover]
 description: APM Trace 字段类型冲突与超长 keyword 的修复方法，覆盖字段过滤、类型统一、ignore_above 和索引轮转
 created: 2026-07-02
-updated: 2026-08-24
+updated: 2026-09-21
 ---
 
 # APM Trace 写入 ES 字段类型冲突
@@ -537,7 +537,50 @@ storage.create_or_update_aliases(
 print("配置更新并完成索引轮转")
 ```
 
-### b. 生效边界
+### b. 通过 APM 刷新内置配置
+
+运行环境已升级 APM 字段配置时，可在 bkmonitor SaaS 的 Django shell 中执行以下脚本，将 `TraceDataSource.ES_DYNAMIC_CONFIG` 同步到结果表配置。脚本沿用应用的 ES 集群、保留时间、分片大小、分片数和副本数。
+
+```python
+import json
+
+from django.conf import settings
+
+from apm.models.datasource import TraceDataSource
+
+ds = TraceDataSource.objects.get(
+    bk_biz_id=11,
+    app_name="sand_local_dev",
+)
+storage = ds.storage
+index_settings = json.loads(storage.index_settings or "{}")
+
+# 先确认运行环境已经包含升级后的配置
+print(json.dumps(ds.ES_DYNAMIC_CONFIG, ensure_ascii=False, indent=2))
+
+ds.create_or_update_result_table(
+    es_storage_cluster=storage.storage_cluster_id,
+    es_retention=storage.retention,
+    es_slice_size=storage.slice_size,
+    es_shards=int(index_settings.get(
+        "number_of_shards", settings.APM_APP_DEFAULT_ES_SHARDS
+    )),
+    es_number_of_replicas=int(index_settings.get(
+        "number_of_replicas", settings.APM_APP_DEFAULT_ES_REPLICAS
+    )),
+)
+
+storage.refresh_from_db()
+print(json.dumps(
+    json.loads(storage.mapping_settings),
+    ensure_ascii=False,
+    indent=2,
+))
+```
+
+此入口会按内置配置重设 `mapping_settings`，手工添加的动态模板可能被覆盖。刷新配置后仍需确认索引轮转及写别名生效，可复用上方脚本中的轮转步骤。
+
+### c. 生效边界
 
 - 动态模板只对新索引生效，修改后必须轮转索引。
 - `ignore_above` 不截断 `_source`，只跳过超长值的索引和 `doc_values`。

@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-09-16
+> 最后更新：2026-09-21
 
 ## 0x01 项目知识
 
@@ -21,8 +21,8 @@
 
 ## 0x02 最近更新
 
+- 2026-09-21：更新 [APM Trace 写入 ES 字段类型冲突](./bkmonitor/troubleshooting/apm-trace-es-field-mapping-conflict.md)（在原有轮转脚本下方补充 APM 内置 ES 配置刷新脚本）
 - 2026-09-16：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（明确 `loading_timing` 返回范围与 View 快照补齐字段）
 - 2026-09-16：新增 [APM 服务数据状态下沉到后台服务发现](./bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md)（服务数据心跳模型、日志服务发现与 SaaS 状态链路下线）
 - 2026-09-15：新增 [指标元信息存储与 SaaS/APM 自定义指标改造](./bkmonitor/issues/2026-09-15-custom-metric-metadata/README.md)（独立于 Collector 的 Metadata 存储与 SaaS/APM 指标族方案）
 - 2026-09-15：新增 [bk-collector 指标元信息采集与同步](./bkmonitor-datalink/issues/2026-09-15-collector-metric-metadata/README.md)（协议提取、范围隔离与缓存性能对比）
-- 2026-09-10：更新 [RUM 数据协议](./bkmonitor/articles/2026-07-12-rum-span-data-protocol/README.md)（同步 SDK 字段口径）
