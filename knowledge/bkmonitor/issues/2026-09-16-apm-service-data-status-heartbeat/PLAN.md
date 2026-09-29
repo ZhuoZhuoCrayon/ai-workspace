@@ -4,25 +4,38 @@ tags: [apm, data-status, discover, heartbeat, topo-node, log, profiling]
 issue: knowledge/bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md
 description: 以服务数据心跳为唯一事实源，四类发现器单写、拓扑接口单读，SaaS 下线状态重算链路
 created: 2026-09-16
-updated: 2026-09-22
+updated: 2026-09-29
 ---
 
 # APM 服务数据状态下沉到后台服务发现 —— 实施方案
 
 ## 0x01 调研与约束
 
-### a. 请求侧状态重算
+### a. 现有数据状态判定
 
-`apm_web.metric.resources.ServiceListAsyncResource._get_data_status_mapping` 先枚举服务全集，再逐类判定状态，全部在请求线程内完成。
+周期任务 `refresh_application` 每 `10 min` 重算一次数据状态，判断最近 `no_data_period` 分钟（默认 `10 min`）内是否有数据 *[1]*：
 
-| 数据类型 | `NORMAL` 判据 | 查询载体 |
-| --- | --- | --- |
-| 指标 | `bk_apm_count` 四路分组结果中存在服务键 | UnifyQuery × `4` |
-| 日志 | 关联索引集不含 `NO_DATA` 标签，或 APM 日志表聚合命中服务名 *[1]* | 索引集元数据 + `es_query_dsl` × `2` |
-| 调用链 | Flow 指标出现该服务作为调用方或被调方 | UnifyQuery × `1` |
-| 性能分析 | `ProfileService.last_check_time > 窗口起点 - 10 min` | `apm_api.query_profile_services_detail` |
+| 类型   | 应用（`Application.set_data_status`）                                              | 服务（`ServiceHandler.get_service_data_status_mapping`）                                 |
+| ---- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| 调用链  | [a] UnifyQuery：`TraceBackendHandler.get_data_count`<br />[b] `bk_apm_count` 求和 | [a] UnifyQuery：`ServiceFlowCount`<br />[b] Flow 指标含该服务                               |
+| 指标   | [a] BKBase：`MetricBackendHandler.get_data_count`<br />[b] 链路消息数 *[2]* *[3]*    | [a] UnifyQuery：`RequestCountInstance`<br />[b] `bk_apm_count` 按服务分组                  |
+| 日志   | [a] UnifyQuery：`LogBackendHandler.get_data_count`<br />[b] 索引集 `_index` 计数     | [a] ES：`ServiceLogHandler.get_log_count_mapping`<br />[b] 日志表聚合命中或关联索引无 `NO_DATA` 标签 |
+| 性能分析 | [a] BKBase：`ProfilingBackendHandler.get_data_count`<br />[b] 链路消息数 *[2]*       | [a] DB：`query_profile_services_detail`<br />[b] `last_check_time` 晚于窗口起点前 `10 min`   |
 
-- *[1] 日志标签与 APM 状态的关系见「日志标签与服务状态」。*
+- *[1] 页面异步拉取服务状态同样使用该窗口，忽略前端传入的时间范围。*
+- *[2] V4 取 DataId 消息数，V3 取存储 `output_count` 且默认按 `1d` 聚合，窗口可能扩大到当天（待确认）。*
+- *[3] 含 Trace 生成的 `bk_apm_*` 指标，只上报 Trace 也判为有数据。*
+
+服务日志状态里的 `NO_DATA` 标签不由 APM 计算，而是日志平台巡检索引集后打上的，规则如下：
+
+| 项 | 规则 |
+| --- | --- |
+| 入口 | `apps.log_search.tasks.no_data.no_data_check`，每 `15 min` |
+| 窗口 | 近 `1` 天 |
+| 判据 | 整个索引集无数据即打标（`tag_id=4`），查询异常也按无数据处理 |
+| 范围 | 近 `1` 天有人检索过的空间下的有效索引集 *[1]* |
+
+- *[1] 范围外的索引集不会被检查，缺少该标签不代表已确认有数据。*
 
 ### b. 慢 Trace 耗时构成
 
@@ -48,27 +61,13 @@ updated: 2026-09-22
 | ---- | --------------------------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------- | -------------- |
 | 调用链  | `apm.core.discover.node.NodeDiscover` 等 `7` 个       | [a] `topo_discover_cron`<br />[b] 每分钟分片，单应用每 `10 min` 一轮 *[1]*       | `TopoNode`：合并 `source=["trace"]`，刷新 `updated_at`  | 节点更新时间，未记录数据时间 |
 | 指标   | `apm.core.discover.metric.service.ServiceDiscover`  | [a] `datasource_discover_cron`<br />[b] 每分钟分片，单应用每 `10 min` 一轮 *[2]* | `TopoNode`：合并 `source=["metric"]`，刷新 `updated_at` | 节点更新时间，未记录数据时间 |
-| 性能分析 | `apm.core.discover.profile.service.ServiceDiscover` | [a] `profile_discover_cron`<br />[b] 每 `10 min` 一轮，应用间串行执行           | `ProfileService`：刷新 `last_check_time`             | 发现样本的检查窗口结束时间  |
+| 性能分析 | `apm.core.discover.profile.service.ServiceDiscover` | [a] `profile_discover_cron`<br />[b] 每 `10 min` 一轮，应用间串行执行           | `ProfileService`：刷新 `last_check_time`             | 任务开始时刻，未记录数据时间 |
 | 日志   | 无                                                   | 无                                                                    | 无                                                 | 无              |
 
 - *[1] 新建应用每 `2 min` 一轮，eBPF 应用不参与调用链发现。*
-- *[2] 指标发现包含 eBPF 应用，按 `200 s` 切分子窗口；起点误用当前时间，窗口指向未来，修正方案见「指标心跳」。*
+- *[2] 指标发现包含 eBPF 应用，按 `200 s` 切分子窗口；起点误用当前时间导致窗口指向未来，本期暂不修正。*
 - *[3] `TopoNode.updated_at` 由多个发现器共用，无法表达各数据类型的更新时间。*
 - *[4] `apm.core.discover.cached_mixin.CachedDiscoverMixin` 的 Redis 心跳只用于对象回收，不区分数据类型，也不覆盖 `TopoNode`、`ProfileService`，不能用于服务状态判定。*
-
-### d. 日志标签与服务状态
-
-| 维度 | 日志平台 `NO_DATA` 标签 | APM 服务数据状态（心跳方案） |
-| --- | --- | --- |
-| 含义 | 整个索引集无数据 | 每个服务、每类数据的 `NORMAL` / `NO_DATA` / `DISABLED` 三态 |
-| 用途 | 索引集选择器“隐藏无数据”（`tag_id=4`）、APM 关联日志判定 | 服务列表四类状态列与筛选项 |
-| 判据窗口 | 近 `1` 天 | 无数据周期（默认 `10 min`）+ 一个发现周期 *[1]* |
-| 刷新周期 | `15 min` *[2]* | 随发现调度，通常 `10 min` |
-| 覆盖范围 | 近 `1` 天有人检索过的空间下的有效索引集 | 应用服务全集，受各数据源发现范围约束 |
-| 缺省表现 | 缺少该标签不代表已确认有数据 | 模块开启但无有效心跳时返回 `NO_DATA` 并打点 *[1]* |
-
-- *[1] 日志模块开启时，自身日志心跳有效或服务级关联索引可用，任一条件成立即为 `NORMAL`；心跳改造保留关联索引的标签判据。*
-- *[2] 标签检查入口为 `apps.log_search.tasks.no_data.no_data_check`，查询异常也按无数据处理。*
 
 ## 0x02 架构设计
 
@@ -111,12 +110,10 @@ flowchart LR
     HB -.- TN
 
     TN --> QN["QueryTopoNodeResource<br/>节点 + heartbeat"]
-    TN --> QA["ListApplicationDataStatusResource<br/>应用级聚合"]
 
     QN --> LS["ServiceHandler.list_services"]
     LS --> SL["ServiceListResource"]
     LS --> SA["ServiceListAsyncResource"]
-    QA --> RA["refresh_application"]
 ```
 
 `TopoNode` 同时承载服务全集与数据心跳，两件事由不同字段表达：
@@ -143,35 +140,18 @@ flowchart LR
 }
 ```
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `<data_type>` | `object` | 每个发现器只更新自己负责的类型，保留其他类型的值 *[1]* |
+| 字段                         | 类型            | 说明                              |
+| -------------------------- | ------------- | ------------------------------- |
+| `<data_type>`              | `object`      | 每个发现器只更新自己负责的类型，保留其他类型的值 *[1]*  |
 | `<data_type>.last_data_at` | `int \| null` | 最后有数据的时间（秒），新旧时间取较大值，未发现数据时保留旧值 |
-| `<data_type>.checked_at` | `int \| null` | 最近一次检查成功的时间（秒），未检查时为空，检查失败时保留旧值 |
-
-| 读取条件                                                    | 返回值           |
-| ------------------------------------------------------- | ------------- |
-| 子键缺失，或 `checked_at` 为空、距今超过 `2` 个发现周期                   | `NO_DATA` 并打点 |
-| `checked_at` 未超时，且 `last_data_at >= now - 无数据周期 - 发现周期` | `NORMAL`      |
-| `checked_at` 未超时，但 `last_data_at` 早于上述时间或为空             | `NO_DATA`     |
+| `<data_type>.checked_at`   | `int \| null` | 最近一次检查成功的时间（秒），未检查时为空，检查失败时保留旧值 |
 
 - *[1] 写入前读取 `heartbeat`，合并后通过 `bulk_update` 只更新该列，不改 `updated_at`，节点仍按拓扑更新时间回收。*
 - *[2] 调用链与指标、日志按 `app_id % 10 == minute % 10` 在同一分钟派发，后写入的旧快照可能覆盖另一类刚写入的值。*
 - *[3] 读取安排在写入前，以减少并发覆盖的机会；状态判断多留一个发现周期，允许心跳落后一轮，但不能保证并发更新不丢失。*
 - *[4] 心跳只由后台发现器更新，页面查询不更新心跳时间。*
 
-### e. 数据时间取值口径
-
-| 数据源  | 取值方式                                       | 精度       | 额外查询成本            |
-| ---- | ------------------------------------------ | -------- | ----------------- |
-| 调用链  | 取本轮命中 Span 的最大 `end_time`                  | Span 级   | 无，发现器已持有原始 Span   |
-| 指标   | PromQL 按 `60 s` 步长返回 `_time` 序列，取值非空的最大时间戳 | `1 min`  | 无，仅调整现有查询的 `step` |
-| 日志   | terms 聚合下挂 `max(time)` 子聚合                 | 秒级       | 无，与服务名发现同一次查询     |
-| 性能分析 | 沿用 `last_check_time`，即本轮检查窗口的结束时间          | `10 min` | 无                 |
-
-四类心跳统一按「无数据周期 + 一个发现周期」判定新鲜，与性能分析现有的「再前探 `10 min`」口径一致。指标、调用链、日志三类由实时查询改为读心跳后，服务从有数据变为无数据的判定会晚一个发现周期，这是下沉带来的固有延迟，需要在验收里对照确认。
-
-### f. 状态映射协议
+### e. 状态映射协议
 
 服务级状态由 SaaS 做纯映射，不再发起任何远程查询：
 
@@ -191,14 +171,7 @@ heartbeat_fresh(service, data_type):
 
 日志是唯一的双来源状态。心跳只覆盖 APM 自身管理的日志结果表，关联索引的可用性由 SaaS 读 `LogServiceRelation` 后比对索引集元数据得出，全程不发起 ES 聚合。
 
-应用级状态按「任一服务有数据」聚合：
-
-```text
-application_status(data_type):
-    if not is_enabled_{data_type}:                   -> DISABLED
-    if exists service where heartbeat_fresh(service, data_type): -> NORMAL
-    -> NO_DATA
-```
+应用级状态不由心跳推导，沿用 `Application.set_data_status` 的现有链路。
 
 ## 0x03 开发方案 —— 后台心跳生产
 
@@ -209,21 +182,10 @@ application_status(data_type):
 - `heartbeat`：`models.JSONField`，默认 `{}`，字段含义见「心跳协议」。
 - `touch_heartbeat(...)`：四个发现器共用的写入方法。
 
-```text
-touch_heartbeat(
-    bk_biz_id: int, app_name: str, data_type: str,
-    last_data_at_mapping: dict[str, int | None],  # topo_key -> 本轮最大数据时间
-    checked_at: int,                             # 本轮检查成功完成的时间
-) -> None
-```
-
 ```mermaid
 flowchart LR
-    A["discover()"] --> B{"query ok?"}
-    B -- no --> X["return"]
-    B -- yes --> C["list_exists_*()"]
-    C --> D["bulk_create /<br/>bulk_update"]
-    D --> E
+    A["discover()"] --> B["build_last_data_at_mapping()"]
+    B --> E
 
     subgraph T["touch_heartbeat() · 并发写入"]
         direction TB
@@ -232,60 +194,155 @@ flowchart LR
     end
 ```
 
-- *[1] `list_exists_*()` 指 `apm.core.discover.metric.service.ServiceDiscover.list_exists_mapping` 与 `apm.core.discover.node.NodeDiscover.list_exists`，写心跳前须重新读取，不能复用节点发现时的快照。*
-- *[2] `last_data_at_mapping` 的键表示本轮检查覆盖的服务，值为 `None` 时保留旧数据时间，只更新检查时间；这些服务的节点须在写心跳前创建完成。*
+- *[1] 心跳维护依赖服务发现的结果，但不改动现有节点写入流程：各发现器在 `discover()` 末尾新增 `build_last_data_at_mapping()`，按各数据源小节的取值方式，从本轮窗口数据生成 `topo_key -> last_data_at`。*
+
+`touch_heartbeat` 核心逻辑：
+
+```python
+@classmethod
+def touch_heartbeat(
+    cls,
+    bk_biz_id: int,
+    app_name: str,
+    data_type: str,
+    last_data_at_mapping: dict[str, int | None],  # topo_key -> 该服务本轮最后一条数据的时间（秒）
+    checked_at: int,  # 本轮检查成功完成的时间（秒）
+) -> None:
+    # reload：写前重读，拿最新 heartbeat [2]
+    nodes: list[TopoNode] = list(
+        cls.objects.filter(
+            bk_biz_id=bk_biz_id, app_name=app_name, topo_key__in=last_data_at_mapping.keys()
+        ).only("id", "topo_key", "heartbeat")
+    )
+
+    # merge：只改本类型子键，其他类型原样保留
+    for node in nodes:
+        sub: dict[str, int | None] = node.heartbeat.get(data_type) or {}
+        new_last_data_at: int | None = last_data_at_mapping[node.topo_key]
+        if new_last_data_at is not None:  # None 表示本轮窗口内无数据，保留旧值
+            sub["last_data_at"] = max(sub.get("last_data_at") or 0, new_last_data_at)
+        sub["checked_at"] = checked_at
+        node.heartbeat[data_type] = sub
+
+    # bulk_update：只声明 heartbeat 列，不触发 updated_at 的 auto_now
+    cls.objects.bulk_update(nodes, fields=["heartbeat"], batch_size=200)
+```
+
+- *[2] 新服务的节点已在 `discover()` 内建出，`heartbeat` 默认为 `{}`，reload 能直接读到。*
 
 ### b. 调用链心跳
 
-**[Change]** `apm.core.discover.node.NodeDiscover.discover`：按 `topo_key` 汇总 Span 的最大 `end_time`，节点写入后调用 `touch_heartbeat`，写入 `trace` 心跳。
+调用链心跳放在 `TopoHandler.discover()`：常规轮次结束后追加一个兜底轮，每个服务取最后一个 Span，既补发现常规轮次漏掉的稀疏服务，也作为 `trace` 心跳的数据来源。`NodeDiscover` 不改动。
 
-- *[1] `apm.core.discover.base.TopoHandler.discover` 可分多轮调用发现器，每轮以完成时间作为 `checked_at`，数据时间按「心跳协议」合并。*
+| 变更点                                                                       | 修改内容                                                      |
+| ------------------------------------------------------------------------- | --------------------------------------------------------- |
+| **[Add]** `bkmonitor.data_source.utils.query.BaseQuery._query_group_list` | 签名同 `_query_list`，增加 `group_field`，每组返回排序后的第一条完整记录 *[1]*  |
+| **[Add]** `apm.core.handlers.query.span_query.SpanQuery.query_group_list` | 按 `end_time desc` 排序、按服务名分组，返回每个服务最后上报的 Span              |
+| **[Change]** `apm.core.discover.base.TopoHandler.discover`                | 抽出拓扑发现任务为 `_discover_spans`，常规轮与兜底轮共用；兜底轮结束后写入 `trace` 心跳 |
+
+```python
+# TopoHandler.discover()，位于 discover finished 日志之前
+for round_index, trace_ids in enumerate(self.list_trace_ids(index_name)):
+    ...
+    self._discover_spans(all_spans, topo_params_template)
+
+# 兜底轮 [2]
+last_spans: list[dict[str, Any]] = span_query.query_group_list(
+    start_time, end_time, group_field=OtlpKey.get_resource_key(ResourceAttributes.SERVICE_NAME),
+    offset=0, limit=SpanQuery.QUERY_MAX_LIMIT,
+)
+self._discover_spans(last_spans, topo_params_template)  # [3]
+
+TopoNode.touch_heartbeat(
+    self.bk_biz_id, self.app_name, TelemetryDataType.TRACE.value,
+    last_data_at_mapping={get_service_name(s): s[OtlpKey.END_TIME] // 1_000_000 for s in last_spans},
+    checked_at=int(time.time()),
+)
+```
+
+- *[1] 与 `apm_web.llm.query.LLMQuery.query_group_list` 同一机制，后者额外调用 `.values(group_field)` 只取分组值，这里返回整条 Span。*
+- *[2] 窗口与常规轮一致（`now-10m`），`limit` 取 `QUERY_MAX_LIMIT`（`10000`），覆盖单应用服务数。*
+- *[3] 兜底 Span 走同一套拓扑发现任务，稀疏服务的节点在写心跳前建出；常规轮已发现的服务会再处理一次，发现器按存在性决定创建或更新，无副作用。*
 
 ### c. 指标心跳
 
 | 变更点                                                                              | 修改内容                                                     |
 | -------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| **[Change]** `apm.task.tasks.datasource_discover_cron`                           | 下发 `start_time = now - interval * 60`，子窗口覆盖已发生的 `10 min` |
-| **[Change]** `apm.core.discover.metric.service.ServiceDiscover.query_dimensions` | `step` 改为 `60 s`，保留 `_time` 序列，提取值非空的最大时间戳               |
-| **[Add]** `apm.core.discover.metric.service.ServiceDiscover` 状态查询                | 按 `bk_apm_count` 四路分组取数，写入 `metric` 心跳 *[1]*             |
+| **[Change]** `apm.core.discover.metric.service.ServiceDiscover.query_dimensions` | 新增 `with_last_data_at`，开启时为每个序列返回 `last_data_at`         |
+| **[Change]** `apm.core.discover.metric.service.ServiceDiscover.discover`         | 末尾执行心跳查询，按下表展开服务键后调用 `touch_heartbeat` *[1]*             |
 
-| 分组维度 | 服务键 |
-| --- | --- |
-| `service_name` | `{service_name}` |
-| `service_name, db_system` | `{service_name}-{db_system}` |
-| `service_name, messaging_system` | `{service_name}-{messaging_system}` |
-| `peer_service` | `http:{peer_service}` |
+```python
+def query_dimensions(
+    self, promql: str, start_time: int, end_time: int, with_last_data_at: bool = False
+) -> list[dict[str, Any]]:
+    # ...
+    for item in response.get("series", []):
+        # ...
+        dimension: dict[str, Any] = dict(zip(item["group_keys"], item["group_values"]))
+        if with_last_data_at:
+            value_index: int = item["columns"].index("_value")
+            points: list[float] = [p[value_index] for p in item["values"] if p[value_index] is not None]
+            dimension["last_data_at"] = int(max(points)) if points else None  # [2]
+        dimensions.append(dimension)
+    return dimensions
+```
 
-- *[1] 服务键沿用 `apm_web.handlers.service_handler.ServiceHandler._combine_metric_data`，覆盖普通服务、组件与自定义服务。*
-- *[2] 保留 `count by (service_name, rpc_system)`：它负责从全部自定义指标中发现服务和标记 RPC，四路状态查询只检查 `bk_apm_count`，两者不能合并。*
+```promql
+max by (service_name, db_system, messaging_system, peer_service) (
+    timestamp({__name__="custom:<result_table_id>:bk_apm_count"})
+)
+```
+
+| 序列维度                                | 服务键 *[3]*                           | 写入心跳                   |
+| ----------------------------------- | ----------------------------------- | ---------------------- |
+| `service_name`                      | `{service_name}`                    | `metric`               |
+| `service_name` + `db_system`        | `{service_name}-{db_system}`        | `metric`、`trace` *[4]* |
+| `service_name` + `messaging_system` | `{service_name}-{messaging_system}` | `metric`、`trace` *[4]* |
+| `peer_service`                      | `http:{peer_service}`               | `metric`、`trace` *[4]* |
+
+- *[1] 选用 `bk_apm_count`：它由 collector 从 Trace 生成并经指标链路写入，最能反映指标数据链路是否畅通。*
+- *[2] `timestamp()` 的值是原始样本时间（秒），不受步长影响，已在 bkop 实测；每个求值点只回看 `5 min`，`step` 须不超过 `5 min`，当前子窗口 `200 s` 已满足。*
+- *[3] 同一个服务可能同时出现在多条序列里，例如普通调用与 DB 调用各一条，取其中最晚的 `last_data_at`。*
+- *[4] 组件与远程服务没有独立的 Span 心跳来源，而 `bk_apm_count` 本就由 Span 生成，因此同时写入 `metric` 与 `trace` 子键。*
 
 ### d. 日志服务发现
 
-| 变更点 | 修改内容 |
-| --- | --- |
-| **[Add]** `apm.core.discover.log.base.Discover` | 持有 `LogDataSource`，构造参数与指标发现器一致 |
-| **[Add]** `apm.core.discover.log.service.ServiceDiscover` | 聚合服务名和最后数据时间，写入 `TopoNode`，合并 `source=["log"]` 并写入心跳 |
-| **[Add]** `apm.apps.ApmApiConfig.ready` 注册 | `DiscoverContainer.register(TelemetryDataType.LOG.value, LogServiceDiscover)` |
-| **[Change]** `apm.task.tasks.datasource_discover_cron` | 遍历 `MetricDataSource` 与 `LogDataSource`，按数据类型派发 |
-| **[Change]** `apm.task.tasks.datasource_discover_handler` | 数据源参数改为 `(数据类型, 数据源)`，由发现器决定窗口切分方式 |
+日志与调用链兜底轮一致，按服务名折叠查询窗口内每个服务的最后一条日志，同一次查询既发现服务，也生成 `log` 心跳。
 
-```text
-aggs.service_names = terms(field=<resource.service.name | resource.server>, size=1000)
-aggs.service_names.aggs.last_data_at = max(field=time)
+| 变更点                                                       | 修改内容                                                                          |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| **[Add]** `apm.core.discover.log.base.Discover`           | 持有 `LogDataSource`，构造参数与指标发现器一致                                               |
+| **[Add]** `apm.core.discover.log.service.ServiceDiscover` | 折叠查询每个服务的最后一条日志，写入 `TopoNode`（合并 `source=["log"]`）后调用 `touch_heartbeat`       |
+| **[Change]** `apm.apps.ApmApiConfig.ready` | 注册 `DiscoverContainer.register(TelemetryDataType.LOG.value, LogServiceDiscover)` |
+| **[Change]** `apm.task.tasks.datasource_discover_cron`    | 遍历 `MetricDataSource` 与 `LogDataSource`，按数据类型派发                               |
+| **[Change]** `apm.task.tasks.datasource_discover_handler` | 数据源参数改为 `(数据类型, 数据源)`，由发现器决定窗口切分方式                                            |
+
+```python
+q: QueryConfigBuilder = (
+    QueryConfigBuilder((DataTypeLabel.LOG, DataSourceLabel.BK_LOG_SEARCH))
+    .table(str(self.datasource.index_set_id))
+    .index_set_id(self.datasource.index_set_id)
+    .time_field("time")
+    .distinct("resource.service.name")  # [1]
+    .order_by("time desc")
+)
+last_logs: list[dict[str, Any]] = list(
+    UnifyQuerySet().start_time(start_time * 1000).end_time(end_time * 1000).add_query(q).limit(QUERY_MAX_LIMIT)
+)
 ```
 
-- *[1] 仅查询 APM 的 `LogDataSource`，索引名由 `result_table_id` 中的 `-`、`.` 替换为 `_` 后追加 `*`，不查询服务关联索引。*
-- *[2] 两个服务名字段分别聚合，结果按服务名合并，数据时间取较大值；`size=1000` 避免 ES 默认只返回 `10` 个桶。*
+- *[1] `distinct` 由 `BaseBkMonitorLogDataSource` 编译为 ES `collapse`，与调用链兜底轮同一机制，每个服务返回时间最晚的一条日志，其 `time` 即该服务的 `last_data_at`。*
+- *[2] 仅查询 APM 自身的 `LogDataSource`，`index_set_id` 为空时跳过，不查询服务关联索引。*
 
 ### e. 性能分析心跳
 
-| 变更点 | 修改内容 |
-| --- | --- |
-| **[Change]** `apm.core.discover.profile.service.ServiceDiscover._upsert` | 保留 `ProfileService.last_check_time`，同时写入 `profiling` 心跳 |
-| **[Add]** `apm.core.discover.profile.service.ServiceDiscover` 拓扑写入 | 创建或更新 `TopoNode`，合并 `source=["profiling"]`，设置 `extra_data.kind=profiling` |
-| **[Change]** `apm.task.tasks.profile_discover_cron` | 过滤未开启性能分析的应用，通过 `profile_handler.delay()` 派发任务 *[1]* |
+| 变更点                                                                       | 修改内容                                                                                                                                              |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **[Change]** `apm.core.discover.profile.service.ServiceDiscover.discover` | [a] 本轮发现到的服务以 `check_time` 作为 `last_data_at` 写入 `profiling` 心跳 *[1]*<br />[b] 创建或更新 `TopoNode`，合并 `source=["profiling"]`，设置 `extra_data.kind=profiling` |
+| **[Change]** `apm.task.tasks.profile_discover_cron`                       | 过滤未开启性能分析的应用，通过 `profile_handler.delay()` 派发任务 *[2]*                                                                                              |
 
-- *[1] 现有任务逐应用同步执行，异步派发须与拓扑写入一同上线，避免新增写入延长整轮耗时。*
+- *[1] 发现窗口为 `check_time` 前 `10 min`，误差不超过 `10 min`，与旧口径「再往前探查 `10 min`」等价。*
+- *[2] 现有任务逐应用同步执行，异步派发须与拓扑写入一同上线，避免新增写入延长整轮耗时。*
 
 ## 0x04 开发方案 —— 读取协议
 
@@ -308,19 +365,7 @@ aggs.service_names.aggs.last_data_at = max(field=time)
 
 - *[1] 心跳随节点一同读取，不增加查询；字段为空或缺失的处理见「心跳协议」。*
 
-### b. 应用粒度读取
-
-**[Add]** `apm.resources.ListApplicationDataStatusResource`：按业务批量返回服务数与各类最新心跳，供周期任务和应用列表使用。
-
-```text
-入参: bk_biz_id: int, app_names: list[str] | None
-出参: {app_name: {"service_count": int,
-                  "heartbeat": {data_type: {"last_data_at": ts | null, "checked_at": ts | null}}}}
-```
-
-- *[1] 按应用读取节点，在内存中取各类最大的 `last_data_at`，不查询远程存储；容量估算按单业务万级以内节点计算。*
-
-### c. 服务全集
+### b. 服务全集
 
 **[Change]** `apm_web.handlers.service_handler.ServiceHandler.list_services`：
 
@@ -332,51 +377,86 @@ aggs.service_names.aggs.last_data_at = max(field=time)
 
 ### a. 服务状态
 
+```mermaid
+flowchart LR
+    Q["QueryTopoNodeResource"] -->|"nodes + heartbeat"| L["ServiceHandler<br/>.list_services()"]
+    L --> B["ServiceHandler<br/>.build_service_data_status()"]
+    B -->|"log"| R["ServiceLogHandler<br/>.list_available_related_services()"]
+    R --> LSR["LogServiceRelation"]
+    R --> K8S["APP_SERVICE_K8S_RELATED_LOG_INDEXES_KEY"]
+    L -->|"services + data_status"| SA["ServiceListAsyncResource<br/>._get_data_status_mapping()"]
+    L -->|"services + data_status"| SL["ServiceListResource"]
+```
+
 | 变更点 | 修改内容 |
 | --- | --- |
 | **[Add]** `apm_web.handlers.service_handler.ServiceHandler.build_service_data_status(app, nodes)` | 按「状态映射协议」生成三态，不发起远程查询 |
-| **[Add]** `apm_web.handlers.log_handler.ServiceLogHandler.list_available_related_services(app)` | 读取 `LogServiceRelation` 与索引集元数据缓存，返回关联索引可用的服务集合 *[1]* |
+| **[Add]** `apm_web.handlers.log_handler.ServiceLogHandler.list_available_related_services(app, service_names)` | 按应用批量读取服务级与全局 `LogServiceRelation`、K8S 关联日志缓存，比对索引集元数据缓存，返回存在可用关联索引的服务集合 *[1]* |
 | **[Change]** `apm_web.metric.resources.ServiceListAsyncResource._get_data_status_mapping` | 使用 `list_services` 返回的状态，替换请求侧重算 |
 | **[Keep]** `apm_web.metric.resources.ServiceListResource` | 同步状态列及 `StatisticsApplyModule`、`StatisticsHaveData` 的筛选规则不变，输入换为心跳映射结果 |
 
-| 日志来源 | 处理 |
-| --- | --- |
-| 服务级手动关联（`is_global=False`） | 保留标签判定 |
-| 应用级全局关联（`is_global=True`） | 不参与状态判定 |
-| K8S 关系缓存 | 不参与状态判定，仅用于关联索引列表 |
-| APM 自身日志结果表 | ES 聚合改为后台心跳 |
+```python
+def build_service_data_status(app: Application, nodes: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+    # topo_key -> {telemetry_data_type: DataStatus}，与旧 get_service_data_status_mapping 结构一致，例如：
+    # {"order": {"trace": "normal", "metric": "normal", "log": "no_data", "profiling": "disabled"}}
+    ...
 
-- *[1] 用标签名替代 `tag_id != 4`，遍历全部匹配索引集，空标签不判为可用。*
-- *[2] 标签缺少 `NO_DATA` 仍不能证明索引集经过检查，产品说明需保留「日志标签与服务状态」中的口径差异。*
+
+def list_available_related_services(app: Application, service_names: list[str]) -> set[str]:
+    # 返回存在可用关联索引的服务；全局关联可用时，service_names 全部计入
+    ...
+```
+
+| 日志来源                                                              | 处理               |
+| ----------------------------------------------------------------- | ---------------- |
+| 服务级手动关联（`is_global=False`）                                        | 按标签判定            |
+| 应用级全局关联（`is_global=True`）                                         | 按标签判定，对应用下全部服务生效 |
+| K8S 关联日志缓存（`ApmCacheKey.APP_SERVICE_K8S_RELATED_LOG_INDEXES_KEY`） | 按标签判定 *[2]*      |
+| APM 自身日志结果表                                                       | ES 聚合改为后台心跳      |
+
+- *[1] 索引集 `tags` 含下方「无数据」内置标签即判为不可用；逐个检查该服务的全部关联索引集，`tags` 为空的索引集不判为可用。*
+- *[2] 缓存结构为 `service_name -> [{"index_set_id", "bk_biz_id", "updated_at"}]`，由 `cache_application_k8s_related_indexes` 周期写入，按 `bk_biz_id` 查询索引集标签。*
+
+```json
+[
+  {
+    "space_uid": "",
+    "name": "无数据",
+    "value": "",
+    "color": "red",
+    "tag_id": 4,
+    "tag_type": "inner"
+  }
+]
+```
 
 ### b. 应用状态与服务数量
 
-| 变更点                                                                                     | 修改内容                                                    |
-| --------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| **[Change]** `apm_web.models.application.Application.set_data_status`                   | 读取 `ListApplicationDataStatusResource`，按「任一服务有数据」写入四类状态 |
-| **[Change]** `apm_web.models.application.Application.set_service_count_and_data_status` | 仅写服务数量，移除服务状态缓存写入                                       |
-| **[Change]** `apm_web.tasks.refresh_application`                                        | 按业务批量调用应用接口                                             |
-| **[Keep]** `apm_web.models.application.Application` 状态字段                                | 保留 `{trace,profiling,metric,log}_data_status` 字段名和三态取值  |
-| **[Keep]** `apm_web.metric.resources.ServiceListResource` 数量回写                          | 请求侧继续更新 `service_count`                                 |
+| 变更点                                                                                          | 修改内容                             |
+| -------------------------------------------------------------------------------------------- | -------------------------------- |
+| **[Keep]** `apm_web.models.application.Application.set_data_status`                          | 应用四态仍由 `get_data_count` 判定，不接入心跳 |
+| **[Change]** `apm_web.models.application.Application.set_service_count_and_data_status`      | 仅写服务数量，移除服务状态缓存写入                |
+| **[Keep]** `apm_web.models.application.Application.{trace,profiling,metric,log}_data_status` | 字段名和三态取值不变                       |
+| **[Keep]** `apm_web.metric.resources.ServiceListResource.perform_request`                    | 请求侧继续回写 `service_count`          |
 
 ### c. 请求侧状态检查
 
 | 入口 | 修改内容 |
 | --- | --- |
-| `apm_web.handlers.application_handler.ApplicationHandler.have_data` | 改读应用状态，移除 `RequestCountInstance` 查询 |
-| `apm_web.meta.resources.ApplicationInfoByAppNameResource` | 删除 `have_data()` 覆盖逻辑，直接返回库内 `trace_data_status` *[1]* |
-| `apm_web.metric.resources.ApdexQueryResource`、`AlertQueryResource` | 删除 `have_data()` 前置检查，无数据时由主查询返回空序列 |
-| `apm_web.service.resources.ServiceInfoResource.get_profiling_info` | `is_profiling_data_normal` 改读服务的 `heartbeat.profiling`，移除仅用于判断有无数据的 Doris `count(*)` |
-| `apm_web.profile.resources.ListApplicationServicesResource` | `normal` / `no_data` 分类改读应用级 profiling 状态，服务明细仍按需查询 |
+| `apm_web.meta.resources.ApplicationInfoByAppNameResource` | 删除 `have_data()` 覆盖，直接返回库内 `Application.trace_data_status` *[1]* |
+| `apm_web.metric.resources.ApdexQueryResource`、`AlertQueryResource` | 删除 `have_data()` 前置检查，无数据时由主查询返回空 |
+| `apm_web.service.resources.ServiceInfoResource.get_profiling_info` | `is_profiling_data_normal` 改读 `heartbeat.profiling`，移除 Doris `count(*)` |
+| `apm_web.profile.resources.ListApplicationServicesResource` | `normal` / `no_data` 分类改读 `Application.profiling_data_status`，服务明细仍按需查询 |
 
 - *[1] 此接口原先按传入时间窗覆盖状态，改造后返回应用当前状态；慢 Trace `8bfa95a9cf8553981b0105f1e89f2064`（`pvpesport.battle`）在原路径耗时约 `12.8 s`，最终报 VM 并发超限。*
-- *[2] `apm_web.metric_handler.RequestCountInstance` 继续用于请求量列和图表，仅移除用于生成状态值的调用。*
+- *[2] `apm_web.metric_handler.RequestCountInstance` 继续用于请求量列和图表，不随 `have_data` 删除。*
 
 ### d. 旧对象清理
 
 | 删除对象 | 原用途 |
 | --- | --- |
 | `apm_web.handlers.service_handler.ServiceHandler.get_service_data_status_mapping` | 重算服务级状态 |
+| `apm_web.handlers.application_handler.ApplicationHandler.have_data` | 按传入时间窗重查应用 Trace 是否有数据，调用方移除后无引用 |
 | `apm_web.handlers.log_handler.ServiceLogHandler.get_log_count_mapping` | 供上述方法计算日志状态 |
 | `apm_web.handlers.log_handler.ServiceLogHandler.get_label_values_in_table` | 供上述日志方法聚合服务名 |
 | `apm_web.constants.ApmCacheKey.APP_SERVICE_STATUS_KEY` | 缓存服务状态 *[1]* |
@@ -395,27 +475,10 @@ aggs.service_names.aggs.last_data_at = max(field=time)
 | `apm_web.profile.doris.querier.QueryTemplate.get_sample_info` | 返回查询窗口内真实的 `last_report_time` |
 | `apm_web.handlers.service_handler.ServiceHandler.get_service_metric_range_mapping` | 查询调用次数、错误率、平均耗时 |
 | `apm_web.metric_handler.ServiceFlowCount` | 查询服务拓扑与调用关系 |
-| `apm_web.handlers.backend_data_handler.telemetry_handler_registry(...).get_data_count` | 数据接入检查与存储状态展示 |
+| `apm_web.handlers.backend_data_handler.telemetry_handler_registry(...).get_data_count` | 应用级四态、数据接入检查与存储状态展示 |
 | `api.apm_api.query_profile_services_detail` | 性能分析页面的服务明细 |
 
-### f. 应用状态消费方
-
-以下入口继续使用 `Application.*_data_status`，调用方式不变。
-
-| 用途 | 入口 |
-| --- | --- |
-| 有数据应用优先排序 | `apm_web.meta.resources.ListApplicationResource` |
-| 应用列表与详情响应 | `apm_web.meta.resources` 的 `CreateApplicationResource`、`ListApplicationInfoResource`、`ApplicationInfoResource`、`ListApplicationResource` |
-| 数据源启停时改写状态 | `apm_web.meta.resources.StartResource`、`StopResource` |
-| 每日状态快照 | `apm_web.tasks.refresh_apm_app_state_snapshot` *[1]* |
-| 周同比分析 | `apm_web.management.commands.week_over_week_analysis.Command.handle` |
-| 有 APM 数据的业务数 | `monitor_web.statistics.v2.business.BusinessCollector.apm_biz_count` |
-| 应用指标的状态 label | `monitor_web.statistics.v2.apm.APMCollector` |
-| 有数据应用数与 Profiling 应用数 | `kernel_api.resource.operation.handlers._apm_enabled_apps`、`apm_profiling_application_count` |
-
-- *[1] 快照键为 `apm:application:{日期}:all_application_data_status`，切换口径会影响快照、周同比及运营统计，需提前知会并记录基线。*
-
-### g. 兼容与迁移
+### f. 兼容与迁移
 
 | 阶段或场景 | 处理 |
 | --- | --- |
@@ -440,11 +503,14 @@ uv run pytest apm/tests packages/apm_web/tests
 | `test_touch_heartbeat_no_data` | 值为 `None` 时 `last_data_at` 不变、`checked_at` 推进，读取判为 `NO_DATA` |
 | `test_touch_heartbeat_keeps_other_data_types` | 写 `trace` 子键后，同行已有的 `metric`、`log` 子键内容原样保留 |
 | `test_heartbeat_fresh_tolerates_one_cycle` | `last_data_at` 落后一个发现周期时仍判 `NORMAL`，超过「无数据周期 + 发现周期」才判 `NO_DATA` |
-| `test_log_service_discover_agg` | 聚合体携带 `size=1000` 与 `max(time)` 子聚合，两个服务名字段结果按服务名合并取较大时间 |
+| `test_log_service_discover_collapse` | 每个服务只返回一条日志，且为该服务 `time` 最大的一条，心跳取该条的 `time` |
 | `test_log_service_discover_creates_topo_node` | 仅日志发现的服务生成 `source == ["log"]` 的节点 |
 | `test_metric_heartbeat_component_keys` | 四路分组分别还原为服务、DB 组件、消息组件与自定义服务键 |
-| `test_datasource_discover_window_in_past` | 下发的子窗口全部落在当前时间之前，覆盖完整 `interval` |
-| `test_trace_heartbeat_from_span_time` | 心跳时间取本轮 Span 最大结束时间，不取任务运行时间 |
+| `test_query_group_list_collapse` | 每个服务只返回一条记录，且为该服务 `end_time` 最大的 Span |
+| `test_topo_fallback_round_discovers_sparse_service` | 常规轮次未扫到的服务由兜底轮建出节点 |
+| `test_trace_heartbeat_from_span_time` | 心跳取兜底轮中该服务最后一个 Span 的 `end_time`，不取任务运行时间 |
+| `test_metric_heartbeat_last_positive_point` | 取值为 `0` 的点不计入，取最后一个大于 `0` 的点的 `_time` |
+| `test_profile_heartbeat_from_check_time` | 心跳取本轮 `check_time`，本轮未发现的服务不写入 |
 | `test_profile_discover_writes_topo_node` | 性能分析独有服务生成节点，`ProfileService.last_check_time` 行为不变 |
 | `test_build_service_data_status_disabled_first` | 数据类型开关关闭时返回 `DISABLED`，不受心跳影响 |
 | `test_build_service_data_status_log_dual_source` | 心跳为空但关联索引无 `NO_DATA` 标签时返回 `NORMAL` |
@@ -462,15 +528,15 @@ uv run pytest apm/tests packages/apm_web/tests
 | 筛选项 | `have_data` 与 `apply_module` 的计数基于全量展示服务，不随分页变化 |
 | 性能 | 记录 `service_list` 与 `data_status` 的端到端耗时与下游调用数，`data_status` 的远程调用数降为 `0` |
 | 后台开销 | 记录四个发现器的单轮耗时与查询数，确认新增查询不突破现有 `10 min` 调度窗口 |
-| 运营口径 | 业务与应用运营统计、每日快照、周同比在口径切换后的首个周期会出现跳变，需提前知会并记录基线 |
 
 ## 0x07 实施进展
 
-| 时间 | 结论性进展 |
-| --- | --- |
+| 时间                 | 结论性进展                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `2026-09-29 11:00` | `ApplicationHandler.have_data` 三个调用方全部移除后列入删除：应用详情改读库内 `trace_data_status`，Apdex 与告警图去掉前置短路，由主查询返回空                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `2026-09-17 14:00` | [a] 确立收敛判据：「查一次数据存储只为取一个 `bool`」的调用统一归心跳，返回真实数据量或用户自选时间窗的查询保留实时<br />[b] 完成 `apm_web` 全量探测点盘查，补入四处此前遗漏的请求侧探测：`ApplicationInfoByAppNameResource` 覆盖 `trace_data_status`、`ApdexQueryResource` / `AlertQueryResource` 查图前置短路、`ServiceInfoResource.get_profiling_info` 的 Doris `count(*)`、`ListApplicationServicesResource` 的应用有无数据分类<br />[c] 慢 Trace `8bfa95a9cf8553981b0105f1e89f2064` 归因为 `have_data()` → `RequestCountInstance` → VM 整窗 `sum_over_time(bk_apm_count[7d])`，约 `12.8 s` 并以并发超限报错，与服务列表 `data_status` 同源同病<br />[d] `have_data` 定为换源而非删除；Apdex 与告警图的前置短路直接删除，让主查询自然返回空<br />[e] 清理两处以请求量冒充数据状态的遗留：`Application.doc_count`、`metrics.py` 三个 `*_DATA_STATUS` 模板，均全仓无调用方 |
-| `2026-09-16 15:00` | [a] 心跳载体定为 `TopoNode.heartbeat` JSON 列，按数据类型分子键，撤回独立表方案。写入沿用发现器现有的读改写加 `bulk_update`，不引入 `JSON_SET`<br />[b] 确认同一应用的调用链与指标、日志发现由同一分片公式派发到同一分钟，读改写必然重叠，用「读取紧贴写入」和「新鲜度阈值放宽一个发现周期」两条约束吸收单次丢更新，代价是无数据判定延后一个周期<br />[c] 应用级状态确认改为「任一服务有数据」，切换前记录运营基线<br />[d] 日志状态保留关联索引来源。查清日志平台没有索引集数据状态字段，`green` 只存在于 ES 索引健康度，判据落到 `NO_DATA` 内置标签<br />[e] eBPF 应用的调用链心跳本期不补齐，转为已知回退 |
-| `2026-09-16 12:00` | [a] 基于慢 Trace `aa9a057ba090042a43eeb6012be6e024` 完成耗时归因：服务全集枚举两次、四类状态串行重算，资源内部耗时 `5.149 s`<br />[b] 确认性能分析已有数据库心跳（`ProfileService.last_check_time`），调用链与指标发现不记录数据时间，日志无发现器。现有 `CachedDiscoverMixin` 保活心跳语义不同且不覆盖 `TopoNode`，不可复用<br />[c] 确定收敛点为服务数据心跳，四发现器单写、拓扑接口单读。性能分析服务并入拓扑后服务全集收敛到单一事实源<br />[d] 明确日志状态双来源边界：心跳覆盖 APM 日志结果表，关联索引只含服务级手动关联<br />[e] 完成应用级状态字段消费方梳理，确认字段契约不变、口径变更会传导到每日快照与运营统计<br />[f] 定位三处需一并修复的缺陷：指标发现窗口指向未来、日志 terms 聚合缺少 `size`、关联索引判据只取首个且空标签判为可用 |
+| `2026-09-16 15:00` | [a] 心跳载体定为 `TopoNode.heartbeat` JSON 列，按数据类型分子键，撤回独立表方案。写入沿用发现器现有的读改写加 `bulk_update`，不引入 `JSON_SET`<br />[b] 确认同一应用的调用链与指标、日志发现由同一分片公式派发到同一分钟，读改写必然重叠，用「读取紧贴写入」和「新鲜度阈值放宽一个发现周期」两条约束吸收单次丢更新，代价是无数据判定延后一个周期<br />[c] 应用级状态确认改为「任一服务有数据」，切换前记录运营基线<br />[d] 日志状态保留关联索引来源。查清日志平台没有索引集数据状态字段，`green` 只存在于 ES 索引健康度，判据落到 `NO_DATA` 内置标签<br />[e] eBPF 应用的调用链心跳本期不补齐，转为已知回退                                                                                                                                                                                                                                                                                                              |
+| `2026-09-16 12:00` | [a] 基于慢 Trace `aa9a057ba090042a43eeb6012be6e024` 完成耗时归因：服务全集枚举两次、四类状态串行重算，资源内部耗时 `5.149 s`<br />[b] 确认性能分析已有数据库心跳（`ProfileService.last_check_time`），调用链与指标发现不记录数据时间，日志无发现器。现有 `CachedDiscoverMixin` 保活心跳语义不同且不覆盖 `TopoNode`，不可复用<br />[c] 确定收敛点为服务数据心跳，四发现器单写、拓扑接口单读。性能分析服务并入拓扑后服务全集收敛到单一事实源<br />[d] 明确日志状态双来源边界：心跳覆盖 APM 日志结果表，关联索引只含服务级手动关联<br />[e] 完成应用级状态字段消费方梳理，确认字段契约不变、口径变更会传导到每日快照与运营统计<br />[f] 定位三处需一并修复的缺陷：指标发现窗口指向未来、日志 terms 聚合缺少 `size`、关联索引判据只取首个且空标签判为可用                                                                                                                                                                                                        |
 
 ## 0x08 参考
 
@@ -486,11 +552,7 @@ uv run pytest apm/tests packages/apm_web/tests
 
 ## 0x09 版本锚点
 
-| 状态 | 分支 | 里程碑 | PR |
-| --- | --- | --- | --- |
-| 🔄 | `<branch_name>` | 里程碑 1：`TopoNode.heartbeat` 字段与统一写入口 | 待创建 |
-| 🔄 | `<branch_name>` | 里程碑 2：调用链与指标心跳生产 | 待创建 |
-| 🔄 | `<branch_name>` | 里程碑 3：日志服务发现与心跳生产 | 待创建 |
-| 🔄 | `<branch_name>` | 里程碑 4：性能分析心跳并入与服务全集收敛 | 待创建 |
-| 🔄 | `<branch_name>` | 里程碑 5：读取协议扩展与 SaaS 状态切换 | 待创建 |
-| 🔄 | `<branch_name>` | 里程碑 6：旧状态链路下线 | 待创建 |
+| 状态  | 分支              | 里程碑 | PR  |
+| --- | --------------- | --- | --- |
+| 🔄  | `<branch_name>` | 里程碑 1：APM 服务心跳统一维护 | 待创建 |
+| 🔄  | `<branch_name>` | 里程碑 2：APM 依赖数据状态相关慢接口优化 | 待创建 |
