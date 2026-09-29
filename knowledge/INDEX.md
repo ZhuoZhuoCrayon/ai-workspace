@@ -21,8 +21,8 @@
 
 ## 0x02 最近更新
 
+- 2026-09-29：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（View 加载时序补齐累计里程碑协议，Web Vitals 标记携带评级阈值；登记 Span 详情 PR，View 导航开始改取 `started_at`）
 - 2026-09-29：更新 [APM 服务数据状态下沉到后台服务发现](./bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md)（请求侧 `have_data` 改为删除，不再换源）
 - 2026-09-22：更新 [APM 服务数据状态下沉到后台服务发现](./bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md)（精简调研与开发方案，统一注脚和代码引用，明确日志标签与服务状态口径）
 - 2026-09-21：更新 [APM Trace 写入 ES 字段类型冲突](./bkmonitor/troubleshooting/apm-trace-es-field-mapping-conflict.md)（在原有轮转脚本下方补充 APM 内置 ES 配置刷新脚本）
-- 2026-09-16：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（明确 `loading_timing` 返回范围与 View 快照补齐字段）
 - 2026-09-15：新增 [指标元信息存储与 SaaS/APM 自定义指标改造](./bkmonitor/issues/2026-09-15-custom-metric-metadata/README.md)（独立于 Collector 的 Metadata 存储与 SaaS/APM 指标族方案）

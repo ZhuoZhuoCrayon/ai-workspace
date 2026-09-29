@@ -4,7 +4,7 @@ tags: [rum, apm, query, span, view, session, factory, unify-query, semconv]
 issue: ./README.md
 description: 通过统一 Target、查询基类、Level 工厂和语义字段目录收敛 RUM 与 APM 查询
 created: 2026-08-07
-updated: 2026-09-16
+updated: 2026-09-29
 ---
 
 # RUM 分层统一查询 —— 实施方案
@@ -1159,28 +1159,31 @@ def build(
 
 加载时序计算方式：
 
-| 指标                        | 计算方式                                                                    |
-| ------------------------- | ----------------------------------------------------------------------- |
-| `total_duration`          | `attributes.view.loading_time`                                          |
-| `prepare.start`           | `0`                                                                     |
-| `prepare.duration`        | `attributes.vital.ttfb.waiting_duration`                                |
-| `dns.start`               | `connect.start − dns.duration`                                          |
-| `dns.duration`            | `attributes.vital.ttfb.dns_duration`                                    |
-| `connect.start`           | `first_byte.start − connect.duration`                                   |
-| `connect.duration`        | `attributes.vital.ttfb.connection_duration`                             |
-| `first_byte.start`        | `attributes.vital.value − first_byte.duration`                          |
-| `first_byte.duration`     | `attributes.vital.ttfb.request_duration`                                |
-| `dom_processing.start`    | `attributes.view.first_byte`                                            |
-| `dom_processing.duration` | `attributes.view.dom_content_loaded − attributes.view.first_byte` *[1]* |
-| `resource_load.start`     | `attributes.view.dom_content_loaded`                                    |
-| `resource_load.duration`  | `attributes.view.load_event − attributes.view.dom_content_loaded` *[1]* |
-| `page_stable.start`       | `attributes.view.load_event`                                            |
-| `page_stable.duration`    | `attributes.view.loading_time − attributes.view.load_event` *[2]*       |
+| 指标                                | 计算方式                                                                      |
+| --------------------------------- | ------------------------------------------------------------------------- |
+| `total_duration`                  | `attributes.view.loading_time`                                            |
+| `prepare.start`                   | `0`                                                                       |
+| `prepare.duration`                | `attributes.vital.ttfb.waiting_duration`                                  |
+| `dns.start`                       | `connect.start − dns.duration`                                            |
+| `dns.duration`                    | `attributes.vital.ttfb.dns_duration`                                      |
+| `connect.start`                   | `first_byte.start − connect.duration`                                     |
+| `connect.duration`                | `attributes.vital.ttfb.connection_duration`                               |
+| `first_byte.start`                | `attributes.vital.value − first_byte.duration`                            |
+| `first_byte.duration`             | `attributes.vital.ttfb.request_duration`                                  |
+| `dom_processing.start`            | `attributes.view.first_byte`                                              |
+| `dom_processing.duration`         | `attributes.view.dom_content_loaded − attributes.view.first_byte` *[1]*   |
+| `resource_load.start`             | `attributes.view.dom_content_loaded`                                      |
+| `resource_load.duration`          | `attributes.view.load_event − attributes.view.dom_content_loaded` *[1]*   |
+| `page_stable.start`               | `attributes.view.load_event`                                              |
+| `page_stable.duration`            | `max(0, attributes.view.loading_time − attributes.view.load_event)` *[2]* |
+| `markers[].value`                 | 同名 Vital 的 `attributes.vital.value`                                       |
+| `markers[].display.rating_config` | 同名虚拟字段的 `rating_config`，与 `web_vitals` 卡片一致                               |
+| `milestones.dom_complete`         | `attributes.view.dom_complete`                                            |
+| `milestones.load_event`           | `attributes.view.load_event`                                              |
+| `milestones.page_stable`          | `attributes.view.loading_time`                                            |
 
 - *[1] 内容传输与 DOM 处理包含 HTML 接收、解析、阻塞脚本和 DOMContentLoaded 事件处理，剩余资源加载包含其后至 Load 完成的资源等待、脚本及事件处理，均为加载进程区间，不是纯下载或解析耗时。*
-- *[2] `page_stable` 只在 `attributes.view.loading_time_source = auto` 时返回，手动来源不生成这一段。*
-
-`loading_timing` 只在 `attributes.view.loading_type = initial_load` 时返回。非首次加载没有导航时间原点，也不产生 TTFB、FCP 和 LCP，`phases` 和 `markers` 都不构造。
+- *[2] 自动计时的 Loading Time 不早于 Load，`max(0, …)` 只消除浮点误差产生的微小负值。*
 
 ```json
 {
@@ -1188,7 +1191,7 @@ def build(
   "span_id": "34e3b6ff1943346c",
   "overview": {
     "title": "view-001",
-    "badges": [{"field_name": "elapsed_time", "value": 123500}],
+    "badges": [{"field_name": "display.view.duration", "value": 60300}],
     "items": [
       {
 	    "field_name": "display.span_type",
@@ -1205,7 +1208,7 @@ def build(
       {"field_name": "attributes.session.id", "value": "sess-001"},
       {"field_name": "attributes.view.id", "value": "view-001"},
       {"field_name": "start_time", "value": 1788451565200000},
-      {"field_name": "end_time", "value": 1788451565328000},
+      {"field_name": "end_time", "value": 1788451625500000},
       {"field_name": "attributes.user.id", "value": "user-001"},
       {"field_name": "resource.deployment.environment.name", "value": "prod"}
     ]
@@ -1332,9 +1335,41 @@ def build(
           }
         ],
         "markers": [
-          {"key": "TTFB", "field_name": "TTFB", "value": 101.7},
-          {"key": "FCP", "field_name": "FCP", "value": 120},
-          {"key": "LCP", "field_name": "LCP", "value": 250}
+          {
+            "key": "TTFB",
+            "field_name": "TTFB",
+            "value": 101.7,
+            "display.rating_config": [
+              {"rating": "good", "value": 800, "alias": "良好"},
+              {"rating": "needs_improvement", "value": 1800, "alias": "需改进"},
+              {"rating": "poor", "alias": "差"}
+            ]
+          },
+          {
+            "key": "FCP",
+            "field_name": "FCP",
+            "value": 120,
+            "display.rating_config": [
+              {"rating": "good", "value": 1800, "alias": "良好"},
+              {"rating": "needs_improvement", "value": 3000, "alias": "需改进"},
+              {"rating": "poor", "alias": "差"}
+            ]
+          },
+          {
+            "key": "LCP",
+            "field_name": "LCP",
+            "value": 250,
+            "display.rating_config": [
+              {"rating": "good", "value": 2500, "alias": "良好"},
+              {"rating": "needs_improvement", "value": 4000, "alias": "需改进"},
+              {"rating": "poor", "alias": "差"}
+            ]
+          }
+        ],
+        "milestones": [
+          {"key": "dom_complete", "field_name": "attributes.view.dom_complete", "value": 170},
+          {"key": "load_event", "field_name": "attributes.view.load_event", "value": 175},
+          {"key": "page_stable", "field_name": "attributes.view.loading_time", "value": 200}
         ]
       }
     }
@@ -1342,6 +1377,9 @@ def build(
 }
 ```
 
+- *[1] `loading_timing` 只在首次加载（`attributes.view.loading_type = initial_load`）时返回，路由切换等非首次加载没有导航计时，不返回该区块。*
+- *[2] `phases`、`markers` 和 `milestones` 在字段缺失或非法时省略对应项，不用相邻时间点补造。*
+- *[3] `phases` 和 `milestones` 中的 `page_stable` 只在 `attributes.view.loading_time_source = auto` 时返回，业务手动上报的 Loading Time 可能早于 Load，不代表页面稳定。*
 
 异步拉取的「关键信息」：
 
@@ -1350,6 +1388,7 @@ def build(
 | 触发请求数  | `statistics` | `attributes.span_type: resource AND attributes.resource.type: (xhr OR fetch)` |
 | 错误数    | `statistics` | `attributes.span_type: error`                                                 |
 | Span 数 | `statistics` | `NOT attributes.span_type: (view OR vital OR session)`                        |
+|        |              |                                                                               |
 
 - *[1] 统一过滤条件：`attributes.view.id: {当前 View ID}`；应用及 Session 与主记录一致。*
 - *[2] 统一聚合方式：`count(attributes.span_type)`。*
@@ -1359,11 +1398,12 @@ View Span 关联信息获取（后端）：
 
 | 补齐信息       | 额外过滤条件                                                             | 补齐字段                                                                                                                                                                                  |
 | :--------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| View 生命周期  | `attributes.span_type: view AND attributes.view.id: {当前 View ID}`  | [a] 头部时间：`end_time`、`elapsed_time` 和 `display.view.duration`<br />[b] 加载字段：`attributes.view` 下的 `loading_time`、`loading_time_source`、`loading_type`、`first_byte`、`dom_content_loaded` 和 `load_event` |
+| View 生命周期  | `attributes.span_type: view AND attributes.view.id: {当前 View ID}`  | [a] 头部时间：`end_time` 和 `display.view.duration`<br />[b] 加载字段：`attributes.view` 下的 `loading_time`、`loading_time_source`、`loading_type`、`first_byte`、`dom_content_loaded`、`dom_complete` 和 `load_event` |
 | Web Vitals | `attributes.span_type: vital AND attributes.view.id: {当前 View ID}` | TTFB 四段耗时，以及 FCP、LCP、INP 和 CLS 的 `attributes.vital.value`                                                                                                                              |
 
 * *[1] `origin_data` 和 `span_id` 保留主记录，补齐字段只覆盖展示值。*
-* *[2] `start_time` 取导航开始时间，不随快照更新。未取得 `phase=end` 时，停留时长仅表示已观测时长。*
+* *[2] View 生命周期 Span 是瞬时快照，`start_time` 等于上报时刻，`elapsed_time` 恒为 `0`，因此概览徽标使用 `display.view.duration`。*
+* *[3] 概览 `start_time` 取 `attributes.view.started_at`（毫秒）换算的微秒值，`display.view.duration` 为最新快照 `end_time` 与导航开始的差值，未取得 `phase=end` 时仅表示已观测时长。*
 
 ## 0x05 验收与验证
 
@@ -1378,8 +1418,8 @@ View Span 关联信息获取（后端）：
 | `packages/rum_web/tests/query/test_span_query.py` | [a] 真实字段从 `SpanSpec` 补充语义<br />[b] 虚拟字段从 `SpanSpec.fields()` 注入并使用完整路径<br />[c] 别名按语义配置、数据源值、完整字段名依次回退<br />[d] 评级末档省略空 `value`<br />[e] 数据源已有同名字段时不重复注入 |
 | `test_level_handler.py`                | [a] 基类只保存 `data_sources`<br />[b] 具体 Level 可组合多个 Query<br />[c] TopK 方法只接收单个字段<br />[d] 9 项公共方法声明参数与返回类型<br />[e] 未知配置被拒绝，且不能覆盖公共参数或数据源                                                                                                              |
 | `test_query_resources.py`              | [a] 9 个 URL、HTTP 方法、Resource 和 Level 方法一一对应<br />[b] Resource 不依赖公共基类<br />[c] 请求协议不接受 `extra_config`，客户端无法覆盖 Level 配置<br />[d] `view_config` 保留 `origin_field`，顶层维护全量字段，分组通过字段名引用<br />[e] Span 视图返回按类型配置的默认列与分组适用范围<br />[f] semconv 补充别名、单位、展示类型、枚举选项和评级阈值 |
-| Span 详情验收（待实现） | [a] 五类详情复用字段元数据<br />[b] Long Task 保留上报的阻塞贡献<br />[c] Vital 不使用 Span 耗时，CLS 无单位<br />[d] View 快照停留时长与导航时间点口径一致 |
-| View 加载时序验收（待实现） | [a] 前四段复用同条 TTFB 耗时，连接不拆 TLS，倒推起点保留空隙<br />[b] View 三段按首字节、DOMContentLoaded、Load 和自动 Loading Time 的边界计算并返回到 `phases`<br />[c] `markers` 仅包含 TTFB、FCP、LCP，缺失指标不补造<br />[d] 非首次加载不返回 `loading_timing`，原点不一致、非法数值和倒序边界不组装伪时序，手动 Loading Time 不生成 `page_stable`<br />[e] `total_duration` 等于有效的 `view.loading_time`，缺失或非法时省略，有效零值保留，标记超出总耗时仅扩展横轴 |
+| Span 详情验收（待实现） | [a] 五类详情复用字段元数据<br />[b] Long Task 保留上报的阻塞贡献<br />[c] Vital 不使用 Span 耗时，CLS 无单位<br />[d] View 开始时间与停留时长取 `attributes.view.started_at`，结果不随点开的快照变化 |
+| View 加载时序验收（待实现） | [a] 前四段复用同条 TTFB 耗时，连接不拆 TLS，倒推起点保留空隙<br />[b] View 三段按首字节、DOMContentLoaded、Load 和自动 Loading Time 的边界计算并返回到 `phases`<br />[c] `markers` 仅包含 TTFB、FCP、LCP，评级阈值与 `web_vitals` 卡片一致，缺失指标不补造<br />[d] 非首次加载不返回 `loading_timing`，原点不一致、非法数值和倒序边界不组装伪时序，手动 Loading Time 不生成 `phases` 和 `milestones` 中的 `page_stable`，自动计时的微小负耗时按 `0` 处理<br />[e] `total_duration` 等于有效的 `view.loading_time`，缺失或非法时省略，有效零值保留，标记超出总耗时仅扩展横轴<br />[f] `milestones` 依次取 `dom_complete`、`load_event` 和 `loading_time`，不返回别名，缺失字段直接省略 |
 | 异步分析验收（待实现） | [a] 基础详情不等待关联聚合<br />[b] 未加载、失败与统计为零可区分<br />[c] 应用、关联 ID 和时间边界一致，记录去重<br />[d] 区块合并保留基础字段，切换记录后丢弃旧响应 |
 | `apm/tests/test_unified_query_base.py` | [a] APM 继承通用基类<br />[b] 3 类 Query 统一接收 Target 列表<br />[c] Proxy 统一构造原始表与预计算层级<br />[d] 列表查询复用 `_query_list()`，Proxy 固定补 `total=0`<br />[e] 查询配置保持列表形态，多 Target 不丢表                                                                                   |
 
@@ -1395,6 +1435,8 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-09-29 15:00` | [a] 完成里程碑 7 第二轮 PR（[#12463](https://github.com/TencentBlueKing/bk-monitor/pull/12463)）review<br />[b] View 生命周期 Span 为瞬时快照，导航开始取 `attributes.view.started_at`，概览徽标改用 `display.view.duration` |
+| `2026-09-29 11:00` | 补齐 View 加载时序标注：[a] `milestones` 以 `dom_complete`、`load_event` 和 `loading_time` 标注累计时间点，别名沿用字段元数据，页面稳定仅在自动计时时返回，浮点负差按 `0` 处理<br />[b] `markers` 携带与 Web Vitals 卡片一致的评级阈值<br />[c] View 快照补齐字段增加 `dom_complete` |
 | `2026-09-16 17:00` | 确认 View 加载时序协议：[a] TTFB 四段与 View 三段统一放入 `phases`，`markers` 仅保留可定位的 Vital 指标<br />[b] 加载总耗时直接取 Loading Time，与绘图横轴范围分离<br />[c] `loading_timing` 返回范围由 `loading_type` 和 `loading_time_source` 决定，非首次加载整块不返回<br />[d] 最新 View 快照只补齐头部时间和 View 侧加载字段，Vital 字段由 Web Vitals 关联查询补齐 |
 | `2026-09-04 13:00` | 完成里程碑 5 的语义字段模型复查（[#12326](https://github.com/TencentBlueKing/bk-monitor/pull/12326)）：[a] RUM 枚举收归 `semconv/rum/constants.py`<br />[b] 虚拟字段归入 `attributes/virtual_attributes.py`<br />[c] `FieldRegistry` 以绑定副本携带完整路径<br />[d] `SpanQuery` 通过 `SpanSpec.fields()` 统一补充虚拟字段 |
 | `2026-08-31 00:00` | `FieldSpec` 与 `view_config` 增加 Web Vitals 评级阈值，阈值沿用字段单位并按包含性上界依次匹配 |
@@ -1434,7 +1476,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 | ✅ | `feat/apm_trace/#1010158081137031784` | 里程碑 4：统一 APM 查询基类和 `TraceDatasourceTarget` 协议 | [TencentBlueKing/bk-monitor #11877](https://github.com/TencentBlueKing/bk-monitor/pull/11877) |
 | ✅ | `feat/rum_span_semconv_build/#1010158081137728855`<br />`feat/rum_span_semconv_better/#1010158081137884971` | 里程碑 5：提供 RUM 语义字段目录和 `SpanSpec` 访问入口 | [TencentBlueKing/bk-monitor #12295](https://github.com/TencentBlueKing/bk-monitor/pull/12295)<br />[TencentBlueKing/bk-monitor #12326](https://github.com/TencentBlueKing/bk-monitor/pull/12326) |
 | 🔄 | `<branch_name>` | 里程碑 6：提供 RUM 详情 Mock 接口 *[2]* | 待创建 |
-| 🔄 | `<branch_name>` | 里程碑 7：提供 RUM Span 详情类接口（`record_detail`） *[1]* | 待创建 |
+| 🔄 | `feat/rum_span_detail/#1010158081138079323` | 里程碑 7：提供 RUM Span 详情类接口（`record_detail`） *[1]* | [TencentBlueKing/bk-monitor #12463](https://github.com/TencentBlueKing/bk-monitor/pull/12463) |
 | 🔄 | `<branch_name>` | 里程碑 8：提供 RUM 分析接口（`statistic`） *[1]* | 待创建 |
 
 - *[1] RUM 接口里程碑实施期间，随接口落地补充 `rum_web/docs/api/search.md`。*
