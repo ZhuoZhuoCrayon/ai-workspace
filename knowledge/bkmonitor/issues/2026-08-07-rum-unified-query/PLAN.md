@@ -4,7 +4,7 @@ tags: [rum, apm, query, span, view, session, factory, unify-query, semconv]
 issue: ./README.md
 description: 通过统一 Target、查询基类、Level 工厂和语义字段目录收敛 RUM 与 APM 查询
 created: 2026-08-07
-updated: 2026-09-29
+updated: 2026-10-09
 ---
 
 # RUM 分层统一查询 —— 实施方案
@@ -661,9 +661,10 @@ def build(
 | View 生命周期 | 同 View ID、`span_type=view` | 按 `view.version` 降序取最新一条 |
 | Web Vitals | 同 View ID、`span_type=vital` | 每个指标按 `end_time` 降序取最新一条 |
 
-- *[1] 关联查询沿用应用及 Session 范围，时间覆盖后续生命周期；其他类型返回空列表。*
-- *[2] `ViewSpanBuilder` 用最新快照构造展示数据，`origin_data`、`span_id` 保留主记录。*
-- *[3] Builder 不持有 Query，不引入 Context；计数和影响面仍由 `statistics` 获取。字段访问复用轻量取值函数，协议与计算公式直接遵循 `PLAN.md`，不在草稿重复维护。*
+- *[1] 关联查询沿用应用范围，按全局唯一的 View ID 定位，不追加 Session 条件。*
+- *[2] 关联查询不指定时间边界，由查询层按保留期补齐窗口；其他类型返回空列表。*
+- *[3] `ViewSpanBuilder` 用最新快照构造展示数据，`origin_data`、`span_id` 保留主记录。*
+- *[4] Builder 不持有 Query，不引入 Context；计数和影响面仍由 `statistics` 获取。字段访问复用轻量取值函数，协议与计算公式直接遵循 `PLAN.md`，不在草稿重复维护。*
 
 ## 0x04 核心协议
 
@@ -1081,7 +1082,6 @@ def build(
   "overview": {
     "title": "TypeError: Cannot read properties of undefined (reading 'name')",
     "badges": [
-      {"field_name": "elapsed_time", "value": 123500},
       {"field_name": "attributes.outcome.type", "value": "error"}
     ],
     // 省略，同 Resource。
@@ -1103,6 +1103,8 @@ def build(
   ]
 }
 ```
+
+*[1] Error Span 是瞬时事件，`elapsed_time` 恒为 `0`，概览不展示耗时徽标。*
 
 异步拉取的「关键信息」「影响面统计」：
 
@@ -1126,12 +1128,11 @@ def build(
   "overview": {
     "title": "LCP",
     "badges": [
-      {"field_name": "elapsed_time", "value": 2840},
+      {"field_name": "attributes.vital.value", "value": 2840},
       {
-        "field_name": "display.rateing_level",
+        "field_name": "display.rating_level",
         "value": "needs_improvement",
         "alias": "需改进"
-
       }
     ],
     // 省略，同 Resource。
@@ -1154,6 +1155,8 @@ def build(
   ]
 }
 ```
+
+*[1] Vital Span 是瞬时快照，`elapsed_time` 恒为 `0`，概览徽标使用指标值 `attributes.vital.value`。*
 
 ### g. RecordDetail（View）
 
@@ -1418,7 +1421,7 @@ View Span 关联信息获取（后端）：
 | `packages/rum_web/tests/query/test_span_query.py` | [a] 真实字段从 `SpanSpec` 补充语义<br />[b] 虚拟字段从 `SpanSpec.fields()` 注入并使用完整路径<br />[c] 别名按语义配置、数据源值、完整字段名依次回退<br />[d] 评级末档省略空 `value`<br />[e] 数据源已有同名字段时不重复注入 |
 | `test_level_handler.py`                | [a] 基类只保存 `data_sources`<br />[b] 具体 Level 可组合多个 Query<br />[c] TopK 方法只接收单个字段<br />[d] 9 项公共方法声明参数与返回类型<br />[e] 未知配置被拒绝，且不能覆盖公共参数或数据源                                                                                                              |
 | `test_query_resources.py`              | [a] 9 个 URL、HTTP 方法、Resource 和 Level 方法一一对应<br />[b] Resource 不依赖公共基类<br />[c] 请求协议不接受 `extra_config`，客户端无法覆盖 Level 配置<br />[d] `view_config` 保留 `origin_field`，顶层维护全量字段，分组通过字段名引用<br />[e] Span 视图返回按类型配置的默认列与分组适用范围<br />[f] semconv 补充别名、单位、展示类型、枚举选项和评级阈值 |
-| Span 详情验收（待实现） | [a] 五类详情复用字段元数据<br />[b] Long Task 保留上报的阻塞贡献<br />[c] Vital 不使用 Span 耗时，CLS 无单位<br />[d] View 开始时间与停留时长取 `attributes.view.started_at`，结果不随点开的快照变化 |
+| Span 详情验收（待实现） | [a] 五类详情复用字段元数据<br />[b] Long Task 保留上报的阻塞贡献<br />[c] Vital 与 Error 概览不使用 Span 耗时，Vital 徽标取指标值，CLS 无单位<br />[d] View 开始时间与停留时长取 `attributes.view.started_at`，结果不随点开的快照变化<br />[e] 非 View 类型不触发关联查询，记录不存在时明确失败 |
 | View 加载时序验收（待实现） | [a] 前四段复用同条 TTFB 耗时，连接不拆 TLS，倒推起点保留空隙<br />[b] View 三段按首字节、DOMContentLoaded、Load 和自动 Loading Time 的边界计算并返回到 `phases`<br />[c] `markers` 仅包含 TTFB、FCP、LCP，评级阈值与 `web_vitals` 卡片一致，缺失指标不补造<br />[d] 非首次加载不返回 `loading_timing`，原点不一致、非法数值和倒序边界不组装伪时序，手动 Loading Time 不生成 `phases` 和 `milestones` 中的 `page_stable`，自动计时的微小负耗时按 `0` 处理<br />[e] `total_duration` 等于有效的 `view.loading_time`，缺失或非法时省略，有效零值保留，标记超出总耗时仅扩展横轴<br />[f] `milestones` 依次取 `dom_complete`、`load_event` 和 `loading_time`，不返回别名，缺失字段直接省略 |
 | 异步分析验收（待实现） | [a] 基础详情不等待关联聚合<br />[b] 未加载、失败与统计为零可区分<br />[c] 应用、关联 ID 和时间边界一致，记录去重<br />[d] 区块合并保留基础字段，切换记录后丢弃旧响应 |
 | `apm/tests/test_unified_query_base.py` | [a] APM 继承通用基类<br />[b] 3 类 Query 统一接收 Target 列表<br />[c] Proxy 统一构造原始表与预计算层级<br />[d] 列表查询复用 `_query_list()`，Proxy 固定补 `total=0`<br />[e] 查询配置保持列表形态，多 Target 不丢表                                                                                   |
@@ -1435,6 +1438,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-10-09 15:00` | [a] 完成里程碑 7 第三轮 PR（[#12463](https://github.com/TencentBlueKing/bk-monitor/pull/12463)）review<br />[b] Vital 与 Error Span 为瞬时事件，概览去掉 `elapsed_time` 徽标，Vital 徽标改用指标值<br />[c] View 关联查询按 View ID 定位，不追加 Session 条件 |
 | `2026-09-29 15:00` | [a] 完成里程碑 7 第二轮 PR（[#12463](https://github.com/TencentBlueKing/bk-monitor/pull/12463)）review<br />[b] View 生命周期 Span 为瞬时快照，导航开始取 `attributes.view.started_at`，概览徽标改用 `display.view.duration` |
 | `2026-09-29 11:00` | 补齐 View 加载时序标注：[a] `milestones` 以 `dom_complete`、`load_event` 和 `loading_time` 标注累计时间点，别名沿用字段元数据，页面稳定仅在自动计时时返回，浮点负差按 `0` 处理<br />[b] `markers` 携带与 Web Vitals 卡片一致的评级阈值<br />[c] View 快照补齐字段增加 `dom_complete` |
 | `2026-09-16 17:00` | 确认 View 加载时序协议：[a] TTFB 四段与 View 三段统一放入 `phases`，`markers` 仅保留可定位的 Vital 指标<br />[b] 加载总耗时直接取 Loading Time，与绘图横轴范围分离<br />[c] `loading_timing` 返回范围由 `loading_type` 和 `loading_time_source` 决定，非首次加载整块不返回<br />[d] 最新 View 快照只补齐头部时间和 View 侧加载字段，Vital 字段由 Web Vitals 关联查询补齐 |
