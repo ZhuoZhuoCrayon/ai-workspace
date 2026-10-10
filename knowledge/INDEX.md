@@ -21,6 +21,7 @@
 
 ## 0x02 最近更新
 
+- 2026-10-10：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（设计会话时间线 Builder，节点详情复用 Span Builder；View 停留时长徽标改用 `field_unit` 声明单位）
 - 2026-10-09：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（Vital 与 Error 详情去掉耗时徽标，View 关联查询按 View ID 定位）
 - 2026-09-29：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（View 加载时序补齐累计里程碑协议，Web Vitals 标记携带评级阈值；登记 Span 详情 PR，View 导航开始改取 `started_at`）
 - 2026-09-29：更新 [APM 服务数据状态下沉到后台服务发现](./bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md)（请求侧 `have_data` 改为删除，不再换源）

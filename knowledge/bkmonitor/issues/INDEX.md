@@ -3,7 +3,7 @@
 
 | 文件                                                                                                     | 标签                                                        | 摘要                                                      | 更新日期       |
 |------|------|------|---------|
-| [RUM 分层统一查询](./2026-08-07-rum-unified-query/README.md) | `rum` `apm` `query` `span` `view` `session` `factory` `unify-query` `semconv` | 用统一 Target、查询基类和语义字段目录承接 RUM 分层检索与 APM Trace 查询 | 2026-10-09 |
+| [RUM 分层统一查询](./2026-08-07-rum-unified-query/README.md) | `rum` `apm` `query` `span` `view` `session` `factory` `unify-query` `semconv` | 用统一 Target、查询基类和语义字段目录承接 RUM 分层检索与 APM Trace 查询 | 2026-10-10 |
 | [APM 服务数据状态下沉到后台服务发现](./2026-09-16-apm-service-data-status-heartbeat/README.md) | `apm` `data-status` `discover` `heartbeat` `topo-node` `log` `profiling` | 由各 telemetry 发现器落盘服务级数据心跳，让应用详情读取心跳判定状态，SaaS 下线请求侧状态重算 | 2026-09-29 |
 | [指标元信息存储与 SaaS/APM 自定义指标改造](./2026-09-15-custom-metric-metadata/README.md) | `metadata` `custom-metric` `apm` `histogram` | 按完整隔离身份保存指标元信息，让指标管理与自定义视图按原名收敛 Histogram 成员 | 2026-09-15 |
 | [APM 跨应用 Trace 检索](./2026-07-31-apm-cross-app-trace-search/README.md) | `apm` `trace` `cross-app-search` `index-set` `bklog` `celery` `unify-query` | 通过 Trace 数据源域索引集聚合同域 APM Trace 数据源，让 Trace ID 可以跨应用检索 | 2026-08-06 |

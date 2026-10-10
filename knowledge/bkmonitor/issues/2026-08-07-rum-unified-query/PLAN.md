@@ -4,7 +4,7 @@ tags: [rum, apm, query, span, view, session, factory, unify-query, semconv]
 issue: ./README.md
 description: 通过统一 Target、查询基类、Level 工厂和语义字段目录收敛 RUM 与 APM 查询
 created: 2026-08-07
-updated: 2026-10-09
+updated: 2026-10-10
 ---
 
 # RUM 分层统一查询 —— 实施方案
@@ -177,6 +177,9 @@ packages/rum_web/
 │   └── urls.py                               # [Add] ResourceRouter，生成 search/
 ├── urls.py                                   # [Change] 在根路径挂载 rum_web.query.urls
 └── handlers/
+    ├── builder/
+    │   ├── span/                             # [Add] Span Builder
+    │   └── timeline.py                       # [Add] 会话时间线 Builder
     ├── query/
     │   ├── span.py                           # [Change] SpanQuery
     │   ├── view.py                           # [Reserved] ViewQuery
@@ -613,7 +616,7 @@ SpanLevelHandler.record_detail(record_id)
   └─ span_builder.build(span, related_spans)
 ```
 
-Builder 全部放在 `packages/rum_web/handlers/builder/span.py`，接口骨架：
+Builder 全部放在 `packages/rum_web/handlers/builder/span/`，接口骨架：
 
 ```python
 class SpanBuilder:
@@ -665,6 +668,76 @@ def build(
 - *[2] 关联查询不指定时间边界，由查询层按保留期补齐窗口；其他类型返回空列表。*
 - *[3] `ViewSpanBuilder` 用最新快照构造展示数据，`origin_data`、`span_id` 保留主记录。*
 - *[4] Builder 不持有 Query，不引入 Context；计数和影响面仍由 `statistics` 获取。字段访问复用轻量取值函数，协议与计算公式直接遵循 `PLAN.md`，不在草稿重复维护。*
+
+### i. Timeline Builder
+
+会话时间线沿用 **Handler 准备数据，Builder 组装协议**。
+
+```text
+SpanLevelHandler.timeline(session_id)
+  ├─ self.query.query_list(...)                   # 按 attributes.session.id 查询会话内全部 Span
+  └─ timeline_builder.build(spans)
+       └─ span_builder.build(span, related_spans)   # 每个节点构造一条 record
+```
+
+`packages/rum_web/handlers/builder/timeline.py` 接口骨架：
+
+```python
+from rum_web.handlers.builder.span import build as build_span
+
+
+@dataclass
+class ViewGroup:
+    snapshots: list[dict[str, Any]]  # 同 View ID 的 View 快照
+    vitals: list[dict[str, Any]]     # 同 View ID 的 Vital
+    members: list[dict[str, Any]]    # 同 View ID 的其余 Span，作为子节点候选
+
+
+def build(spans: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    sessions, groups = _partition(spans)
+    tree, records = [], {}
+    for group in sorted(groups, key=_started_at):
+        view = min(group.snapshots, key=_version)
+        records[view["span_id"]] = build_span(view, [*group.snapshots, *group.vitals])
+        records.update({span["span_id"]: build_span(span) for span in group.members})
+        tree.append(_node(view, _attach(group.members)))
+    return {
+        "start_time": _session_start_time(sessions),
+        "end_time": _session_end_time(sessions),
+        "tree": tree,
+        "records": records,
+    }
+```
+
+会话起止时间：
+
+| 字段 | 过滤条件 | 聚合 |
+| --- | --- | --- |
+| `start_time` | `attributes.session.phase IN (start, rotate)` | `min(start_time)` |
+| `end_time` | `attributes.session.phase = end` | `max(end_time)` |
+
+- *[1] 无匹配的 Session Span 时返回 `null`。*
+- *[2] `start`、`rotate` 的上报时刻晚于首个 View 的 `attributes.view.started_at` 约 `0.6 s～1.7 s`，待 SDK 优化。*
+
+父子层级：
+
+| 节点 | 父节点 | 判定规则 |
+| --- | --- | --- |
+| View | -- | 按 `attributes.view.id` 去重，取 `min(attributes.view.version)` 的快照 |
+| Action | View | `attributes.view.id` 相等 |
+| Resource | Action、View | 优先挂到 `attributes.view.id`、`attributes.action.id` 均相等的 Action，否则挂到 View |
+| Long Task、Error、Custom、WebSocket | View | `attributes.view.id` 相等，忽略 `attributes.action.id` |
+
+- *[1] View 按 `attributes.view.started_at` 升序，子节点按 `start_time` 升序。*
+- *[2] Vital、Session 不生成节点。*
+- *[3] `attributes.view.id` 为空或所属 View 无快照的 Span 丢弃。*
+
+复用 Span Builder：两个入口调用同一个 `build(span, related_spans)`，只是入参来源不同。
+
+| 入口 | `span` | `related_spans` |
+| --- | --- | --- |
+| `record_detail` | `query_detail(record_id)` | `_query_related_spans(span)` 回查存储 |
+| `timeline` | 会话 Span 查询结果 | 同一结果按 `attributes.view.id` 切分 |
 
 ## 0x04 核心协议
 
@@ -1194,7 +1267,7 @@ def build(
   "span_id": "34e3b6ff1943346c",
   "overview": {
     "title": "view-001",
-    "badges": [{"field_name": "display.view.duration", "value": 60300}],
+    "badges": [{"field_name": "display.view.duration", "field_unit": "ms", "value": 60300}],
     "items": [
       {
 	    "field_name": "display.span_type",
@@ -1405,7 +1478,7 @@ View Span 关联信息获取（后端）：
 | Web Vitals | `attributes.span_type: vital AND attributes.view.id: {当前 View ID}` | TTFB 四段耗时，以及 FCP、LCP、INP 和 CLS 的 `attributes.vital.value`                                                                                                                              |
 
 * *[1] `origin_data` 和 `span_id` 保留主记录，补齐字段只覆盖展示值。*
-* *[2] View 生命周期 Span 是瞬时快照，`start_time` 等于上报时刻，`elapsed_time` 恒为 `0`，因此概览徽标使用 `display.view.duration`。*
+* *[2] View 生命周期 Span 是瞬时快照，`start_time` 等于上报时刻，`elapsed_time` 恒为 `0`，因此概览徽标使用 `display.view.duration`，通过 `field_unit` 声明毫秒，由前端格式化。*
 * *[3] 概览 `start_time` 取 `attributes.view.started_at`（毫秒）换算的微秒值，`display.view.duration` 为最新快照 `end_time` 与导航开始的差值，未取得 `phase=end` 时仅表示已观测时长。*
 
 ## 0x05 验收与验证
@@ -1424,6 +1497,7 @@ View Span 关联信息获取（后端）：
 | Span 详情验收（待实现） | [a] 五类详情复用字段元数据<br />[b] Long Task 保留上报的阻塞贡献<br />[c] Vital 与 Error 概览不使用 Span 耗时，Vital 徽标取指标值，CLS 无单位<br />[d] View 开始时间与停留时长取 `attributes.view.started_at`，结果不随点开的快照变化<br />[e] 非 View 类型不触发关联查询，记录不存在时明确失败 |
 | View 加载时序验收（待实现） | [a] 前四段复用同条 TTFB 耗时，连接不拆 TLS，倒推起点保留空隙<br />[b] View 三段按首字节、DOMContentLoaded、Load 和自动 Loading Time 的边界计算并返回到 `phases`<br />[c] `markers` 仅包含 TTFB、FCP、LCP，评级阈值与 `web_vitals` 卡片一致，缺失指标不补造<br />[d] 非首次加载不返回 `loading_timing`，原点不一致、非法数值和倒序边界不组装伪时序，手动 Loading Time 不生成 `phases` 和 `milestones` 中的 `page_stable`，自动计时的微小负耗时按 `0` 处理<br />[e] `total_duration` 等于有效的 `view.loading_time`，缺失或非法时省略，有效零值保留，标记超出总耗时仅扩展横轴<br />[f] `milestones` 依次取 `dom_complete`、`load_event` 和 `loading_time`，不返回别名，缺失字段直接省略 |
 | 异步分析验收（待实现） | [a] 基础详情不等待关联聚合<br />[b] 未加载、失败与统计为零可区分<br />[c] 应用、关联 ID 和时间边界一致，记录去重<br />[d] 区块合并保留基础字段，切换记录后丢弃旧响应 |
+| 会话时间线验收（待实现） | [a] 每个 View ID 只生成一个 View 节点，`records` 与同 `span_id` 的 `record_detail` 一致<br />[b] Resource 只挂到同 View 内 `action.id` 相同的 Action，跨 View 的 Resource 留在自身 View<br />[c] Long Task 和 Error 携带 `action.id` 时仍挂在 View<br />[d] Vital 和 Session 不生成节点，无 `phase=end` 记录时 `end_time` 为 `null`<br />[e] 缺少 View ID 或所属 View 无快照的 Span 不进入时间线 |
 | `apm/tests/test_unified_query_base.py` | [a] APM 继承通用基类<br />[b] 3 类 Query 统一接收 Target 列表<br />[c] Proxy 统一构造原始表与预计算层级<br />[d] 列表查询复用 `_query_list()`，Proxy 固定补 `total=0`<br />[e] 查询配置保持列表形态，多 Target 不丢表                                                                                   |
 
 测试门禁：
@@ -1438,6 +1512,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-10-10 00:00` | [a] 设计会话时间线 Builder，节点按 View ID 和 Action ID 挂载，详情复用 Span Builder<br />[b] View 停留时长徽标通过 `field_unit` 声明毫秒，前端负责格式化 |
 | `2026-10-09 15:00` | [a] 完成里程碑 7 第三轮 PR（[#12463](https://github.com/TencentBlueKing/bk-monitor/pull/12463)）review<br />[b] Vital 与 Error Span 为瞬时事件，概览去掉 `elapsed_time` 徽标，Vital 徽标改用指标值<br />[c] View 关联查询按 View ID 定位，不追加 Session 条件 |
 | `2026-09-29 15:00` | [a] 完成里程碑 7 第二轮 PR（[#12463](https://github.com/TencentBlueKing/bk-monitor/pull/12463)）review<br />[b] View 生命周期 Span 为瞬时快照，导航开始取 `attributes.view.started_at`，概览徽标改用 `display.view.duration` |
 | `2026-09-29 11:00` | 补齐 View 加载时序标注：[a] `milestones` 以 `dom_complete`、`load_event` 和 `loading_time` 标注累计时间点，别名沿用字段元数据，页面稳定仅在自动计时时返回，浮点负差按 `0` 处理<br />[b] `markers` 携带与 Web Vitals 卡片一致的评级阈值<br />[c] View 快照补齐字段增加 `dom_complete` |
