@@ -586,7 +586,7 @@ Tars 的 `__description=null`、`__temporality=delta`。`rpc_*` 的 `__interval`
 
 - *[1] 累计方式：Delta／Cumulative 映射为平台同名值，未指定或未知值跳过元信息。*
 - *[2] 子项：count／bucket 单位为 `1`，其余使用 m.Unit()，仅登记转换器实际生成项。*
-- *[3] 范围：Scope().Name() 写入 scope_name，合并时 resource／Scope 属性覆盖同名 datapoint 属性，以最终 dimensions 为准。*
+- *[3] 范围：`Scope().Name()` 写入 `scope_name`，合并时 resource／Scope 属性覆盖同名 datapoint 属性，以最终 dimensions 为准。*
 - *[4] 查询约束：分位数跨实例汇聚、非单调累计值的处理见 [协议语义](./REPORT.md#c-协议语义与平台约定)。*
 
 ### e. 原生 Remote Write

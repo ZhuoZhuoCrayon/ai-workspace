@@ -1,6 +1,6 @@
 # bkmonitor-datalink 知识库
 
-> 蓝鲸监控数据链路 (bkmonitor-datalink)
+> 蓝鲸监控数据链路（bkmonitor-datalink）
 
 ## 0x01 索引
 

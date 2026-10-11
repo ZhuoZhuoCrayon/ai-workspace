@@ -50,6 +50,6 @@ OTP 描述随 Record 传递，在 exporter 绑定身份并登记；OTLP、Tars�
 
 ## 0x03 参考
 
-需求来源：《【2026】📝 自定义指标开箱即用调研.docx》。本方案覆盖 collector 的元信息采集与同步，下游存储、展示和产品排期由对应方案定义。
+需求来源：`【2026】📝 自定义指标开箱即用调研.docx`。本方案覆盖 collector 的元信息采集与同步，下游存储、展示和产品排期由对应方案定义。
 
 结构参考：[collector 自适应限流方案](../2026-06-10-collector-adaptive-throttling/PLAN.md)和[对应调研](../2026-06-10-collector-adaptive-throttling/PREPLAN.md)。协议与源码证据集中在 [REPORT](./REPORT.md)。
