@@ -2,8 +2,9 @@
 name: project-mgr
 description: >
   通过 repos.json 注册和管理工作区中的项目。
-  当用户想要接入项目、移除项目、注册项目提供的 skills、询问项目设置规范，
-  或消息中提到已注册项目名并需要定位 local_path 时使用。
+  当用户想要接入项目、移除项目、注册项目提供的 skills、询问项目设置规范时使用。
+  消息提到已注册项目名，或要在其他项目中提交、开发、评审时，必须先使用本 Skill
+  定位 local_path 和 language，不要直接 grep repos.json 绕过。
 ---
 
 # project-mgr — 项目管理
@@ -106,8 +107,8 @@ description: >
 
 * `local_path` 使模型能直接访问项目源码，`knowledge/<name>/` 提供项目级知识，两者结合即可完成项目任务。
 * **【CRITICAL（必须执行不可协商）】** `language`：
-  - 对话：以工作区项目配置的 language 字段为准，默认中文。
-  - 其他（如代码注释、文档、PR review 等）：以目标项目配置的 `language` 字段为准，默认中文。
+  - 对话：以 `ai-workspace` 条目的 `language` 为准，与目标项目无关，全局约定见根目录 `AGENTS.md`。
+  - 产出（如 commit message、代码注释、文档、PR review 等）：以目标项目的 `language` 为准，默认中文。
 
 2）通过 `cd <local_path>` 切换到项目目录，阅读项目级别规范（如 `CONTRIBUTING.md`、`README.md`、`AGENTS.md` 等）。
 

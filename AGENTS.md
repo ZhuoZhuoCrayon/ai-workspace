@@ -1,6 +1,6 @@
 # AI 工作区导航
 
-本文件是 Agent 统一入口，只承担根目录导航职责。
+本文件是 Agent 统一入口，承担根目录导航和全局交互约定。
 
 具体任务规则见 `.agents/skills/`，按场景读取，不预加载全量目录。
 
@@ -10,7 +10,12 @@
 - 根目录文档只保留入口信息，领域规则由 `.agents/skills/` 承载。
 - `AGENTS.md` 是唯一 Agent 引导入口。
 
-## 0x02 常用入口
+## 0x02 交互约定
+
+- 对话语言：遵循 `repos.json` 中 `ai-workspace` 条目的 `language`，未配置时使用中文，进度说明和最终总结都适用。
+- 产出语言：commit message、代码注释、文档和 PR review 遵循目标项目的 `language`，规则见 `.agents/skills/project-mgr/`。
+
+## 0x03 常用入口
 
 | 场景 | 入口 |
 | --- | --- |
