@@ -702,11 +702,11 @@ class ViewGroup:
 
 def build(spans: Sequence[dict[str, Any]], view_id: str | None = None) -> dict[str, Any]:
     sessions, groups = _partition(spans)
-    tree, records = [], {}
+    tree, records = [], []
     for group in sorted(groups, key=_started_at):
         view = min(group.snapshots, key=_version)
-        records[view["span_id"]] = build_span(view, [*group.snapshots, *group.vitals])
-        records.update({span["span_id"]: build_span(span) for span in group.members})
+        records.append(build_span(view, [*group.snapshots, *group.vitals]))
+        records.extend(build_span(span) for span in group.members)
         tree.append(_node(view, _attach(group.members)))
     start_time, end_time = _view_period(groups) if view_id else _session_period(sessions)
     return {"start_time": start_time, "end_time": end_time, "tree": tree, "records": records}
