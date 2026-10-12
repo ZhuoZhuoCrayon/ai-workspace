@@ -1,4 +1,4 @@
-.PHONY: all env s1 s2 layout scope scope-stress catalog-smoke m1 m2 explode explode-clean meta-layout meta-layout-clean compat clean
+.PHONY: all env s1 s2 layout scope scope-stress catalog-smoke m1 m2 explode explode-clean meta-layout meta-layout-clean compat plans57 plans57-arm64 plans57-supplement plans57-supplement2 plans57-clean clean
 
 all: env s1 s2 layout scope scope-stress
 
@@ -50,6 +50,32 @@ meta-layout-clean:
 compat:
 	bash compat/compat.sh all
 	bash compat/compat.sh diff
+
+# 四个完整方案在 MySQL 5.7 上对比：自带 Docker 容器（端口 33311），数据目录峰值约 9 GiB，结束即删除容器与数据卷
+plans57:
+	PYTHONDONTWRITEBYTECODE=1 uv run --quiet --with 'pymysql==1.1.1' python plans57.py run --out results/plans57.txt
+
+# 原生 arm64 的 5.7 社区构建复测 A/C/D 的读取与全平台扫描，排除 amd64 模拟的影响
+plans57-arm64:
+	IMAGE_57=biarms/mysql:5.7 PLATFORM_57=linux/arm64 PYTHONDONTWRITEBYTECODE=1 uv run --quiet --with 'pymysql==1.1.1' \
+		python plans57.py run --cross-check --out results/plans57_arm64.txt
+
+# 补测管理页搜索、族视图节点分页与单范围读取，只装载指标项、定义与最大数据源的成员，再在 arm64 原生构建上复核排序
+plans57-supplement:
+	PYTHONDONTWRITEBYTECODE=1 uv run --quiet --with 'pymysql==1.1.1' \
+		python plans57.py run --supplement --out results/plans57_supplement.txt
+	IMAGE_57=biarms/mysql:5.7 PLATFORM_57=linux/arm64 PYTHONDONTWRITEBYTECODE=1 uv run --quiet --with 'pymysql==1.1.1' \
+		python plans57.py run --supplement --cross-check --out results/plans57_supplement_arm64.txt
+
+# 补测 C 按 PLAN 写法（C2）、族视图首页完整步骤与服务视图完整路径，再在 arm64 原生构建上复核排序
+plans57-supplement2:
+	PYTHONDONTWRITEBYTECODE=1 uv run --quiet --with 'pymysql==1.1.1' \
+		python plans57.py run --supplement2 --out results/plans57_supplement2.txt
+	IMAGE_57=biarms/mysql:5.7 PLATFORM_57=linux/arm64 PYTHONDONTWRITEBYTECODE=1 uv run --quiet --with 'pymysql==1.1.1' \
+		python plans57.py run --supplement2 --cross-check --out results/plans57_supplement2_arm64.txt
+
+plans57-clean:
+	PYTHONDONTWRITEBYTECODE=1 uv run --quiet --with 'pymysql==1.1.1' python plans57.py clean
 
 clean:
 	rm -rf "$${CM_BENCH_WORK:-$${TMPDIR:-/tmp}/cm-metric-bench}"
