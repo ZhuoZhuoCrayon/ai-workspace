@@ -1,0 +1,36 @@
+# bkte (上云) scale sampling, 2026-10-11
+# source: bkm-bkte MCP (execute_range_query / list_apm_applications / list_apm_services), read-only
+# window: start=1791692520 end=1791693420 (2026-10-11 11:57~12:12 CST), step=15m
+
+## platform anchors
+latest APM application id                 4952   (bk_biz_id=-4228598 hpjydm-production, created 2026-09-22)
+latest time_series_group_id               25970  (same business, hpjydm-test)
+-> upper bound: ~5,000 APM apps, ~26,000 TimeSeriesGroup ever created (ids include deleted / disabled)
+
+## business -4228598 APM apps (14 listed)
+app                                         metrics  services  metric x service  ratio
+hpjy-microservices-activities-production       217        28           ~4,358    20.1
+hpjy-microservices-activities-press            145         6              705     4.9
+hpyd-creation-production                        83         4              218     2.6
+sysnotice-prod-metric                          111         2              111     1.0
+hpjy-replay-production                           0         0                0       -
+trpcagent                                        0         0                0       -
+
+# metrics / services / pairs:
+#   count(count by (__name__) ({__name__=~"custom:<rt>:__default__:.*"}))
+#   count(count by (service_name) (...))
+#   count(count by (__name__, service_name) (...))
+# <rt> uses VM escaping, e.g. space_4228598_bkapm_metric_hpjy__bk_45__microservices__bk_45__activities__bk_45__production
+
+## largest app breakdown (whole-table query exceeds VM -search.maxUniqueTimeseries=500000, split by name prefix)
+prefix                 metrics  metric x service  metric x service x scope_name
+[A-Z].* (business)          88             1,204                        1,204
+trpc_ | timer_ | bk_        55             1,082  (884 + 198)           2,846 (trpc|go|process|timer|bk)
+go_ | process_              63             1,764  (63 x 28)
+rpc_                        11       <=308 (est.)  series > 500000, not countable
+total                     ~217            ~4,358
+distinct scope_name: 2   -> metric x service x scope_name == metric x service
+
+## registered services (APM topology)
+hpjy-microservices-activities-production   126 services, all trpc (list_apm_services)
+-> 15-min active 28 / registered 126; TimeSeriesMetric expiry window = 30 d (TIME_SERIES_METRIC_EXPIRED_SECONDS)
