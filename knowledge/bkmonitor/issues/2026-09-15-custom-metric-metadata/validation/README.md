@@ -23,6 +23,7 @@ make compat
 | 按范围不同的元信息 | `make meta-layout` | 本机 `9.2.0` | `4.3 GiB` | `results/meta_layout.txt` |
 | 版本兼容 | `make compat` | Docker `5.7`、`8.0` | 约 `3 GiB` | `results/compat_57.txt`、`results/compat_80.txt`、`results/compat_diff.txt` |
 | 完整方案对比 | [a] `make plans57`<br />[b] `make plans57-arm64`<br />[c] `make plans57-supplement`<br />[d] `make plans57-supplement2` | [a] Docker `5.7.44`（amd64）<br />[b] Docker `5.7` arm64 社区构建<br />[c] 依次为上述两者<br />[d] 依次为上述两者 | [a] `8.7 GiB`<br />[b] `4.8 GiB`<br />[c] `4.6 GiB`<br />[d] `4.6 GiB` | [a] `results/plans57.txt`<br />[b] `results/plans57_arm64.txt`<br />[c] `results/plans57_supplement.txt`、`results/plans57_supplement_arm64.txt`<br />[d] `results/plans57_supplement2.txt`、`results/plans57_supplement2_arm64.txt` |
+| 关系表全量复测 | `make plans57-full` | Docker `5.7.44`（amd64） | `11.7 GiB` | `results/plans57_full.txt` |
 | 冒烟 | `make catalog-smoke` | 本机 `9.2.0` | `2.9 GiB` | `results/catalog_smoke.txt` |
 
 - *[1] [run.sh](./run.sh) 在 `$TMPDIR/cm-metric-bench` 初始化独立 mysqld（端口 `33306`，缓冲池 `8 GiB`，`innodb_flush_log_at_trx_commit=1`，关闭 binlog），由 `CM_BENCH_SCRIPT` 选择 `bench.py` 或 `catalog.py`。*

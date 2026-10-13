@@ -13,6 +13,7 @@ A 现状修补、B 服务展开、C 扩列加成员表、D 独立新表。B、C�
   compare   与 REPORT 中 MySQL 9.2 的同名用例对照
   supplement 单独运行：管理页搜索、族视图节点分页与单范围读取，只装载指标项、定义与最大数据源的成员
   supplement2 单独运行：C 按 PLAN 写法（C2）的搜索与节点分页、族视图首页完整步骤、服务视图完整路径
+  full      单独运行：成员按上界规模全量装载（约 4,009 万行），不装载 B，复跑 A/C/D 的读取、扫描、Apply 与两轮补测
 数据画像、建表语句与 Apply 写法复用 catalog.py、explode.py、meta_layout.py 与 compat/compat.py。
 脚本自带 Docker 容器（mysql:5.7.44，linux/amd64，端口 33311），结束即删除容器与数据卷。
 
@@ -27,6 +28,8 @@ A 现状修补、B 服务展开、C 扩列加成员表、D 独立新表。B、C�
     # 补测：管理页搜索、族视图节点分页与单范围读取，arm64 复核换镜像后加 --cross-check
     uv run --quiet --with 'pymysql==1.1.1' python plans57.py run --supplement --out results/plans57_supplement.txt
     uv run --quiet --with 'pymysql==1.1.1' python plans57.py run --supplement2 --out results/plans57_supplement2.txt
+    # 全量：成员按上界规模全量装载，数据目录约 15 GiB
+    uv run --quiet --with 'pymysql==1.1.1' python plans57.py run --full --out results/plans57_full.txt
     # 删除容器与数据卷
     uv run --quiet --with 'pymysql==1.1.1' python plans57.py clean
 """
@@ -108,6 +111,7 @@ ROOT: str = os.path.dirname(os.path.abspath(__file__))
 GIB: int = 1024**3
 MIB: int = 1024**2
 MAX_DATADIR: int = 14 * GIB + GIB // 2
+FULL_MAX_DATADIR: int = 40 * GIB
 MIN_FREE: int = 4 * GIB
 SERVER_FLAGS: tuple[str, ...] = (
     "--character-set-server=utf8",
@@ -183,6 +187,7 @@ class Config:
     cross_check: bool = False
     supplement: bool = False
     supplement2: bool = False
+    full: bool = False
 
 
 CONFIG: list[Config] = []
@@ -328,7 +333,7 @@ class DiskGuard(threading.Thread):
     def run(self) -> None:
         while True:
             data, tmp, free = self.sample()
-            if data > MAX_DATADIR or free < MIN_FREE:
+            if data > (FULL_MAX_DATADIR if cfg().full else MAX_DATADIR) or free < MIN_FREE:
                 log(f"abort: datadir {data / GIB:.1f} GiB, tmp {tmp / GIB:.1f} GiB, host free {free / GIB:.1f} GiB")
                 remove_server()
                 os._exit(75)
@@ -548,6 +553,9 @@ def load_reports(
                     ref_value, meta, fp = variants[idx]
                 override: str = OVERRIDE_JSON if extra > 1 - OVERRIDE_SHARE else NULL
                 members.add_line(f"{member_id}\t{gid}\t{sid}\t{ids[idx]}\t{last_seen}\t{ref_value}\t{override}")
+                covered[idx] = 1
+                if cfg().full:
+                    continue
                 rows.add_line(
                     "\t".join(
                         (
@@ -572,9 +580,8 @@ def load_reports(
                         )
                     )
                 )
-                covered[idx] = 1
         for idx in range(g.metrics):
-            if covered[idx]:
+            if covered[idx] or cfg().full:
                 continue
             b_id += 1
             name, original, kind, meta, fp, tags, config, page, table_id, legacy = info[idx]
@@ -1370,7 +1377,9 @@ def report_apply(
     emit("plan = PLAN Apply (changed scoped reports become exceptions referencing deduplicated values)")
     emit(f"{'case':<22}{'p50 ms':>10}{'p95 ms':>10}{'p99 ms':>10}{'stmts':>8}{'written':>9}{'reports/s@p50':>15}")
     index: dict[int, GroupIndex] = {g: catalog.group_index(conn, g) for g in [*xl, *large]}
-    b_idx: dict[int, BIndex] = {g.group_id: b_index(conn, g, pages[g.group_id]) for g in [*subset.xl, *mixed_groups]}
+    b_idx: dict[int, BIndex] = (
+        {} if cfg().full else {g.group_id: b_index(conn, g, pages[g.group_id]) for g in [*subset.xl, *mixed_groups]}
+    )
 
     def parts_of(shape: str, rng: random.Random) -> list[tuple[int, int, int]]:
         if shape == "xl":
@@ -1410,16 +1419,17 @@ def report_apply(
             )
         rng_b: random.Random = random.Random(f"{shape}.b")
         b_taken: set[tuple[int, str, str]] = set()
-        jobs.append(
-            (
-                f"{shape}.B",
-                f"apply.{shape}.plan",
-                lambda rng=rng_b, taken=b_taken, shape=shape: [
-                    build_b_batch(conn, parts_of(shape, rng), b_idx, rng, taken) for _ in range(total)
-                ],
-                apply_b,
+        if not cfg().full:
+            jobs.append(
+                (
+                    f"{shape}.B",
+                    f"apply.{shape}.plan",
+                    lambda rng=rng_b, taken=b_taken, shape=shape: [
+                        build_b_batch(conn, parts_of(shape, rng), b_idx, rng, taken) for _ in range(total)
+                    ],
+                    apply_b,
+                )
             )
-        )
         for label, key, build, fn in jobs:
             log(f"apply {label}")
             batches: list[Any] = build()
@@ -2298,9 +2308,11 @@ def environment(subset: Subset, config: Config) -> None:
     )
     emit(f"docker {server}, VM {info}; image {digest}; container uname -m = {arch} (platform {PLATFORM})")
     emit(", ".join(f"{k}={variables.get(k, '-')}" for k in names))
+    if config.full:
+        emit("loaded members: all groups at the upper scale, no B rows; probes use the sampled groups below")
     emit(
-        f"loaded members and B rows: {len(subset.xl)} XL, {len(subset.large)} L (126 services), "
-        f"{len(subset.tail)} of M/S/XS ({LOADED_TAIL_SHARE:.0%} each)"
+        f"{'probe groups' if config.full else 'loaded members and B rows'}: {len(subset.xl)} XL, "
+        f"{len(subset.large)} L (126 services), {len(subset.tail)} of M/S/XS ({LOADED_TAIL_SHARE:.0%} each)"
     )
     emit()
 
@@ -2526,7 +2538,7 @@ def report_supplement(conn: pymysql.Connection, raw: pymysql.Connection, xl: int
         tier, name = key.split(".", 1)
         for scheme in SUPPLEMENT_SCHEMES:
             case: Case | None = by_scheme.get(scheme)
-            if case is None:
+            if case is None or (cfg().full and scheme.endswith(".inline")):
                 continue
             warmup, runs = supplement_budget(tier, name)
             label: str = f"{key}.{scheme}"
@@ -2543,7 +2555,8 @@ def report_supplement(conn: pymysql.Connection, raw: pymysql.Connection, xl: int
     for plan in plans:
         emit(plan)
     emit()
-    report_supplement_compare()
+    if not cfg().full:
+        report_supplement_compare()
 
 
 def report_supplement_compare() -> None:
@@ -2854,6 +2867,64 @@ def run_supplement2(config: Config, groups: Sequence[Group], subset: Subset, gua
     conn.close()
 
 
+# ---------------------------------------------------------------- 全量：成员按上界规模全量装载
+
+
+FULL_TABLES: tuple[str, ...] = (
+    "metadata_timeseriesmetric",
+    "x1_timeseriesmetric",
+    "x3_metric_meta",
+    "report_scope",
+    "report_scope_label",
+    "report_member",
+    VALUE_TABLE,
+)
+
+
+def run_full(config: Config, groups: Sequence[Group], subset: Subset, guard: DiskGuard) -> None:
+    """成员、范围与例外取值按上界规模全部装载，B 不装载；探针沿用抽样子集，与 plans57.txt 和两轮补测逐项对照。"""
+    started: float = time.perf_counter()
+    conn: pymysql.Connection = connect()
+    raw: pymysql.Connection = connect(raw=True)
+    loads: dict[str, float] = {}
+    log("load metric items, X1 columns and X3 definitions")
+    field_ids, loads["metrics + X1 + X3"] = load_base(conn, groups)
+    pages: dict[int, list[int]] = page_ids_of(groups)
+    log("load scopes, labels, members and values of all groups")
+    start: float = time.perf_counter()
+    stat: LoadStat = load_reports(conn, groups, field_ids, pages)
+    loads["scopes + members + values"] = time.perf_counter() - start
+    emit(
+        f"loaded: {len(groups):,} groups, {config.metrics:,} metric items; members {stat.members:,}, "
+        f"scopes {stat.scopes:,}, values {stat.values:,}; load " + ", ".join(f"{k} {v:,.0f} s" for k, v in loads.items())
+    )
+    emit()
+    emit("## table sizes (information_schema after ANALYZE; d+i = data + index)")
+    emit(f"{'table':<28}{'rows':>14}{'d+i MiB':>11}{'B/row':>8}")
+    for table, size in table_sizes(conn, FULL_TABLES).items():
+        emit(f"{table:<28}{size.rows:>14,}{size.both / MIB:>11,.1f}{size.per_row:>8,.0f}")
+    emit()
+    active: Targets = targets_of(catalog.plan_groups("m1" if not config.smoke else config.scale, config.metrics))
+    upper: Targets = targets_of(groups)
+    RESULT["targets"] = {"loaded": upper, "active": active, "upper": upper}
+    samples: Samples = build_samples(conn, subset)
+    emit(
+        f"samples: XL groups {samples.xl}, {len(samples.xl_services)} XL services, hottest {[p.service for p in samples.hot]}, "
+        f"{len(samples.large)} L groups, {len(samples.l_services)} L services"
+    )
+    emit()
+    report_reads(conn, raw, "xl", build_cases("xl", samples.xl, samples.xl_services, samples.hot))
+    report_reads(conn, raw, "l", build_cases("l", samples.large, samples.l_services, []))
+    report_scan(conn, raw, 0, active, upper)
+    report_apply(conn, raw, subset, pages)
+    report_supplement(conn, raw, subset.xl[0].group_id, [g.group_id for g in subset.large[:L_SAMPLE_GROUPS]])
+    report_supplement2(conn, raw, samples)
+    loads["total run"] = time.perf_counter() - started
+    report_summary(guard, loads)
+    raw.close()
+    conn.close()
+
+
 # ---------------------------------------------------------------- 入口
 
 
@@ -2875,6 +2946,9 @@ def run(config: Config, out_path: str | None) -> None:
             return
         if config.supplement2:
             run_supplement2(config, groups, subset, guard)
+            return
+        if config.full:
+            run_full(config, groups, subset, guard)
             return
         if not config.cross_check:
             report_check()
@@ -2949,6 +3023,11 @@ def main() -> None:
         action="store_true",
         help="补测 C 按 PLAN 写法（C2）、族视图首页完整步骤与服务视图完整路径，只装载所需数据",
     )
+    run_parser.add_argument(
+        "--full",
+        action="store_true",
+        help="成员按上界规模全量装载，不装载 B，复跑 A/C/D 的读取、扫描、Apply 与两轮补测",
+    )
     commands.add_parser("clean")
     args: argparse.Namespace = parser.parse_args()
     if args.command == "clean":
@@ -2962,9 +3041,10 @@ def main() -> None:
         loaded_l=5 if args.smoke else LOADED_L,
         buffer_pool="1G" if args.smoke else args.buffer_pool,
         log_file="256M" if args.smoke else "1G",
-        cross_check=args.cross_check,
+        cross_check=args.cross_check or args.full,
         supplement=args.supplement,
         supplement2=args.supplement2,
+        full=args.full,
     )
     run(config, args.out)
 

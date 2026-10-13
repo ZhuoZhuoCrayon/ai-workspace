@@ -1,4 +1,4 @@
-.PHONY: all env s1 s2 layout scope scope-stress catalog-smoke m1 m2 explode explode-clean meta-layout meta-layout-clean compat plans57 plans57-arm64 plans57-supplement plans57-supplement2 plans57-clean clean
+.PHONY: all env s1 s2 layout scope scope-stress catalog-smoke m1 m2 explode explode-clean meta-layout meta-layout-clean compat plans57 plans57-arm64 plans57-supplement plans57-supplement2 plans57-full plans57-clean clean
 
 all: env s1 s2 layout scope scope-stress
 
@@ -73,6 +73,11 @@ plans57-supplement2:
 		python plans57.py run --supplement2 --out results/plans57_supplement2.txt
 	IMAGE_57=biarms/mysql:5.7 PLATFORM_57=linux/arm64 PYTHONDONTWRITEBYTECODE=1 uv run --quiet --with 'pymysql==1.1.1' \
 		python plans57.py run --supplement2 --cross-check --out results/plans57_supplement2_arm64.txt
+
+# 成员按上界规模全量装载（约 4,009 万行），复跑 C、D 的读取、扫描、Apply 与两轮补测
+plans57-full:
+	PYTHONDONTWRITEBYTECODE=1 uv run --quiet --with 'pymysql==1.1.1' \
+		python plans57.py run --full --out results/plans57_full.txt
 
 plans57-clean:
 	PYTHONDONTWRITEBYTECODE=1 uv run --quiet --with 'pymysql==1.1.1' python plans57.py clean
