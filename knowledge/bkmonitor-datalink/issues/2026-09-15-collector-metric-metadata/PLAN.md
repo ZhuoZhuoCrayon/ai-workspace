@@ -4,7 +4,7 @@ tags: [collector, metrics, metadata, otlp, remote-write]
 description: 协议入口保留描述，周期缓冲保存完整值，低误判率 Bloom 去重并定期强制补报
 issue: knowledge/bkmonitor-datalink/issues/2026-09-15-collector-metric-metadata/README.md
 created: 2026-09-15
-updated: 2026-09-15
+updated: 2026-10-13
 ---
 
 # bk-collector 指标元信息采集与同步方案
@@ -111,7 +111,8 @@ type Key struct {
 
 type Value struct {
     Name, Unit, Description string
-    Type, Temporality, Usage string
+    Type, OriginalType string // 输出序列类型、拆分前类型
+    Temporality, Usage string
     Interval int64
     Present  uint8 // Unit / Description / Interval / Usage 是否已知
 }
@@ -126,7 +127,7 @@ func NewKey(dataID int32, scope Scope, metric string) Key {
 - *[1] 🌟 ScopeType：要求非空，可用 `const ScopeCustom metricmeta.ScopeType = "CUSTOM"` 扩展。（ScopeType 不需要，由上层推断类型）*
 - *[2] Scope.Name：使用方提供的稳定范围标识，空值表示该类型在 DataID 下不再细分。*
 - *[3] Present：标记字段是否已知，编码规则见 [元信息字段](#0x03-元信息字段)。*
-- *[4] 版本指纹：完整 Key 与 Value（含 Present）的哈希摘要，计算时加入过滤器版本号 generation。*
+- *[4] 版本指纹：完整 Key 与 Value（含 OriginalType 与 Present）的哈希摘要，计算时加入过滤器版本号 generation。*
 
 ### b. Store：合并、去重与清理
 
@@ -252,7 +253,8 @@ sequenceDiagram
   "__unit": "s",
   "__temporality": "delta",
   "__interval": null,
-  "__type": "histogram",
+  "__original_type": "histogram",
+  "__type": "counter",
   "__usage": "sum"
 }
 ```
@@ -268,14 +270,16 @@ sequenceDiagram
 | `__unit` | string / null | 是 | 子项数值的单位，未知为 null，明确无量纲为 `1` |
 | `__temporality` | string | 是 | `delta` 表示本周期增量（点值指标表示本次值），`cumulative` 表示累计值，见 [协议适配](#0x06-开发方案协议适配) |
 | `__interval` | int64 / null | 是 | 毫秒，已知时必须大于 `0` |
-| `__type` | string | 是 | 原始指标类型：`sum`、`gauge`、`histogram`、`summary`、`counter`、`avg`、`unknown` |
+| `__original_type` | string | 是 | 拆分前的原始指标类型：`sum`、`gauge`、`histogram`、`summary`、`counter`、`avg`、`unknown`，同一原始指标的拆分子项保持一致 |
+| `__type` | string | 是 | 本条输出序列自身的类型：`counter` 为单调累计值，`gauge` 为点值，无法确定为 `unknown`，见 [协议适配](#0x06-开发方案协议适配) |
 | `__usage` | string / null | 是 | 单个输出指标的默认查询汇聚操作：`sum`／`min`／`max`／`avg`／`last`，无法确定为 null |
 
-- *[1] 原名：同一原始指标及其拆分子项称为指标族（family），共用规范化与拆分前的名称，OTP 先解析分组。*
+- *[1] 原名：同一原始指标及其拆分子项称为指标族（family），共用拆分前的 `__name` 与 `__original_type`，OTP 先解析分组。*
 - *[2] 主键：`DataID + ScopeType + Scope + Metric`，需求字段 `__scope_name` 统一命名为 `__scope`。*
 - *[3] 合并：同一主键取最后一次 Observe 的完整值，包括空值和多实例冲突。*
-- *[4] 点值：OTLP、Pushgateway 的 Gauge／Summary quantile 使用 delta，默认汇聚为 last。*
+- *[4] 点值：OTLP、Pushgateway 的 Gauge／Summary quantile 使用 delta，`__type` 为 gauge，默认汇聚为 last。*
 - *[5] 空值：来源 unit／description 为空字符串时编码为 null。*
+- *[6] 类型分工：`__original_type` 用于识别指标族，`__type` 描述输出序列能否按累计值求增量，两者都属于 Value，不参与主键。*
 
 ## 0x04 缓存与补报
 
@@ -492,30 +496,31 @@ type Exporter struct {
 
 **MetricOTP**：类型与 usage 读取 `h.Aggregation`。原名在解析 `h.Name` 的分组时保留，采用既有分组规则；解析失败取 h.Name，保存位置在规范化与拆分之前。
 
-| `h.Aggregation` | `__type` | `__usage` |
-| --- | --- | --- |
-| `AGGREGATION_SET` | gauge | last |
-| `AGGREGATION_MIN` | gauge | min |
-| `AGGREGATION_MAX` | gauge | max |
-| `AGGREGATION_SUM` | sum | sum |
-| `AGGREGATION_COUNTER` | counter | sum |
-| `AGGREGATION_AVG` | avg | sum |
-| `AGGREGATION_HISTOGRAM` | histogram | sum |
-| `default` | unknown | null |
+| `h.Aggregation` | `__original_type` | `__type` | `__usage` |
+| --- | --- | --- | --- |
+| `AGGREGATION_SET` | gauge | gauge | last |
+| `AGGREGATION_MIN` | gauge | gauge | min |
+| `AGGREGATION_MAX` | gauge | gauge | max |
+| `AGGREGATION_SUM` | sum | counter | sum |
+| `AGGREGATION_COUNTER` | counter | counter | sum |
+| `AGGREGATION_AVG` | avg | counter | sum |
+| `AGGREGATION_HISTOGRAM` | histogram | counter | sum |
+| `default` | unknown | unknown | null |
 
 - *[1] 枚举兜底：NONE、MAX_AGGREGATION 和未知值均归入 default。*
-- *[2] AVG：输出 `_sum`／`_count`，两项分别求和后相除。*
+- *[2] AVG：输出 `_sum`／`_count`，两项分别求和后相除，两项的 `__type` 都是 counter。*
 - *[3] 单位：Avg.Count、Histogram.Count 和 Histogram.Buckets[].Count 为 `1`，其余为 null，包括 COUNTER 标量。*
+- *[4] SUM：周期内累加值按 counter 登记，业务上报负值时是否改为 gauge 待确认。*
 
 **ClientMetrics／ServerMetrics**：字段分别来自 `Metrics.ClientMetrics[]` 和 `Metrics.ServerMetrics[]`。
 
-| protobuf 字段 | `__type` | `__unit` | `__usage` |
-| --- | --- | --- | --- |
-| `RpcClientStartedTotal`／`RpcServerStartedTotal` | counter | `1` | sum |
-| `RpcClientHandledTotal`／`RpcServerHandledTotal` | counter | `1` | sum |
-| `RpcClientHandledSeconds.Sum`／`RpcServerHandledSeconds.Sum` | histogram | `s` | sum |
-| `RpcClientHandledSeconds.Count`／`RpcServerHandledSeconds.Count` | histogram | `1` | sum |
-| `RpcClientHandledSeconds.Buckets[].Count`／`RpcServerHandledSeconds.Buckets[].Count` | histogram | `1` | sum |
+| protobuf 字段 | `__original_type` | `__type` | `__unit` | `__usage` |
+| --- | --- | --- | --- | --- |
+| `RpcClientStartedTotal`／`RpcServerStartedTotal` | counter | counter | `1` | sum |
+| `RpcClientHandledTotal`／`RpcServerHandledTotal` | counter | counter | `1` | sum |
+| `RpcClientHandledSeconds.Sum`／`RpcServerHandledSeconds.Sum` | histogram | counter | `s` | sum |
+| `RpcClientHandledSeconds.Count`／`RpcServerHandledSeconds.Count` | histogram | counter | `1` | sum |
+| `RpcClientHandledSeconds.Buckets[].Count`／`RpcServerHandledSeconds.Buckets[].Count` | histogram | counter | `1` | sum |
 
 - *[1] RPC 单位：秒来自 `omp.pb.go` 字段说明，自定义 Histogram.Sum 的单位为 null。*
 - *[2] 下标关联：processor 对 Timeseries 的重排、删除、复制须同步描述，长度失配时跳过元信息。*
@@ -526,33 +531,34 @@ type Exporter struct {
 
 Tars 的 `__description=null`、`__temporality=delta`。`rpc_*` 的 `__interval` 取 `AggregateInterval.Milliseconds()`，`origin_rpc_*` 和 Property 没有周期字段，使用 null。
 
-**Stat**：handled_total 的类型为 counter，handled_seconds 的类型为 histogram，所有输出的 usage 为 sum。
+**Stat**：所有输出都是周期内的计数或累加值，`__type` 为 counter，usage 为 sum。
 
-| `StatMicMsgBody` | `__metric` | `__unit` | 备注 |
-| --- | --- | --- | --- |
-| `Count`／`ExecCount`／`TimeoutCount` | `{prefix}_{role}_handled_total` | `1` | 按现有返回状态分支生成 |
-| `TotalRspTime` | `{prefix}_{role}_handled_seconds_sum` | `s` | 数值除以 `1000` |
-| `IntervalCount` | `{prefix}_{role}_handled_seconds_count` | `1` | 分桶计数总和 |
-| `IntervalCount` | `{prefix}_{role}_handled_seconds_bucket` | `1` | 按上界累计 |
+| `StatMicMsgBody` | `__metric` | `__original_type` | `__type` | `__unit` | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| `Count`／`ExecCount`／`TimeoutCount` | `{prefix}_{role}_handled_total` | counter | counter | `1` | 按现有返回状态分支生成 |
+| `TotalRspTime` | `{prefix}_{role}_handled_seconds_sum` | histogram | counter | `s` | 数值除以 `1000` |
+| `IntervalCount` | `{prefix}_{role}_handled_seconds_count` | histogram | counter | `1` | 分桶计数总和 |
+| `IntervalCount` | `{prefix}_{role}_handled_seconds_bucket` | histogram | counter | `1` | 按上界累计 |
 
 - *[1] 命名：prefix 为 origin_rpc／rpc，role 为 client／server，Histogram 子项共用拆分前原名。*
 - *[2] 登记条件：origin_rpc 服从 IsDropOriginal 及服务过滤，rpc 使用聚合周期，推导服务使用自身 dimensions。*
 
 **Property**：`__name=head.PropertyName`，实际名复用 `propNameToMetricName`，从 `body.VInfo[i].Policy` 决定属性语义。
 
-| `Policy` | `__type` | `__usage` | `__unit` |
-| --- | --- | --- | --- |
-| `Sum` | sum | sum | null |
-| `Count` | counter | sum | `1` |
-| `Distr` | histogram | sum | `1` |
-| `Min` | gauge | min | null |
-| `Max` | gauge | max | null |
-| `Avg` | gauge | avg | null |
-| `default` | unknown | null | null |
+| `Policy` | `__original_type` | `__type` | `__usage` | `__unit` |
+| --- | --- | --- | --- | --- |
+| `Sum` | sum | counter | sum | null |
+| `Count` | counter | counter | sum | `1` |
+| `Distr` | histogram | counter | sum | `1` |
+| `Min` | gauge | gauge | min | null |
+| `Max` | gauge | gauge | max | null |
+| `Avg` | gauge | gauge | avg | null |
+| `default` | unknown | unknown | null | null |
 
 - *[1] Distr：登记实际生成的 `_count`／`_bucket`。*
 - *[2] Avg：缺少计数权重，默认 avg 表示输出值的算术平均。*
 - *[3] 累计方式：Stat／Property 的周期值依据 [TarsGo reportAndClear](https://github.com/TarsCloud/TarsGo/blob/v1.4.5/tars/statf.go)，原始数据未携带周期长度。*
+- *[4] Sum：与 OTP 的 SUM 相同，周期内累加值按 counter 登记，负值的处理一并待确认。*
 
 ### c. Pushgateway
 
@@ -560,16 +566,16 @@ Tars 的 `__description=null`、`__temporality=delta`。`rpc_*` 的 `__interval`
 
 普通指标的 `__name`、`__description` 分别读取 `mf.GetName()`、`mf.GetHelp()`。当前 client_model 无 Unit／Interval 字段，对应元信息使用 null。
 
-| `mf.GetType()` | `__type` | `__temporality` | `__usage` | 备注 |
-| --- | --- | --- | --- | --- |
-| `COUNTER` | counter | cumulative | sum | 读取 Counter.Value |
-| `GAUGE` | gauge | delta | last | 点值 |
-| `HISTOGRAM` | histogram | cumulative | sum | `_count`／`_bucket` 单位为 `1` |
-| `SUMMARY` | summary | cumulative／delta | sum／last | sum／count 为累计值，quantile 为点值，count 单位为 `1` |
-| `UNTYPED` | unknown | delta | null | 不推荐汇聚方式 |
+| `mf.GetType()` | `__original_type` | `__type` | `__temporality` | `__usage` | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| `COUNTER` | counter | counter | cumulative | sum | 读取 Counter.Value |
+| `GAUGE` | gauge | gauge | delta | last | 点值 |
+| `HISTOGRAM` | histogram | counter | cumulative | sum | `_count`／`_bucket` 单位为 `1` |
+| `SUMMARY` | summary | counter／gauge | cumulative／delta | sum／last | sum／count 为累计值（counter），quantile 为点值（gauge），count 单位为 `1` |
+| `UNTYPED` | unknown | unknown | delta | null | 不推荐汇聚方式 |
 
 - *[1] trpc 原名：删除 `_name`／`_type` 前保留描述，原名取 `_name`，指标名取兼容转换结果。*
-- *[2] trpc 类型：校验 gauge／counter／histogram 与 MetricFamily 类型及 实际数据字段 一致，校验失败时跳过元信息。*
+- *[2] trpc 类型：校验 gauge／counter／histogram 与 MetricFamily 类型及 实际数据字段 一致，`__original_type` 取校验后的类型，校验失败时跳过元信息。*
 
 ### d. OTLP
 
@@ -577,17 +583,18 @@ Tars 的 `__description=null`、`__temporality=delta`。`rpc_*` 的 `__interval`
 
 `__name` 读取 `m.Name()`，时机在 metricsfilter.replace 后、Extract 前。`__description`、`__unit` 分别读取 `m.Description()`、`m.Unit()`，对应 protobuf 的 `Metric.description`／`Metric.unit`；`__interval=null`。
 
-| `m.Type()` | `__type` | `__temporality` | `__usage` | 备注 |
-| --- | --- | --- | --- | --- |
-| `MetricTypeSum` | sum | `m.Sum().AggregationTemporality()` | sum | 保留非单调 Sum，不改成 Counter |
-| `MetricTypeGauge` | gauge | delta | last | 协议无累计方式字段 |
-| `MetricTypeHistogram` | histogram | `m.Histogram().AggregationTemporality()` | sum／min／max | `_min` 用 min，`_max` 用 max，其他子项用 sum |
-| `MetricTypeSummary` | summary | cumulative／delta | sum／last | sum／count 为累计值，quantile 为点值 |
+| `m.Type()` | `__original_type` | `__type` | `__temporality` | `__usage` | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| `MetricTypeSum` | sum | counter／gauge | `m.Sum().AggregationTemporality()` | sum | `m.Sum().IsMonotonic()` 为真时 counter，否则 gauge |
+| `MetricTypeGauge` | gauge | gauge | delta | last | 协议无累计方式字段 |
+| `MetricTypeHistogram` | histogram | counter／gauge | `m.Histogram().AggregationTemporality()` | sum／min／max | `_min`／`_max` 为 gauge 并分别用 min／max，其他子项为 counter 并用 sum |
+| `MetricTypeSummary` | summary | counter／gauge | cumulative／delta | sum／last | sum／count 为累计值（counter），quantile 为点值（gauge） |
 
 - *[1] 累计方式：Delta／Cumulative 映射为平台同名值，未指定或未知值跳过元信息。*
 - *[2] 子项：count／bucket 单位为 `1`，其余使用 m.Unit()，仅登记转换器实际生成项。*
 - *[3] 范围：`Scope().Name()` 写入 `scope_name`，合并时 resource／Scope 属性覆盖同名 datapoint 属性，以最终 dimensions 为准。*
 - *[4] 查询约束：分位数跨实例汇聚、非单调累计值的处理见 [协议语义](./REPORT.md#c-协议语义与平台约定)。*
+- *[5] 单调性：Sum 的 `__type` 由 `IsMonotonic()` 决定，非单调 Sum 的 `__original_type` 仍为 sum。*
 
 ### e. 原生 Remote Write
 
@@ -663,12 +670,13 @@ collector 接入使用 `bk_collector_metric_metadata_` 前缀，通用模块的�
 **协议与身份**
 
 - 字段映射：以 [协议适配表](#0x06-开发方案协议适配)生成测试样例，逐字段比较元信息与实际数值输出。
+- 类型字段：覆盖单调与非单调 Sum、Histogram 的 `_min`／`_max`、Summary quantile 和 trpc，校验 `__type` 与输出序列一致，`__original_type` 在同一原始指标的子项间一致。
 - 名称与范围：覆盖 OTP 标签改写、trpc 兼容和 Tars 推导服务，校验最终指标名、Scope 与 DataID。
 - 主键隔离：覆盖预定义及自定义 ScopeType、空类型拒绝、APM 转义，以及 bucket 共用主键。
 
 **缓存与发送**
 
-- 版本变化：分别修改各 Value 字段及 Present，验证去重、历史回退和首轮／周期强制补报。
+- 版本变化：分别修改各 Value 字段（含 Type、OriginalType）及 Present，验证去重、历史回退和首轮／周期强制补报。
 - 并发回填：发送中更新值或调用 Clean，按 [确认与回填规则](#a-发送确认与清理)检查新值、Force 和成功版本。
 - 容量与限速：覆盖 pending、回填、Bloom 容量及条目字节上限，检查冷启动批次、间隔、超时续传和丢弃计数。
 
