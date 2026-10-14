@@ -4,7 +4,7 @@ tags: [apm, data-status, discover, heartbeat, topo-node, log, profiling]
 issue: knowledge/bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md
 description: 以服务数据心跳为唯一事实源，四类发现器单写、拓扑接口单读，SaaS 下线状态重算链路
 created: 2026-09-16
-updated: 2026-10-12
+updated: 2026-10-14
 ---
 
 # APM 服务数据状态下沉到后台服务发现 —— 实施方案
@@ -120,12 +120,13 @@ flowchart LR
 
 | 字段 | 回答的问题 | 写入方 |
 | --- | --- | --- |
-| `topo_key` + `source` | 这个应用有哪些服务，各自被谁发现 | 四个发现器共同维护 |
+| `topo_key` + `source` | 这个应用有哪些服务，各自在哪些 telemetry 链路被发现或观测到数据 | 四个发现器共同维护 |
 | `heartbeat` | 每个服务的每类数据最后何时出现 | 每个发现器只改自己数据类型对应的子键 |
 
 - *[1] 节点超过 `EXPIRED_DAYS`（`180` 天）未更新即删除，心跳随节点回收。*
 - *[2] 性能分析服务须先并入 `TopoNode`，四类心跳才能共用节点；服务全集由拓扑节点与 SaaS 手动自定义服务组成，`QueryProfileServicesDetail` 退出服务列表链路。*
 - *[3] 无心跳的服务仍保留在列表中，不能用心跳的键集合代替服务全集。*
+- *[4] `source` 是追加式事实：节点发现写入来源；心跳观测到有效数据时间时补齐对应类型。仅完成检查不补来源。*
 
 ### d. 心跳协议
 
@@ -147,9 +148,11 @@ flowchart LR
 
 心跳只记录本轮观测到的服务。服务是稀疏上报的，一轮窗口查询无法证明其他服务没有数据，服务停止上报体现为 `last_data_at` 不再前进。查询失败或只拿到部分结果时，本轮视为未观测，不写入心跳。
 
+`touch_heartbeat()` 在 `last_data_at` 非空时确保 `source` 包含当前数据类型。该补偿只更新已有节点，不创建节点；`last_data_at=None` 只推进 `checked_at`，不补来源。
+
 调用链与指标、日志按 `app_id % 10 == minute % 10` 在同一分钟派发，可能同时写同一行。写入方在事务内按 `id` 顺序锁行后重读合并，并发写入串行执行，不会丢失更新。行锁超时或死锁时，写入方回滚本次写入并保留旧值，由下一轮发现补齐。
 
-- *[1] 写入只更新 `heartbeat` 列，不改 `updated_at`，节点仍按拓扑更新时间回收。*
+- *[1] 写入更新 `heartbeat` 与必要的 `source` 补偿，不改 `updated_at`，节点仍按拓扑更新时间回收。*
 - *[2] 状态判断多留一个发现周期，吸收单轮未观测或写入失败。*
 - *[3] 心跳只由后台发现器更新，页面查询不更新心跳时间。*
 
@@ -182,7 +185,7 @@ heartbeat_fresh(service, data_type):
 `apm.models.topo.TopoNode` 新增：
 
 - `heartbeat`：`models.JSONField`，默认 `{}`，字段含义见「心跳协议」。
-- `touch_heartbeat(...)`：四个发现器共用的心跳写入方法。
+- `touch_heartbeat(...)`：四个发现器共用的心跳写入方法；观测到有效数据时间时补齐对应 `source`。
 - `upsert_telemetry_nodes(...)`：日志与性能分析共用的节点写入方法，已有节点追加来源，缺失节点新建，不覆盖已有拓扑分类 *[1]*。
 
 ```mermaid
@@ -192,14 +195,14 @@ flowchart LR
 
     subgraph T["touch_heartbeat() · transaction"]
         direction TB
-        E["select_for_update()<br/>order_by('id')"] --> F["merge<br/>heartbeat[data_type]"]
-        F --> G["bulk_update<br/>fields=['heartbeat']"]
+        E["select_for_update()<br/>order_by('id')"] --> F["merge<br/>heartbeat[data_type] + source"]
+        F --> G["bulk_update<br/>fields=['heartbeat', 'source']"]
     end
 
     E -.->|"lock timeout /<br/>deadlock"| R["rollback<br/>return False"]
 ```
 
-- *[1] `upsert_telemetry_nodes` 不加锁：并发覆盖最多丢掉其他来源标签，下一轮发现补回。*
+- *[1] `upsert_telemetry_nodes` 不加锁：并发覆盖最多丢掉其他来源标签，下一轮有效心跳或节点发现补回。*
 - *[2] 各发现器在 `discover()` 末尾从本轮窗口数据生成「服务键 → 最后数据时间」映射，不改动现有节点写入流程，取值方式见各数据源小节。*
 
 `touch_heartbeat` 核心逻辑：
@@ -220,27 +223,32 @@ def touch_heartbeat(
             nodes: list[TopoNode] = list(
                 cls.objects.select_for_update()
                 .filter(bk_biz_id=bk_biz_id, app_name=app_name, topo_key__in=last_data_at_mapping)
-                .only("id", "topo_key", "heartbeat")
+                .only("id", "topo_key", "heartbeat", "source")
                 .order_by("id")
             )
 
-            # merge：只改本类型子键，其他类型原样保留
+            # merge：只改本类型心跳；有实际数据时补齐本类型来源
             for node in nodes:
                 sub: dict[str, int] = node.heartbeat.get(data_type) or {}
                 new_last_data_at: int | None = last_data_at_mapping[node.topo_key]
                 if new_last_data_at is not None:
                     sub["last_data_at"] = max(sub.get("last_data_at") or 0, new_last_data_at)
+                    source: list[str] = list(node.source or [])
+                    if data_type not in source:
+                        source.append(data_type)
+                        node.source = source
                 sub["checked_at"] = max(sub.get("checked_at") or 0, checked_at)
                 node.heartbeat[data_type] = sub
 
-            # bulk_update：只声明 heartbeat 列，不触发 updated_at 的 auto_now
-            cls.objects.bulk_update(nodes, fields=["heartbeat"], batch_size=200)
+            # bulk_update：不声明 updated_at，不触发 auto_now
+            cls.objects.bulk_update(nodes, fields=["heartbeat", "source"], batch_size=200)
     except OperationalError:  # 仅锁超时、死锁返回 False，其他异常上抛
         return False
     return True
 ```
 
 - *[3] 新服务的节点已在 `discover()` 内建出，`heartbeat` 默认为 `{}`，reload 能直接读到。*
+- *[4] `source` 补偿只作用于 `last_data_at_mapping` 命中的已有节点；缺失节点不创建，空数据时间不补来源。*
 
 ### b. 调用链心跳
 
@@ -514,10 +522,11 @@ uv run pytest apm/tests packages/apm_web/tests
 
 ### b. 补充测试用例
 
-后台心跳生产已随里程碑 1 合入 `apm/tests`，由测试门禁覆盖。SaaS 状态映射：
+后台心跳生产基础能力已随里程碑 1 合入 `apm/tests`。来源补偿与 SaaS 状态映射补充以下测试：
 
 | 用例 | 断言重点 |
 | --- | --- |
+| `test_heartbeat_observation_repairs_source` | [a] `last_data_at` 非空时追加来源<br />[b] 空值只推进 `checked_at`<br />[c] 不创建节点、不刷新 `updated_at` |
 | `test_heartbeat_fresh_tolerates_one_cycle` | `last_data_at` 落后一个发现周期时仍判 `NORMAL`，超过「无数据周期 + 发现周期」才判 `NO_DATA` |
 | `test_build_service_data_status_disabled_first` | 数据类型开关关闭时返回 `DISABLED`，不受心跳影响 |
 | `test_build_service_data_status_log_dual_source` | 心跳为空但关联索引无 `NO_DATA` 标签时返回 `NORMAL` |
@@ -540,6 +549,7 @@ uv run pytest apm/tests packages/apm_web/tests
 
 | 时间                 | 结论性进展                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `2026-10-14 16:00` | [a] `last_data_at` 非空时为已有节点追加对应 `source`<br />[b] 仅推进 `checked_at` 时不补来源<br />[c] 写入不创建节点、不刷新 `updated_at` |
 | `2026-10-12 15:00` | [a] 里程碑 1 PR 完成 review，实现与方案对齐<br />[b] 心跳只记录本轮观测到的服务，写入改为行锁合并，撤回「读取紧贴写入」吸收丢更新的约束<br />[c] 调用链兜底轮跳过入口接口发现，避免下游接口被误判为入口<br />[d] 性能分析服务按普通服务并入拓扑，发现任务保持串行，不改 `delay()` 派发 |
 | `2026-09-29 11:00` | `ApplicationHandler.have_data` 三个调用方全部移除后列入删除：应用详情改读库内 `trace_data_status`，Apdex 与告警图去掉前置短路，由主查询返回空                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `2026-09-17 14:00` | [a] 确立收敛判据：「查一次数据存储只为取一个 `bool`」的调用统一归心跳，返回真实数据量或用户自选时间窗的查询保留实时<br />[b] 完成 `apm_web` 全量探测点盘查，补入四处此前遗漏的请求侧探测：`ApplicationInfoByAppNameResource` 覆盖 `trace_data_status`、`ApdexQueryResource` / `AlertQueryResource` 查图前置短路、`ServiceInfoResource.get_profiling_info` 的 Doris `count(*)`、`ListApplicationServicesResource` 的应用有无数据分类<br />[c] 慢 Trace `8bfa95a9cf8553981b0105f1e89f2064` 归因为 `have_data()` → `RequestCountInstance` → VM 整窗 `sum_over_time(bk_apm_count[7d])`，约 `12.8 s` 并以并发超限报错，与服务列表 `data_status` 同源同病<br />[d] `have_data` 定为换源而非删除；Apdex 与告警图的前置短路直接删除，让主查询自然返回空<br />[e] 清理两处以请求量冒充数据状态的遗留：`Application.doc_count`、`metrics.py` 三个 `*_DATA_STATUS` 模板，均全仓无调用方 |
@@ -562,5 +572,6 @@ uv run pytest apm/tests packages/apm_web/tests
 
 | 状态  | 分支                                                         | 里程碑                     | PR                                                                                            |
 | --- | ---------------------------------------------------------- | ----------------------- | --------------------------------------------------------------------------------------------- |
-| 🔄  | `feat/apm_application_detail_loading_opt/#1010158081137600836` | 里程碑 1：APM 服务心跳统一维护      | [TencentBlueKing/bk-monitor #12629](https://github.com/TencentBlueKing/bk-monitor/pull/12629) |
+| ✅  | `feat/apm_application_detail_loading_opt/#1010158081137600836` | 里程碑 1：APM 服务心跳统一维护      | [TencentBlueKing/bk-monitor #12629](https://github.com/TencentBlueKing/bk-monitor/pull/12629) |
+| 🔄  | `<branch_name>`                                            | 里程碑 1 补充：心跳观测回补 `source` | 待创建                                                                                           |
 | 🔄  | `<branch_name>`                                            | 里程碑 2：APM 依赖数据状态相关慢接口优化 | 待创建                                                                                           |
