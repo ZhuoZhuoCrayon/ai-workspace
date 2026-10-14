@@ -4,7 +4,7 @@ tags: [rum, apm, query, span, view, session, factory, unify-query, semconv]
 issue: ./README.md
 description: 通过统一 Target、查询基类、Level 工厂和语义字段目录收敛 RUM 与 APM 查询
 created: 2026-08-07
-updated: 2026-10-12
+updated: 2026-10-15
 ---
 
 # RUM 分层统一查询 —— 实施方案
@@ -1486,6 +1486,48 @@ View Span 关联信息获取（后端）：
 * *[2] View 生命周期 Span 是瞬时快照，`start_time` 等于上报时刻，`elapsed_time` 恒为 `0`，因此概览徽标使用 `display.view.duration`，通过 `field_unit` 声明毫秒，由前端格式化。*
 * *[3] 概览 `start_time` 取 `attributes.view.started_at`（毫秒）换算的微秒值，`display.view.duration` 为最新快照 `end_time` 与导航开始的差值，未取得 `phase=end` 时仅表示已观测时长。*
 
+### h. Hover
+
+`record_detail` 在加载阶段、里程碑、Web Vitals 和评级对象中返回统一的 `hover` 元数据：
+
+```json
+{
+  "hover": {
+    "title": "LCP（最大内容绘制）",
+    "description": "从打开页面到视窗内最大的图片、文本块或视频画面渲染完成的时间。",
+    "user_experience": "页面主要内容已经出现，用户能够判断页面内容。",
+    "source": {
+      "label": "web.dev · Largest Contentful Paint",
+      "url": "https://web.dev/articles/lcp"
+    }
+  }
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `hover.title` | `string` | 是 | Hover 标题。 |
+| `hover.description` | `string` | 是 | 专业解释，不包含计算方式、公式或原始字段表达式。 |
+| `hover.user_experience` | `string` | 否 | 用户可感知的页面表现。 |
+| `hover.source` | `object` | 否 | 参考来源，见 `source` 子结构。 |
+| `hover.source.label` | `string` | 是 | 来源名称。 |
+| `hover.source.url` | `string` | 是 | 官方定义或规范链接。 |
+
+覆盖范围：
+
+| 对象 | Hover 落点 | 约束 |
+| --- | --- | --- |
+| Resource 加载阶段 | `sections.loading_timing.data.phases[].hover` | 只补充现有阶段的术语与说明，不修改阶段划分、数值或推断规则。 |
+| View 加载阶段 | `sections.loading_timing.data.phases[].hover` | 阶段缺失时随阶段一起省略。 |
+| View 指标标记 | `sections.loading_timing.data.markers[].hover` | TTFB、FCP、LCP 与 `web_vitals` 使用同一指标定义。 |
+| View 累计里程碑 | `sections.loading_timing.data.milestones[].hover` | 覆盖 DOM Complete、Load Event 和页面稳定。 |
+| Web Vital | `sections.web_vitals.data.<metric>.hover`、`sections.vital_rating.data.hover` | TTFB、FCP、LCP、INP 和 CLS 共用定义。 |
+| Web Vital 评级 | `display.rating_config[].hover` | `good`、`needs_improvement` 和 `poor` 共用评级定义。 |
+
+Builder 在 `packages/rum_web/handlers/builder/hover.py` 维护静态定义。Resource、View、Vital Builder 只按语义键取值，
+不在各 Builder 复制文案。Timeline 继续调用 `span_builder.build()`；View record 直接复用
+`sections.web_vitals` 和 `sections.loading_timing`，不重算 Hover。
+
 ## 0x05 验收与验证
 
 查询测试位于 `packages/rum_web/tests/query/`，通用模块测试跟随 `core/` 和 `semconv/`：
@@ -1501,8 +1543,9 @@ View Span 关联信息获取（后端）：
 | `test_query_resources.py`              | [a] 9 个 URL、HTTP 方法、Resource 和 Level 方法一一对应<br />[b] Resource 不依赖公共基类<br />[c] 请求协议不接受 `extra_config`，客户端无法覆盖 Level 配置<br />[d] `view_config` 保留 `origin_field`，顶层维护全量字段，分组通过字段名引用<br />[e] Span 视图返回按类型配置的默认列与分组适用范围<br />[f] semconv 补充别名、单位、展示类型、枚举选项和评级阈值 |
 | Span 详情验收（待实现） | [a] 五类详情复用字段元数据<br />[b] Long Task 保留上报的阻塞贡献<br />[c] Vital 与 Error 概览不使用 Span 耗时，Vital 徽标取指标值，CLS 无单位<br />[d] View 开始时间与停留时长取 `attributes.view.started_at`，结果不随点开的快照变化<br />[e] 非 View 类型不触发关联查询，记录不存在时明确失败 |
 | View 加载时序验收（待实现） | [a] 前四段复用同条 TTFB 耗时，连接不拆 TLS，倒推起点保留空隙<br />[b] View 三段按首字节、DOMContentLoaded、Load 和自动 Loading Time 的边界计算并返回到 `phases`<br />[c] `markers` 仅包含 TTFB、FCP、LCP，评级阈值与 `web_vitals` 卡片一致，缺失指标不补造<br />[d] 非首次加载不返回 `loading_timing`，原点不一致、非法数值和倒序边界不组装伪时序，手动 Loading Time 不生成 `phases` 和 `milestones` 中的 `page_stable`，自动计时的微小负耗时按 `0` 处理<br />[e] `total_duration` 等于有效的 `view.loading_time`，缺失或非法时省略，有效零值保留，标记超出总耗时仅扩展横轴<br />[f] `milestones` 依次取 `dom_complete`、`load_event` 和 `loading_time`，不返回别名，缺失字段直接省略 |
+| Hover 协议验收（待实现） | [a] Resource、View、Vital 共用 `title`、`description`、`user_experience`、`source` 结构<br />[b] 可选字段按内容省略<br />[c] 响应不包含 `formula`、`calculation` 或原始字段表达式<br />[d] 指标标记与 Web Vital 卡片共用定义，View 与 Vital 详情共用评级定义 |
 | 异步分析验收（待实现） | [a] 基础详情不等待关联聚合<br />[b] 未加载、失败与统计为零可区分<br />[c] 应用、关联 ID 和时间边界一致，记录去重<br />[d] 区块合并保留基础字段，切换记录后丢弃旧响应 |
-| 会话时间线验收（待实现） | [a] 每个 View ID 只生成一个 View 节点，`records` 与同 `span_id` 的 `record_detail` 一致<br />[b] Resource 只挂到同 View 内 `action.id` 相同的 Action，跨 View 的 Resource 留在自身 View<br />[c] Long Task 和 Error 携带 `action.id` 时仍挂在 View<br />[d] Vital 和 Session 不生成节点，无 `phase=end` 记录时 `end_time` 为 `null`<br />[e] 缺少 View ID 或所属 View 无快照的 Span 不进入时间线<br />[f] 按 `view_id` 查询时只返回一个 View 节点，起止时间取该 View，无 `view.phase=end` 快照时 `end_time` 为 `null` |
+| 会话时间线验收（待实现） | [a] 每个 View ID 只生成一个 View 节点，`records` 与同 `span_id` 的 `record_detail` 一致，包含相同 Hover<br />[b] Resource 只挂到同 View 内 `action.id` 相同的 Action，跨 View 的 Resource 留在自身 View<br />[c] Long Task 和 Error 携带 `action.id` 时仍挂在 View<br />[d] Vital 和 Session 不生成节点，无 `phase=end` 记录时 `end_time` 为 `null`<br />[e] 缺少 View ID 或所属 View 无快照的 Span 不进入时间线<br />[f] 按 `view_id` 查询时只返回一个 View 节点，起止时间取该 View，无 `view.phase=end` 快照时 `end_time` 为 `null` |
 | `apm/tests/test_unified_query_base.py` | [a] APM 继承通用基类<br />[b] 3 类 Query 统一接收 Target 列表<br />[c] Proxy 统一构造原始表与预计算层级<br />[d] 列表查询复用 `_query_list()`，Proxy 固定补 `total=0`<br />[e] 查询配置保持列表形态，多 Target 不丢表                                                                                   |
 
 测试门禁：
@@ -1517,6 +1560,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-10-15 00:00` | [a] 完成统一 Hover 协议、后台 Builder 和接口文档，排除计算方式与原始字段表达式<br />[b] Resource 只采用 bk-rum 新文档的阶段术语，不修改现有算法<br />[c] Timeline View record 复用 Span Builder 的 Hover<br />[d] Builder 与 Timeline 定向测试 `138` 项通过，交付 [TencentBlueKing/bk-monitor #12784](https://github.com/TencentBlueKing/bk-monitor/pull/12784) |
 | `2026-10-12 11:00` | 会话时间线支持按 `view_id` 查询单个 View，供 Span 详情的链路上下文复用，起止时间取该 View 的开始与 `view.phase=end` 快照 |
 | `2026-10-10 00:00` | [a] 设计会话时间线 Builder，节点按 View ID 和 Action ID 挂载，详情复用 Span Builder<br />[b] View 停留时长徽标通过 `field_unit` 声明毫秒，前端负责格式化 |
 | `2026-10-09 15:00` | [a] 完成里程碑 7 第三轮 PR（[#12463](https://github.com/TencentBlueKing/bk-monitor/pull/12463)）review<br />[b] Vital 与 Error Span 为瞬时事件，概览去掉 `elapsed_time` 徽标，Vital 徽标改用指标值<br />[c] View 关联查询按 View ID 定位，不追加 Session 条件 |
@@ -1563,6 +1607,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 | 🔄 | `<branch_name>` | 里程碑 6：提供 RUM 详情 Mock 接口 *[2]* | 待创建 |
 | 🔄 | `feat/rum_span_detail/#1010158081138079323` | 里程碑 7：提供 RUM Span 详情类接口（`record_detail`） *[1]* | [TencentBlueKing/bk-monitor #12463](https://github.com/TencentBlueKing/bk-monitor/pull/12463) |
 | 🔄 | `<branch_name>` | 里程碑 8：提供 RUM 分析接口（`statistic`） *[1]* | 待创建 |
+| 🔄 | `feat/rum-hover-protocol/#1010158081139035316` | RUM 详情支持 Hover 解释协议（[TAPD #1010158081139035316](https://tapd.woa.com/tapd_fe/10158081/story/detail/1010158081139035316)） | [TencentBlueKing/bk-monitor #12784](https://github.com/TencentBlueKing/bk-monitor/pull/12784) |
 
 - *[1] RUM 接口里程碑实施期间，随接口落地补充 `rum_web/docs/api/search.md`。*
 - *[2] Mock 数据为每种 Span 类型分配固定 `span_id`；详情请求根据 `record_id` 返回对应类型的 Mock 数据。*
