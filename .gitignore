@@ -8,6 +8,7 @@ private/
 !.agents/.gitignore
 !.agents/skills/
 .claude/skills/
+.claude/settings.local.json
 .cursor/skills/
 .codebuddy/skills/
 .DS_Store
