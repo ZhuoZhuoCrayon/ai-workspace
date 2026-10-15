@@ -4,14 +4,30 @@ description: >
   通过 repos.json 注册和管理工作区中的项目。
   当用户想要接入项目、移除项目、注册项目提供的 skills、询问项目设置规范时使用。
   消息提到已注册项目名，或要在其他项目中提交、开发、评审时，必须先使用本 Skill
-  定位 local_path 和 language，不要直接 grep repos.json 绕过。
+  用 registry.py path 定位项目目录和 language，不要直接 grep repos.json 绕过。
 ---
 
 # project-mgr — 项目管理
 
 管理工作区中项目的添加、删除和定位，默认 visibility 为 `public`。
 
-项目通过 `repos.json` / `private/repos.json` 注册，`local_path` 记录本地仓库绝对路径，模型可通过该路径 `cd` 到项目目录进行开发。
+项目通过 `repos.json` / `private/repos.json` 注册。私有项目的键为 `private/<name>`。
+
+`local_path` 是相对路径。直接读注册表时，全路径按这个规则拼：
+
+```text
+根目录 = PROJECTS_ROOT 或 repos.local.json 的 projects_root，都没有时用 ~/Project
+克隆目录 = 根目录 / local_path
+项目目录 = 克隆目录 / subdir
+```
+
+`subdir` 缺省是 `.`。`repos.local.json` 的 `projects.<key>` 直接给克隆目录，不再拼接。`self` 条目的项目目录是工作区根目录。
+
+定位时优先执行：
+
+```bash
+python3 .agents/skills/project-mgr/scripts/registry.py path <key>
+```
 
 ## 0x01 添加项目
 
@@ -107,7 +123,7 @@ description: >
 
 * `local_path` 使模型能直接访问项目源码，`knowledge/<name>/` 提供项目级知识，两者结合即可完成项目任务。
 * **【CRITICAL（必须执行不可协商）】** `language`：
-  - 对话：以 `ai-workspace` 条目的 `language` 为准，与目标项目无关，全局约定见根目录 `AGENTS.md`。
+  - 对话：以 `self` 条目的 `language` 为准，与目标项目无关，全局约定见根目录 `AGENTS.md`。
   - 产出（如 commit message、代码注释、文档、PR review 等）：以目标项目的 `language` 为准，默认中文。
 
 2）通过 `cd <local_path>` 切换到项目目录，阅读项目级别规范（如 `CONTRIBUTING.md`、`README.md`、`AGENTS.md` 等）。

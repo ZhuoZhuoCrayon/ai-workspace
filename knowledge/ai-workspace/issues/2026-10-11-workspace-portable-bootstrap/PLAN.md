@@ -44,7 +44,7 @@ updated: 2026-10-11
 
 ### c. 影响设计的事实
 
-- 两份注册表共 `19` 个条目，都克隆在 `~/Project` 下，只有 `bkmonitor` 位于仓库子目录。
+- 两份注册表共 `20` 个条目，都克隆在 `~/Project` 下，只有 `bkmonitor` 位于仓库子目录。
 - 两份注册表各有一个 `bkmonitor-ecosystem`，分别是 GitHub 外部版和内网内部版。
 - `bk-product-designs` 等条目指向内网 `git.woa.com`。
 - Cursor 读取 `.agents/skills/`、`.cursor/skills/` 和 `.claude/skills/`，Codex 读取 `.agents/skills/`，Claude Code 和 CodeBuddy 只读取各自的 `skills/`。
@@ -54,7 +54,7 @@ updated: 2026-10-11
 
 | 事项 | 影响 | 确认方式 |
 | --- | --- | --- |
-| 私有仓库地址 | 里程碑 1 | 在内网创建仓库后写入 `CONTRIBUTING.md` |
+| 私有仓库地址 | 里程碑 1 | 已写入 `private/repos.json` 的 `ai-workspace-private` 条目，不在公开仓库中记录 |
 | `npx skills experimental_install` 能否按锁文件恢复固定版本 | `init-skills` 的实现和 `SKILLS_IDE` 的去留 | [a] 在临时目录验证安装位置和 `--agent` 参数<br />[b] 不可用时按锁文件逐个 `npx skills add`，不保证版本 |
 | 四个未声明目录的来源 | 归入哪类 skills | [a] 能用 skills CLI 安装：写入锁文件<br />[b] 有独立仓库：注册为项目 skills<br />[c] 其余：作为自研 skills 入库 |
 
@@ -68,7 +68,7 @@ updated: 2026-10-11
 flowchart LR
     subgraph HOST["主机参数 · 不入库"]
         direction TB
-        ENV["PROJECTS_ROOT<br/>PRIVATE_GIT_URL"]
+        ENV["PROJECTS_ROOT"]
         LOC["repos.local.json"]
     end
 
@@ -153,7 +153,7 @@ project_dir(entry):
 
 ```text
 sync(workspace_root):
-    sync_one("private-repo", url=env.PRIVATE_GIT_URL, branch=None, dir=workspace_root / "private")
+    sync_one("private-repo", url=private_entry.git_url, branch=None, dir=workspace_root / "private")
     for entry in load(workspace_root):        # 已包含刚克隆的 private/repos.json
         if not entry.self:
             sync_one(entry.key, entry.git_url, entry.branch, clone_dir(entry))
@@ -167,7 +167,7 @@ sync_one(key, url, branch, dir):
 
 - *[1] `git clone` 以非交互方式执行，HTTPS 设置 `GIT_TERMINAL_PROMPT=0`，SSH 启用 `BatchMode`。*
 - *[2] 单个目标失败只计入汇总，`sync` 仅在 `load()` 报错时返回非零。*
-- *[3] 其他主机注册的新项目，执行 `git -C private pull --ff-only` 后再执行 `make bootstrap` 即可就绪。*
+- *[3] 其他主机注册的新项目，在工作区的 `private/` 执行 `git pull --ff-only` 后再执行 `make bootstrap` 即可就绪。`private/` 是日常工作副本；`ai-workspace-private` 的克隆目录只服务注册表条目，本机不重复维护。*
 
 ### d. skills 来源模型
 
@@ -203,10 +203,22 @@ sync_one(key, url, branch, dir):
 私有仓库先于注册表迁移上线，`private/repos.json` 的后续改动才能评审和回滚。
 
 1. 在内网创建私有仓库。
-2. 在 `private/` 初始化 Git 仓库，提交 `repos.json` 和 `knowledge/`。
+2. 在 `private/` 初始化 Git 仓库，提交 `repos.json`、`knowledge/` 和 `configs/`。
 3. 关联 remote 并推送。
 4. 在临时目录克隆私有仓库，确认内容完整。
 5. 在 `knowledge-mgr` 和 `git-workflow` 的 `SKILL.md` 中说明 `private/` 的改动在私有仓库中提交。
+
+`configs/` 按原路径保存下面几份文件，换机时复制回去，不经 `make bootstrap` 改写：
+
+| 仓库内路径 | 复制到 |
+| --- | --- |
+| `configs/cursor/mcp.json` | `~/.cursor/mcp.json` |
+| `configs/codex/config.toml` | `~/.codex/config.toml` |
+| `configs/codebuddy/mcp.json` | `~/.codebuddy/mcp.json` |
+| `configs/bkm-cli/profiles/*.yaml` | `~/.bkm-cli/profiles/` |
+| `configs/bkm-cli/k8s-readonly.json` | `~/.bkm-cli/k8s-readonly.json` |
+
+不入库：`*.bak*`、Codex 的 `auth.json` 和会话目录、Cursor 的缓存与 `projects/`。`configs/README.md` 只写复制目标，不记录密钥内容。Git 凭据留在 `~/.git-credentials`，不进这个仓库。
 
 ### b. 里程碑 2：注册表脚本与迁移
 

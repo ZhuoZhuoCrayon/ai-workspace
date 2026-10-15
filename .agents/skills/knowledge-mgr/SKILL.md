@@ -29,7 +29,7 @@ description: >
 
 知识对象脱敏隔离（`visibility`）：
 * 【默认】【公开】`public`：所有知识对象都存放在 `knowledge/` 下，公开可见。
-* 【私有】`private`：涉及个人隐私或敏感信息的知识对象存放在 `private/knowledge/` 下，不通过 Git 同步。
+* 【私有】`private`：涉及个人隐私或敏感信息的知识对象存放在 `private/knowledge/` 下。`private/` 是独立的私有仓库，在该目录内提交和推送。
 * public / private 分域维护，不跨域合并计数与索引。
 
 

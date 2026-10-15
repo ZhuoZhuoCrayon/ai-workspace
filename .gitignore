@@ -1,4 +1,5 @@
 .idea
+repos.local.json
 .vscode
 private/
 *.key
@@ -6,18 +7,9 @@ private/
 .agents/*
 !.agents/.gitignore
 !.agents/skills/
-.claude/*
-!.claude/skills/
-.claude/skills/*
-!.claude/skills/knowledge-mgr
-!.claude/skills/project-mgr
-!.claude/skills/iwiki-sync
-!.claude/skills/work-schedule
-!.claude/skills/doc-style
-!.claude/skills/code-review
-!.claude/skills/git-workflow
-!.claude/skills/dev-env
-!.claude/skills/code-style
+.claude/skills/
+.cursor/skills/
+.codebuddy/skills/
 .DS_Store
 __pycache__/
 *.pyc

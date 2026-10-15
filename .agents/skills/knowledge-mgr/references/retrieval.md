@@ -18,9 +18,9 @@
 
 1. 会话上下文
 2. 项目知识库：`knowledge/<project>/`
-3. 项目自身规范：`<local_path>`（如 `CONTRIBUTING.md`、`README.md`、`AGENTS.md` 等）
-4. 项目源码：`<local_path>` 下与当前任务相关的代码文件、配置文件或文档等。
-5. 项目提交记录：`<local_path>` 下与当前任务相关的 Git 提交历史、PR 记录等。
+3. 项目自身规范：项目目录（如 `CONTRIBUTING.md`、`README.md`、`AGENTS.md` 等）
+4. 项目源码：项目目录下与当前任务相关的代码文件、配置文件或文档等。
+5. 项目提交记录：项目目录下与当前任务相关的 Git 提交历史、PR 记录等。
 6. 通用知识：`knowledge/_shared/`
 
 ### c. 约束

@@ -20,58 +20,55 @@
 直接执行：
 
 ```bash
-make init
+make bootstrap
 ```
 
 默认行为：
 
+- 克隆缺失的 `private/` 和注册项目，已有目录保持不动。
+- 按 `skills-lock.json` 安装外部 skills。
+- 链接项目 skills，并把自研 skills 挂到 `.claude/skills/` 和 `.codebuddy/skills/`。
 - 安装 git `pre-commit` hook。
-- 安装默认 skills 到当前配置的目标 IDE。
+
+`PROJECTS_ROOT` 覆盖项目存放根目录，默认 `~/Project`。私有仓库的改动在 `private/` 里提交：先 `git -C private pull --ff-only`，再执行 `make repos-sync` 补齐新登记的项目。
+
+`make bootstrap` 不处理这些本机内容：
+
+- `~/.cursor/mcp.json`、`~/.codex/config.toml`、`~/.codebuddy/mcp.json`。
+- `~/.bkm-cli/` 下的 profile 和集群配置。
+- `~/.git-credentials` 和用户目录下的 skills。
+
+Agent 与 BKM CLI 的配置在 `private/configs/`，换机时按 `private/configs/README.md` 复制回原路径。
 
 常用覆盖参数：
 
 ```bash
-make init SKILLS_IDE=cursor
-make init SKILLS_IDE=
-make init NODE_VERSION=20.18.3 UV=uv
+make bootstrap NODE_VERSION=20.18.3 UV=uv
+make bootstrap PROJECTS_ROOT=/data/workspace
 ```
 
 参数说明：
 
-- `SKILLS_IDE=cursor`：默认值，仅安装到 Cursor。
-- `SKILLS_IDE=`：留空时不传 `--agent`，按 skills CLI 默认行为执行。
-- `NODE_VERSION=20.18.3`：切换安装 skills 时使用的 Node.js 版本。
+- `NODE_VERSION=20.18.3`：本机有 nvm 时切换到这个版本；没有 nvm 时使用 `PATH` 中的 `node`。
 - `UV=uv`：Python 工具入口，默认读取 `pyproject.toml` 中的镜像源配置。
 
 ## 0x03 更新 Skills
 
-更新默认 skills：
+更新工作区内的外部 skills，并重新链接项目 skills：
 
 ```bash
 make skills-update
 ```
 
-只更新部分 skills：
+维护者确认差异后提交 `skills-lock.json`。`-p` 只更新安装在工作区内的 skills。
 
-```bash
-make skills-update SKILLS="<skill-a> <skill-b>"
-```
-
-调整目标 IDE：
-
-```bash
-make skills-update SKILLS_IDE=cursor
-```
-
-将 `.agents/skills/` 挂载到本地 Agent 目录：
+将 `.agents/skills/` 里的目录挂到 IDE 目录：
 
 ```bash
 make skills-mount
 ```
 
-默认挂载目标由 `SKILLS_MOUNT_TARGETS` 控制。
-
-`repos.json` / `private/repos.json` 中声明的项目 skills 会自动加入 ignore，不挂到 Agent 目录。
+挂载目标由 `SKILLS_MOUNT_TARGETS` 控制，默认是 `.claude` 和 `.codebuddy`。项目 skills 是符号链接，不挂到 IDE 目录。Cursor 直接读取 `.agents/skills/`。
 
 如需跳过部分 skill，可以覆盖 `SKILLS_MOUNT_BLACKLIST`。
 
@@ -86,7 +83,7 @@ uv run pre-commit run
 
 检查内容：
 
-- `make verify`：确认 `pre-commit` 可用、git hook 已安装，并检查 skills 目录存在。
+- `make verify`：确认 `pre-commit` 可用、git hook 已安装，并检查 skill 链接和来源。
 - `uv run pre-commit run`：检查当前暂存文件。
 
 当前 `pre-commit` 包含以下检查：

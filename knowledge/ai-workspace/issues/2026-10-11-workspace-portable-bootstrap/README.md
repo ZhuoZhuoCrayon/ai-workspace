@@ -28,12 +28,12 @@ updated: 2026-10-11
 - 项目路径：`local_path` 改为相对 `PROJECTS_ROOT` 的路径，由 `project-mgr` 的注册表脚本统一解析。
 - 私有数据：`private/` 拆为独立的内网私有仓库。
 - 外部 skills：按 `skills-lock.json` 锁定的版本安装。
-- 初始化入口：`make bootstrap` 克隆缺失的仓库，安装 skills，在本机生成 IDE 目录的挂载链接。
+- 初始化入口：`make bootstrap` 按 `ai-workspace-private` 的 `git_url` 克隆 `private/`，再克隆缺失的项目仓库，安装 skills，在本机生成 IDE 目录的挂载链接。
 
 ### b. 约束
 
 - skill 之间不互相引用，跨 skill 的流程只由 `Makefile` 编排。
-- 本期不管理用户级配置，包括 MCP（模型上下文协议）服务、用户目录下的 skills 和各类凭据。
+- `make bootstrap` 不改用户目录。MCP 与 BKM CLI 的原生配置随私有仓库保存，换机时按 `configs/README.md` 复制到原路径。
 - 初始化流程不改动已存在的仓库（包括私有仓库），拉取和提交都由使用者在对应仓库中执行。
 
 ## 0x03 参考

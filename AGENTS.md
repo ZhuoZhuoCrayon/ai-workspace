@@ -12,7 +12,8 @@
 
 ## 0x02 交互约定
 
-- 对话语言：遵循 `repos.json` 中 `ai-workspace` 条目的 `language`，未配置时使用中文，进度说明和最终总结都适用。
+- 对话语言：遵循注册表中 `self` 条目的 `language`，未配置时使用中文，进度说明和最终总结都适用。
+- 项目定位：项目目录通过 `python3 .agents/skills/project-mgr/scripts/registry.py path <key>` 获取。私有项目的键为 `private/<name>`。
 - 产出语言：commit message、代码注释、文档和 PR review 遵循目标项目的 `language`，规则见 `.agents/skills/project-mgr/`。
 
 ## 0x03 常用入口

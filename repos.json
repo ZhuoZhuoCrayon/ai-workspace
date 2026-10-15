@@ -4,23 +4,25 @@
     "description": "蓝鲸监控平台 (bk-monitor/bkmonitor)",
     "git_url": "https://github.com/TencentBlueKing/bk-monitor.git",
     "branch": "master",
-    "local_path": "/Users/sandrincai/Project/Github/bk/monitor/bk-monitor/bkmonitor",
-    "language": "zh"
+    "local_path": "Github/bk/monitor/bk-monitor",
+    "language": "zh",
+    "subdir": "bkmonitor"
   },
   {
     "name": "ai-workspace",
     "description": "AI 工作区 — 知识管理与多项目协作中枢",
     "git_url": "https://github.com/ZhuoZhuoCrayon/ai-workspace.git",
     "branch": "main",
-    "local_path": "/Users/sandrincai/Project/Github/stars/ai-workspace",
-    "language": "zh"
+    "language": "zh",
+    "self": true
   },
   {
     "name": "throttled-py",
     "description": "High-performance Python rate limiting library with multiple algorithms and storage backends.",
     "git_url": "https://github.com/ZhuoZhuoCrayon/throttled-py.git",
     "branch": "main",
-    "local_path": "/Users/sandrincai/Project/Github/stars/throttled-py/throttled-py",
+    "local_path": "Github/stars/throttled-py",
+    "subdir": "throttled-py",
     "language": "en"
   },
   {
@@ -28,7 +30,7 @@
     "description": "蓝鲸监控数据链路 (bkmonitor-datalink)",
     "git_url": "https://github.com/TencentBlueKing/bkmonitor-datalink.git",
     "branch": "master",
-    "local_path": "/Users/sandrincai/Project/Github/bk/bkmonitor-datalink",
+    "local_path": "Github/bk/bkmonitor-datalink",
     "language": "zh"
   },
   {
@@ -36,7 +38,7 @@
     "description": "蓝鲸监控生态 SDK 与接入 demo（外部版）：提供「最小化」开箱即用的观测数据接入 demo，帮助用户快速入门蓝鲸观测平台功能。",
     "git_url": "https://github.com/TencentBlueKing/bkmonitor-ecosystem.git",
     "branch": "master",
-    "local_path": "/Users/sandrincai/Project/Github/bk/monitor/bkmonitor-ecosystem",
+    "local_path": "Github/bk/monitor/bkmonitor-ecosystem",
     "language": "zh"
   },
   {
@@ -44,7 +46,7 @@
     "description": "BlueKing crypto-python-sdk — 基于 pyCryptodome / tongsuopy 等加密库的轻量级密码学工具包，为 Python 应用提供统一加解密实现，支持在不同加密方式间无侵入切换。",
     "git_url": "https://github.com/TencentBlueKing/crypto-python-sdk.git",
     "branch": "main",
-    "local_path": "/Users/sandrincai/Project/Github/crypto-python-sdk/crypto-python-sdk",
+    "local_path": "Github/crypto-python-sdk/crypto-python-sdk",
     "language": "zh"
   },
   {
@@ -52,7 +54,7 @@
     "description": "Datadog Browser SDK",
     "git_url": "https://github.com/DataDog/browser-sdk.git",
     "branch": "main",
-    "local_path": "/Users/sandrincai/Project/Tencent/bkm/browser-sdk",
+    "local_path": "Tencent/bkm/browser-sdk",
     "language": "zh"
   },
   {
@@ -60,7 +62,7 @@
     "description": "蓝鲸监控团队设计协作的 Git 事实源，使用 OpenSpec 管理设计需求、Figma 交接信息、团队评审意见、产品经理决策、发布审批和历史 revision。",
     "git_url": "https://git.woa.com/bkmonitor/bk-product-designs",
     "branch": "main",
-    "local_path": "/Users/sandrincai/Project/Tencent/bkm/bk-product-designs",
+    "local_path": "Tencent/bkm/bk-product-designs",
     "language": "zh"
   },
   {
@@ -68,7 +70,7 @@
     "description": "一个用于与蓝鲸平台各个系统 API 交互的命令行工具",
     "git_url": "https://github.com/TencentBlueKing/bk-cli.git",
     "branch": "master",
-    "local_path": "/Users/sandrincai/Project/Github/bk/monitor/bk-cli",
+    "local_path": "Github/bk/monitor/bk-cli",
     "language": "zh"
   }
 ]
