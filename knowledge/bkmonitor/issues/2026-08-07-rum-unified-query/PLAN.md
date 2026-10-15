@@ -4,7 +4,7 @@ tags: [rum, apm, query, span, view, session, factory, unify-query, semconv]
 issue: ./README.md
 description: 通过统一 Target、查询基类、Level 工厂和语义字段目录收敛 RUM 与 APM 查询
 created: 2026-08-07
-updated: 2026-10-15
+updated: 2026-10-16
 ---
 
 # RUM 分层统一查询 —— 实施方案
@@ -1608,6 +1608,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 | 🔄 | `feat/rum_span_detail/#1010158081138079323` | 里程碑 7：提供 RUM Span 详情类接口（`record_detail`） *[1]* | [TencentBlueKing/bk-monitor #12463](https://github.com/TencentBlueKing/bk-monitor/pull/12463) |
 | 🔄 | `<branch_name>` | 里程碑 8：提供 RUM 分析接口（`statistic`） *[1]* | 待创建 |
 | 🔄 | `feat/rum-hover-protocol/#1010158081139035316` | RUM 详情支持 Hover 解释协议（[TAPD #1010158081139035316](https://tapd.woa.com/tapd_fe/10158081/story/detail/1010158081139035316)） | [TencentBlueKing/bk-monitor #12784](https://github.com/TencentBlueKing/bk-monitor/pull/12784) |
+| 🔄 | `feat/rum_resource_timing/#1010158081139063287` | Resource 加载时序重构（[TAPD #1010158081139063287](https://tapd.woa.com/tapd_fe/10158081/story/detail/1010158081139063287)） | [TencentBlueKing/bk-monitor #12798](https://github.com/TencentBlueKing/bk-monitor/pull/12798) |
 
 - *[1] RUM 接口里程碑实施期间，随接口落地补充 `rum_web/docs/api/search.md`。*
 - *[2] Mock 数据为每种 Span 类型分配固定 `span_id`；详情请求根据 `record_id` 返回对应类型的 Mock 数据。*
