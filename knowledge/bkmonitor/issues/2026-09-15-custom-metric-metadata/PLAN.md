@@ -1,7 +1,7 @@
 ---
 title: 指标元信息存储与 SaaS/APM 自定义指标开发方案
 tags: [metadata, custom-metric, apm, histogram, bmw, storage, migration]
-description: 对比沿用白名单、按服务拆行、元信息加列、元信息建表与取值去重五个完整方案，选定取值去重；元信息按内容去重为取值，每个 scope 一行只存取值 ID 列表，1000 个服务上报同一批指标只存 3000 行；用户修改按全局、服务、服务加 scope_name 三级选择器写指标项或覆盖表，页面分组加选择器支持按服务分组，指标同步不覆盖；指标项表零 DDL，页面分组表加两列；APM V2 前缀机制下线；Histogram 按 original_type 组族展示。
+description: 对比沿用白名单、按服务拆行、元信息加列、元信息建表与取值去重五个完整方案，选定取值去重；Report 表只保存上报事实与元信息，页面分组及维度配置保存在 TimeSeriesScope，指标别名、单位与页面归属按全局、服务、服务加 scope_name 三级选择器统一写入 TimeSeriesMetricOverride；TimeSeriesMetric.field_scope 固定为 default 兼容占位，scope_id 只保存系统基础页面分组；指标项表零 DDL；Histogram 按 original_type 组族展示。
 issue: knowledge/bkmonitor/issues/2026-09-15-custom-metric-metadata/README.md
 created: 2026-09-15
 updated: 2026-10-14
@@ -13,192 +13,79 @@ updated: 2026-10-14
 
 ## 0x00 结论速览
 
-**采用方案 E「取值去重」。** 它让服务视图列出全部上报指标，把 Histogram 合成一个面板，按服务保留同名指标的类型与单位，并支持按服务编辑与分组。
+**采用方案 E「取值去重」。** 新增两张 Report 表记录真实上报，新增 Override 表记录用户修改，保留现有指标项与页面分组。读取时统一合成「系统基线、上报值与用户覆盖」，同时满足服务过滤、Histogram 组族和按服务编辑。
 
-`1,000` 个服务上报同一批指标时，E 存 `3,000` 行、`18.1 MiB`，D 存 `200.5w` 行、`346.7 MiB`。代价是读取比 D 慢 `1.4～1.7` 倍、页面分组表做一次秒级 DDL，另有两项上线标准待拍板。
+**为什么要改**
 
-**要解决的问题**
+现有模型缺少「服务上报关系」与「上报元信息」两类数据，因此页面有三个直接问题：
 
-五个问题都源于服务关系与上报元信息没有落库位置：
+- **看不全**：服务视图靠扫描 VM 生成的白名单推断指标，大应用、低频指标和移动过分组的指标可能消失。
+- **看不懂**：类型、单位、描述与 Histogram 原名没有落库，同名指标在不同服务的差异也无法表达。
+- **改不了**：现有配置只有全局一份，不能按服务修改别名、单位和页面分组。
 
-- 服务视图缺指标：指标换分组后查不到，大应用超出查询上限被截断，因为服务关系只靠定时扫描生成的白名单缓存推断。
-- Histogram 难用：一个直方图拆成 `_bucket`、`_sum`、`_count` 三个指标逐项展示，用户要自己拼运算。
-- 元信息无处存：Collector 上报的类型、单位与描述没有落库位置，同名指标在不同服务可能分别是 Counter 与 Gauge，单位可能分别是 `s` 与 `ms`。
-- 不能按服务编辑：现有表只有一份全局配置，用户无法为单个服务改单位、别名与页面分组，也无法保证指标同步不覆盖这些修改。
-- V2 不区分服务：APM 自定义指标 V2 只按 `scope_name` 拆行，`service_name` 不在任何表里，多个服务的同名指标共用一行。
+**整体架构**
 
-**方案对比**
-
-五个方案中只有 E 同时满足五项需求且不改指标项表，评估明细见「完整方案对比」：
-
-| 方案 | 采用 | 做法 | 依据 |
-| --- | :---: | --- | --- |
-| A 沿用白名单 | ❌ | 结构不变，白名单改按 `scope_name` 查找 | 服务关系仍靠推断，元信息仍只能存一份 |
-| B 按服务拆行 | ❌ | 指标项按服务各复制一行 | 最大数据源管理页首页 `28.6 s`，存储 `42.7 GiB` |
-| C 元信息加列 | ❌ | 服务关系存新表，元信息加 `5` 列到指标项表 | [a] 上线时指标项表整表重建 `68.4 s～128.5 s`<br />[b] 迁移失败时管理页、指标树、图表与指标同步报错 |
-| D 元信息建表 | ❌ | 元信息按指标存默认值加差异，每个「scope × 指标」一行关系 | [a] `1,000` 个服务上报同一批指标存 `200.5w` 行<br />[b] 类型按指标只存一份，异构上报时 `1.6%` 读到错误类型 |
-| E 取值去重 | ✅ | 元信息按内容去重为取值，scope 一行只存取值 ID 列表 | [a] 同场景存 `3,000` 行<br />[b] 类型随取值保存<br />[c] 读取比 D 慢 `1.4～1.7` 倍 |
-
-**存储结构**
-
-**一个指标被多个 scope 上报时，元信息按内容只存一次，每个 scope 只在自己那一行记下 `4` 字节的取值 ID。**
-
-| 对象 | 模型 | 变更 | 一行是什么 | 关键列 | 写入方 | 随上报过期 |
-| --- | --- | --- | --- | --- | --- | --- |
-| 指标项 | `TimeSeriesMetric` | 不变 | 数据源内一个指标名 | [a] `field_name`<br />[b] `field_config`：全局配置<br />[c] `scope_id`：全局页面分组 | [a] 指标同步建行<br />[b] 用户全局修改 | 沿用现有 `30 d` 过滤 |
-| 页面分组 | `TimeSeriesScope` | 加两列 | 用户归类指标的一个目录 | [a] `scope_name`<br />[b] `selector` *[1]*：新增，NULL 为全局 | 用户、指标同步 | 否 |
-| 取值 | `TimeSeriesReportValue` | 新增 | 一个指标的一种完整上报元信息 | [a] `field_name`、`fingerprint`：数据源内唯一<br />[b] `metric_type`、`meta`<br />[c] `scope_count`：引用数 | bmw | `scope_count` 为 `0` 时删除 |
-| scope | `TimeSeriesReportScope` | 新增 | 一个上报来源，APM 中是一个服务的一个 `scope_name` | [a] `labels`<br />[b] `report_value_ids`：取值 ID 列表<br />[c] `last_seen` | bmw | `30 d` 未上报时删除 |
-| 覆盖 | `TimeSeriesMetricOverride` | 新增 | 用户在某个选择器下对一个指标的修改 | [a] `selector`、`field_name`：数据源内唯一<br />[b] `field_config`、`scope_id` | 用户 | 否 |
-
-- *[1] 选择器表示生效范围：修改可用全局 `{}`、`{service_name}` 与 `{service_name, scope_name}` 三级，页面分组只用前两级。*
-
-上报与配置两条写入路径各写各的表，互不覆盖：
+架构分成三条互不覆盖的写入路径，读取统一经过 `MetricConfigResolver`：
 
 ```mermaid
 flowchart LR
-    Collector["bk-collector<br/>逐 scope × 指标上报"] ==> Apply["MetricMetaSvc.Apply()<br/>bmw 元信息写入"]
-    Apply ==> RScope["TimeSeriesReportScope<br/>scope"]
-    Apply ==> RValue["TimeSeriesReportValue<br/>取值"]
-    RScope -. "report_value_ids" .-> RValue
-    RValue -. "field_name" .-> Metric["TimeSeriesMetric<br/>指标项"]
-    Sync["RefreshTimeSeriesMetric()<br/>指标同步"] ==> Metric
-    Modify["modify_metric()<br/>用户修改"] == "selector = {}" ==> Metric
-    Modify == "selector ≠ {}" ==> Override["TimeSeriesMetricOverride<br/>覆盖"]
-    Override -. "field_name" .-> Metric
-    Metric -. "scope_id" .-> Group["TimeSeriesScope<br/>页面分组"]
-    Override -. "scope_id" .-> Group
-
-    subgraph Report["上报：只由 bmw 写入"]
-        direction LR
-        Collector
-        Apply
-        RScope
-        RValue
+    subgraph Write["三条写入路径"]
+        Collector["Collector 上报"] --> Report["ReportScope + ReportValue<br/>服务关系 · 类型 · 单位 · 描述"]
+        Discover["指标发现"] --> Base["TimeSeriesMetric + TimeSeriesScope<br/>指标项 · 基础分组"]
+        User["页面编辑"] --> Setting["MetricOverride + TimeSeriesScope<br/>别名 · 单位 · 页面分组"]
     end
-    subgraph Config["配置：由用户与指标同步写入"]
-        direction LR
-        Sync
-        Modify
-        Override
-        Metric
-        Group
-    end
-
-    classDef added fill:#E8F5E9,stroke:#2E7D32,color:#1B5E20
-    classDef changed fill:#E3F2FD,stroke:#1E88E5,color:#0D47A1
-    classDef kept fill:#F5F7FA,stroke:#979BA5,color:#313238
-    class Apply,RScope,RValue,Override,Modify added
-    class Collector,Sync,Group changed
-    class Metric kept
-    style Report fill:#FAFBFD,stroke:#DCDEE5
-    style Config fill:#FAFBFD,stroke:#DCDEE5
+    Report --> Resolver["MetricConfigResolver<br/>合成有效配置"]
+    Base --> Resolver
+    Setting --> Resolver
+    Resolver --> Page["管理页 · 服务视图<br/>指标树 · 图表 · 策略"]
 ```
 
-- *[1] 颜色表示变更：绿色为新增，蓝色为修改，灰色为结构不变，粗线写表，虚线为引用。*
+这张图只表达四条规则：
 
-**例子**
+1. Report 表只保存实际上报的数据，不创建页面分组，也不接受页面编辑。
+2. 用户修改统一写 Override；页面分组与维度配置仍写 `TimeSeriesScope`。
+3. `TimeSeriesMetric` 保持「数据源 × 指标名」一行，指标同步仍是唯一创建方。
+4. 页面不再各自拼配置，统一由解析器按「scope → 服务 → 全局 → 指标基线 → 上报值 → 表级默认值」取第一个已设置的值。
 
-数据源 `9` 中，checkout 在 `http`、`grpc` 下上报，cart 在 `http` 下用旧版 SDK 上报，耗时单位为毫秒。每个 scope 一行，记录它上报的取值 ID：
+**五个模型各做一件事**
 
-| `TimeSeriesReportScope.id` | scope | `report_value_ids` | `last_seen` |
-| --- | --- | --- | --- |
-| 11 | checkout · http | `[1, 2, 3, 4]` | `10-13` |
-| 12 | checkout · grpc | `[1, 6]` | `10-13` |
-| 13 | cart · http | `[1, 2, 4, 5]` | `10-12` |
-
-元信息相同的 scope 共用一行取值，`request_total` 被三个 scope 上报也只存取值 `1`，cart 的 `_sum` 单位不同才多存取值 `5`：
-
-| `TimeSeriesReportValue.id` | `field_name` | `metric_type` | `meta` | `scope_count` |
-| --- | --- | --- | --- | --- |
-| 1 | `request_total` | counter | `{"unit": "1", "description": "请求数"}` | 3 |
-| 2 | `duration_seconds_bucket` | counter | `{"unit": ""}` | 2 |
-| 3 | `duration_seconds_sum` | counter | `{"unit": "s"}` | 1 |
-| 4 | `duration_seconds_count` | counter | `{"unit": ""}` | 2 |
-| 5 | `duration_seconds_sum` | counter | `{"unit": "ms"}` | 1 |
-| 6 | `queue_size` | gauge | `{"unit": "1"}` | 1 |
-
-checkout 的服务视图只合并 scope `11`、`12` 的列表，得到 `5` 个指标，不读 cart 的列表，服务视图读法见「读取路径」。
-
-用户修改按选择器只写一张表：全局写指标项，按服务写覆盖。全局把 `duration_seconds_sum` 命名为「请求耗时」并移入分组 `22`，写入指标项 `1003`。checkout 把它的单位改为 `ms` 并移入本服务分组 `31`，写入覆盖 `1`。
-
-有效配置按 scope 级覆盖、服务级覆盖、全局配置、上报取值与表级字段逐级查找，`duration_seconds_sum` 在三个视图中读到：
-
-| 视图 | 单位 | 别名 | 页面分组 |
-| --- | --- | --- | --- |
-| 不分服务 | `s`：取值 `3`、`5` 各被 `1` 个 scope 引用，取 ID 小者 | 请求耗时：全局 | 支付 `22`：全局 |
-| checkout · http | `ms`：覆盖 `1` | 请求耗时：全局 | 支付 `31`：覆盖 `1` |
-| cart · http | `ms`：scope `13` 引用取值 `5` | 请求耗时：全局 | 支付 `22`：全局 |
-
-**压测结论**
-
-**E 在存储、写入、过期与类型正确性上优于 D，读取比 D 慢 `1.4～1.7` 倍。** 服务视图读法在新表上的 p95 低于 `21 ms`。 两者在同一 MySQL `5.7` 容器中单独压测，🟢 为该行较优，🔴 为不可接受，全表见「完整方案对比」：
-
-| 测量项 *[1]* | D 元信息建表 | E 取值去重 |
+| 模型 | 职责 | 写入方 |
 | --- | --- | --- |
-| 存储 · S1 | `200.5w` 行，`346.7 MiB` | 🟢 `3,000` 行，`18.1 MiB` |
-| 次日首次重发 · S1 | 写 `200.3w` 行，`133.4 s` | 🟢 写 `1,000` 行，`1.7 s` |
-| 服务视图 p50 · S1 / S2 | 🟢 `10.2 ms` / `9.4 ms` | `16.8 ms` / `15.5 ms` |
-| 读到错误类型 · S2 | 🔴 `29,447` 个 scope × 指标，占 `1.6%` | 🟢 `0` |
+| `TimeSeriesMetric` | 指标身份与系统基础分组，结构不变 | 指标同步 |
+| `TimeSeriesScope` | 页面分组、自动规则与维度配置 | 指标同步、用户 |
+| `TimeSeriesReportScope` | 一个上报来源及其上报的取值 ID | bmw |
+| `TimeSeriesReportValue` | 一种完整的指标类型、单位与描述，按内容去重 | bmw |
+| `TimeSeriesMetricOverride` | 全局、服务或 scope 范围内的用户修改 | 用户 |
 
-- *[1] 两个场景都有 `1,000` 个服务：S1 上报同一批 `2,000` 个元信息一致的指标，S2 分属 `5` 种 SDK、每种 `1～3` 个元信息版本。*
+这里的上报 scope 是「一个服务从一个 `scope_name` 上报数据」，不是页面分组。两者没有引用关系。
 
-**代价与风险**
+**为什么选 E**
 
-**设计上的主要代价是读取变慢：以 D 实测为下限，多数读取约为现状的 `2` 倍。加上 E 的差值推算，指标树约 `2.5` 倍，族视图首页约 `4` 倍，上线前按「性能基线」复测。上线风险是页面分组表的一次 DDL、旧代码取错分组与 APM V2 收敛，四个阶段中只有收敛回退有损。**
+A 仍靠推断，不能解决元信息与服务关系；B、C 要改 `100w` 行指标热表，在 MySQL `5.7` 上风险不可接受。D 与 E 都能避开热表，最终差别是 D 按「scope × 指标」存关系，E 把相同元信息去重后，只在 scope 行记录取值 ID。
 
-设计代价：
-
-| 代价 | 后果 | 量化或应对 |
+| 关键结果 *[1]* | D 元信息建表 | E 取值去重 |
 | --- | --- | --- |
-| 读取变慢 | [a] 读取比 D 慢 `1.4～1.7` 倍<br />[b] D 实测时指标树、服务视图与指标缓存扫描约为现状的 `2` 倍，族视图首页为 `2.7` 倍<br />[c] 加上 E 的差值推算，指标树约 `269 ms`，族视图首页约 `153 ms`，分别约为现状的 `2.5` 倍与 `4` 倍 | E 的端到端读取未单独实测，上线前按「性能基线」复测 |
-| 取值数有上限 | 每个数据源最多 `2,000` 个 scope、`60,000` 个取值，超出时 bmw 丢弃新增并计数 | 防止高基数标签撑大新表，限额见「scope 身份」 |
-| 单个指标停报不单独清理 | scope 仍在上报其他指标时，停报的指标留在它的取值列表里 | 保留到该 scope 整体 `30 d` 未上报，全数据源都停报的指标按指标项过期隐藏 |
-| 依赖 bmw 单实例消费与缓存 | 多实例写同一 scope 行会反复冲突重放，缓存缺失时每批都要读回 scope 行 | 沿用每个 DataID 单实例消费，一批一个事务，写回前校验 `version` |
-| 按指标反查 scope 要扫整个数据源 | `PlacementHints()` 读本数据源全部 scope 的取值列表 | S1 上 `16.7 ms`，只在新建指标项与 `1 h` 重放时调用 |
+| 存储 | `200.5w` 行，`346.7 MiB` | `3,000` 行，`18.1 MiB` |
+| 次日首次重发 | 写 `200.3w` 行，`133.4 s` | 写 `1,000` 行，`1.7 s` |
+| 服务视图 p50 | `9.4～10.2 ms` | `15.5～16.8 ms` |
+| 异构上报读错类型 | `2.9w` 个 scope × 指标 | `0` |
 
-上线风险，按「发布顺序」的步骤处置：
+- *[1] 压测场景：存储与重发取 S1，即 `1,000` 个服务上报同一批 `2,000` 个指标；类型正确性取 S2，完整定义与 A～E 对比见「完整方案对比」。*
 
-| 风险 | 后果 | 应对 | 对应步骤 |
-| --- | --- | --- | --- |
-| `TimeSeriesScope` 加列换唯一键 | 等元数据锁（MDL）期间页面分组表的读写排队 | `10w` 行在 `5.7` 上 `3.7 s`、`8.0` 上 `3.5 s`，迁移前检查长事务 | 建表与加列 |
-| 旧代码按名称取页面分组 | 同名的服务分组存在时，旧代码取到多行 | 全部组件升级后才开放按服务建分组 | 按服务建分组与编辑 |
-| APM V2 收敛改写存量 | 同名的多行指标项合并为一行 | 可按快照回退，但会丢失收敛后的用户修改 | APM V2 收敛 |
+E 用 `1.4～1.7` 倍的读取耗时，换来数量级更低的存储与重发开销，并保证异构上报的类型正确。服务视图 p95 仍低于 `21 ms`。
 
-**上线后用户看到的变化**
+**用户最终看到什么**
 
-停报指标、策略选择器与 V2 已保存视图三处行为改变，要提前告知用户。停报指标的规则见「生命周期」，另两处明细见「上线影响与兼容」：
+- 服务视图按真实上报关系列指标，换页面分组后不再消失。
+- Histogram 的 `_bucket`、`_sum`、`_count` 合成一个族面板。
+- 全局设置继续生效，服务可以单独覆盖别名、单位和页面分组。
+- 指标同步不覆盖用户修改；页面分组与维度别名仍按现有入口管理。
 
-| 位置 | 变化 |
-| --- | --- |
-| ✅ 服务视图 | 列出该服务实际上报的全部指标，换分组后不再消失，同名指标显示本服务的类型与单位 |
-| ✅ 按服务编辑与分组 | 服务页可单独改单位、别名与页面分组，标明「本服务覆盖」或「继承全局」，指标同步不覆盖 |
-| ✅ Histogram | 管理页与详情页合成一个族，单位与描述按上报自动显示，用户配置仍然优先 |
-| ⚠️ 停报指标 | 服务停报某指标、其他服务仍在报时，该服务视图继续显示它，直到该服务的 scope 过期 |
-| ⚠️ 策略选择器 | 未填单位与描述的指标改显示表级值，撤销要重新发布上一版本 |
-| ⚠️ APM V2 已保存视图 | 同名指标合并为一行，引用被合并行原分组的视图会缺少该指标 |
+**代价与上线**
 
-**能否平滑上线与回退**
-
-**能**，`TimeSeriesMetric` 结构不变，新旧版本可以共存，新表缺失时已有功能自动降级 *[1]*。四个阶段中只有「APM V2 收敛」回退有损 *[2]*：
-
-```mermaid
-flowchart LR
-    P1["阶段一<br/>建表与读取改造<br/>三张新表 · TimeSeriesScope 加列<br/>回退：重新发布上一版本"] --> P2["阶段二<br/>开启元信息写入与族视图<br/>回退：关闭开关<br/>已显示的上报值另行清理"]
-    P2 --> P3["阶段三<br/>APM V2 收敛<br/>合并同名指标<br/>回退：按快照恢复，有损"]
-    P3 --> P4["阶段四<br/>白名单与 V2 前缀逻辑下线<br/>回退：重新发布上一版本"]
-    P1 -. "全部组件升级后" .-> Svc["开放按服务建分组与编辑<br/>回退：关闭开关<br/>回退阶段一前先删服务分组"]
-
-    classDef added fill:#E8F5E9,stroke:#2E7D32,color:#1B5E20
-    classDef changed fill:#E3F2FD,stroke:#1E88E5,color:#0D47A1
-    classDef removed fill:#FFEBEE,stroke:#E53935,color:#B71C1C
-    class P1,P2,Svc added
-    class P3 changed
-    class P4 removed
-```
-
-- *[1] 迁移中途失败可直接重跑：MySQL 的 DDL 不在事务内，所以建表用 `CREATE TABLE IF NOT EXISTS`，页面分组加列是一条整体成败的 ALTER。*
-- *[2] 回退按阶段倒序执行：各阶段包含的发布步骤与开关见「发布顺序」。*
+- **性能**：指标树预计约为现状的 `2.5` 倍，族视图首页约为 `4` 倍，上线前必须复测。
+- **生命周期**：单个指标停报不会立即从服务视图消失，要等所在 scope 整体过期；每个数据源限制 `2,000` 个 scope、`6w` 个取值。
+- **迁移**：`TimeSeriesMetric` 零 DDL；`TimeSeriesScope` 做一次秒级 DDL。发布依次经过建表与读取改造、开启上报、APM V2 收敛、下线白名单与 V2 前缀逻辑。只有 APM V2 收敛的回退有损。
 
 **需要拍板的事项**
 
@@ -215,7 +102,7 @@ flowchart LR
 
 ### a. 现有对象与读写链路
 
-一个数据源的指标存在三张表里，没有一张记录上报服务 *[1]*。迁移必须保住指标的 `field_id` 与所在分组 *[2]*。
+一个数据源的指标由 `TimeSeriesGroup`、`TimeSeriesScope` 与 `TimeSeriesMetric` 三张核心模型表管理，`ResultTableField` 只提供表级单位与描述兜底；四者都不记录上报服务 *[1]*。迁移必须保住指标的 `field_id` 与所在分组 *[2]*。
 
 ```mermaid
 erDiagram
@@ -259,7 +146,7 @@ APM 自定义指标 V2 按 scope 名 `scope_name` 拆行，同一指标名在每
 | --- | --- | --- | --- | --- |
 | `201` | `http` | `request_duration_sum` | `http` | checkout、payment |
 | `202` | `default` | `order_total` | 订单（自建） | checkout |
-| `150` *[1]* | `default` | `request_duration_sum` | 无 | 无 |
+| `150` *[1]* | `default` | `request_duration_sum` | -- | -- |
 
 - *[1] 删除只是隐藏：`150` 是开启 V2 前留下的 `default` 行，管理页删除只把 `scope_id` 置 `0`，行仍保留。*
 
@@ -326,10 +213,10 @@ flowchart LR
 | --- | --- | --- | --- |
 | `monitor_web.strategies.metric_list_cache.CustomMetricCacheManager` | 每 `10 min` | 全平台活跃指标项 | `4.92 s` |
 | `internal/metadata/task.RefreshTimeSeriesMetric` | 每 `5 min` | 每个数据源整组读取 `3` 次 | `108 ms` |
-| `internal/metadata/service.SpacePusher.PushTableIdDetail` | 每 `15 min` 及指标同步后 | 全部指标项的 `field_name` | 未压测 |
+| `internal/metadata/service.SpacePusher.PushTableIdDetail` | 每 `15 min` 及指标同步后 | 全部指标项的 `field_name` | -- |
 | `monitor_web.custom_report.resources.metric.GetCustomTsFields` | 打开管理页 | 按名称排序取一页 `50` 条 | `36.8 ms` |
 | `monitor_web.scene_view.resources.custom_metric.GetCustomTsMetricGroups` | 打开指标树 | 最大数据源整组 | `108 ms` |
-| `monitor_web.scene_view.resources.custom_metric.GetCustomTsGraphConfig` | 打开图表 | 按 `field_id` 取面板内的指标 | 未压测 |
+| `monitor_web.scene_view.resources.custom_metric.GetCustomTsGraphConfig` | 打开图表 | 按 `field_id` 取面板内的指标 | -- |
 
 - *[1] Go 路径省略模块前缀：均相对 `pkg/bk-monitor-worker/` 书写。*
 
@@ -342,7 +229,7 @@ flowchart LR
 | 表 | 模型 | 上界规模 | 若做 DDL | `5.7` 耗时 *[1]* | `8.0` 耗时 | 本方案 |
 | --- | --- | --- | --- | --- | --- | --- |
 | 指标项 | `TimeSeriesMetric` | `100w` 行，`678 MiB` | 加 `5` 列，整表重建 | `68.4 s～128.5 s` | `0.34 s` | 零 DDL |
-| 页面分组 | `TimeSeriesScope` | `18,567` 行，`4 MiB` | 加两列，换唯一键 | `3.7 s` *[2]* | `3.5 s` | 接受 |
+| 页面分组 | `TimeSeriesScope` | `1.9w` 行，`4 MiB` | 加两列，换唯一键 | `3.7 s` *[2]* | `3.5 s` | 接受 |
 
 - *[1] 指标项的区间取决于 ALTER 条数：下限是一条 ALTER 加 `5` 列，上限是 Django 默认每列一条 ALTER，明细见 [REPORT：在线 DDL](./REPORT.md#a-在线-ddl)。*
 - *[2] 页面分组取 `10w` 行实测作上界：加列与换唯一键合成一条 ALTER，`1w` 行时 `5.7` 为 `0.77 s`、`8.0` 为 `0.82 s`。*
@@ -367,11 +254,11 @@ sequenceDiagram
     M-->>R: 全部报 1054（未知列）
 ```
 
-页面分组表的 DDL 是一条整体成败的 ALTER，失败时表结构不变，重跑即可，写法见「数据模型与迁移」。**所以指标项表 `TimeSeriesMetric` 零 DDL，页面分组表 `TimeSeriesScope` 加两列并换唯一键是唯一例外。**
+页面分组表的 ALTER 整体成败，失败后可直接重跑，写法见「数据模型与迁移」。**所以指标项表 `TimeSeriesMetric` 零 DDL，页面分组表 `TimeSeriesScope` 加两列并换唯一键是唯一例外。**
 
 ### e. 完整方案对比
 
-五个方案中只有 E 同时满足五项需求，代价是读取比 D 慢 `1.4～1.7` 倍。后文所有 S1～S3x 均指本节定义的场景。
+后文所有 S1～S3x 均指本节定义的场景。
 
 **场景定义**
 
@@ -380,8 +267,8 @@ sequenceDiagram
 | 生产参照         | 校准单数据源规模      | [a] bkte 最大应用<br />[b] 最近 `15 min` 的实际上报                                                   | [a] 指标 `217` 个<br />[b] 服务 `20` 个<br />[c] 关系 `4,358` 条                         |
 | 全平台活跃规模      | 评估日常容量        | [a] 指标按上云应用分档<br />[b] 每个指标平均约 `10` 个服务                                                    | [a] 指标项 `100w` 行<br />[b] 关系 `995w` 条                       |
 | S1 · 同构上报    | 验证最高复用率       | `1,000` 个服务各一个 scope，上报同一批 `2,000` 个元信息一致的指标                                               | [a] scope `1,000` 个<br />[b] 指标名 `2,000` 个<br />[c] 上报关系 `200w` 条  |
-| S2 · 异构上报    | 验证类型正确性与中等复用率 | [a] `1,000` 个服务分属 `5` 种 SDK<br />[b] 每种 SDK 有 `1` 个～`3` 个元信息版本<br />[c] 另有一个 DEFAULT scope | [a] scope `1,001` 个<br />[b] 指标名 `50,773` 个<br />[c] 上报关系 `186w` 条 |
-| S3x · 最大单数据源 | 验证单数据源查询上界    | [a] 每个服务上报 `1,500` 个指标<br />[b] `1%` 的指标多一种取值                                              | [a] scope `667` 个<br />[b] 指标名 `20,000` 个<br />[c] 上报关系 `100w` 条   |
+| S2 · 异构上报    | 验证类型正确性与中等复用率 | [a] `1,000` 个服务分属 `5` 种 SDK<br />[b] 每种 SDK 有 `1` 个～`3` 个元信息版本<br />[c] 另有一个 DEFAULT scope | [a] scope `1,001` 个<br />[b] 指标名 `5.1w` 个<br />[c] 上报关系 `186w` 条 |
+| S3x · 最大单数据源 | 验证单数据源查询上界    | [a] 每个服务上报 `1,500` 个指标<br />[b] `1%` 的指标多一种取值                                              | [a] scope `667` 个<br />[b] 指标名 `2w` 个<br />[c] 上报关系 `100w` 条   |
 | S3 · 全平台上界   | 验证总容量         | [a] 大型档服务数放大到 APM 登记数 `126`<br />[b] 只装终版 E 的表                                             | [a] scope 约 `25w` 个<br />[b] 指标名约 `100w` 个<br />[c] 上报关系约 `4000w` 条 |
 
 **方案能力**
@@ -404,7 +291,7 @@ sequenceDiagram
 
 B、C、D 的行数随服务数放大。E 把约 `4000w` 条关系编码进 `25w` 行 `TimeSeriesReportScope`：
 
-| 瀑布图类型   | 说明                                                                                                                   | 判断条件                                                                                                                   | 存储（活跃 / 上界）                                  | 实测装载（MySQL `5.7`）                                                                                                     |
+| 方案   | 活跃规模的数据行                                                                                                                   | 上界规模的数据行                                                                                                                   | 存储（活跃 / 上界）                                  | 实测装载（MySQL `5.7`）                                                                                                     |
 | ------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | A 沿用白名单 | [a] `TimeSeriesMetric` `100w` 行<br />[b] 服务关系 --                                                                     | [a] `TimeSeriesMetric` `100w` 行<br />[b] 服务关系 --                                                                       | [a] 活跃推算 `0.7 GiB`<br />[b] 上界推算 `0.7 GiB`   | `TimeSeriesMetric` `100w` 行                                                                                           |
 | B 按服务拆行 | `TimeSeriesMetric` `1005w` 行                                                                                         | `TimeSeriesMetric` `4014w` 行                                                                                           | [a] 活跃推算 `10.7 GiB`<br />[b] 上界推算 `42.7 GiB` | `TimeSeriesMetric` `232w` 行                                                                                           |
@@ -418,10 +305,10 @@ B、C、D 的行数随服务数放大。E 把约 `4000w` 条关系编码进 `25w
 
 | 功能入口 | 操作与数据范围 | 核心 SQL 模式 | A 现状 | B 按服务拆行 | C 元信息加列 | D 元信息建表 *[1]* |
 | --- | --- | --- | --- | --- | --- | --- |
-| 集成 / 自定义指标 / 指标管理 | [a] 打开最大档数据源首页<br />[b] 指标 `20,000` 个<br />[c] 按指标名排序，返回首页 `50` 个指标 | [a] `SELECT ... FROM metadata_timeseriesmetric WHERE group_id = ? AND field_scope = 'default' ORDER BY field_name LIMIT 50`<br />[b] `SELECT ... FROM <definition_table> WHERE group_id = ? AND field_name IN (...)` | `36.8 ms` | `28.6 s`（×777） | `43.8 ms`（×1.2） | `38.0 ms`（×1.0） |
-| 集成 / 自定义指标 / 指标管理 | [a] 搜索最大档数据源的指标名<br />[b] 指标 `20,000` 个<br />[c] 返回首页 `50` 个命中指标 | [a] `SELECT ... FROM metadata_timeseriesmetric WHERE group_id = ? AND field_name LIKE ? ORDER BY field_name LIMIT 50`<br />[b] `SELECT ... FROM <definition_table> WHERE group_id = ? AND field_name IN (...)` | `20.2 ms` | -- | `20.8 ms`（×1.0） | `21.0 ms`（×1.0） |
+| 集成 / 自定义指标 / 指标管理 | [a] 打开最大档数据源首页<br />[b] 指标 `2w` 个<br />[c] 按指标名排序，返回首页 `50` 个指标 | [a] `SELECT ... FROM metadata_timeseriesmetric WHERE group_id = ? AND field_scope = 'default' ORDER BY field_name LIMIT 50`<br />[b] `SELECT ... FROM <definition_table> WHERE group_id = ? AND field_name IN (...)` | `36.8 ms` | `28.6 s`（×777） | `43.8 ms`（×1.2） | `38.0 ms`（×1.0） |
+| 集成 / 自定义指标 / 指标管理 | [a] 搜索最大档数据源的指标名<br />[b] 指标 `2w` 个<br />[c] 返回首页 `50` 个命中指标 | [a] `SELECT ... FROM metadata_timeseriesmetric WHERE group_id = ? AND field_name LIKE ? ORDER BY field_name LIMIT 50`<br />[b] `SELECT ... FROM <definition_table> WHERE group_id = ? AND field_name IN (...)` | `20.2 ms` | -- | `20.8 ms`（×1.0） | `21.0 ms`（×1.0） |
 | 集成 / 自定义指标 / 族视图 | [a] 打开最大档数据源首页<br />[b] 整组读取指标项与原名<br />[c] 内存归组、分页，再补齐族成员、页面分组与有效配置 | [a] `SELECT scope_id, field_name, original_name FROM <metric_table> WHERE group_id = ?`<br />[b] `SELECT ... FROM <metric_table> WHERE group_id = ? AND field_name IN (...)`<br />[c] `SELECT ... FROM metadata_timeseriesscope WHERE id IN (...)` | `37.4 ms` | -- | `63.4 ms`（×1.7） | `100.7 ms`（×2.7） |
-| 仪表盘 / 指标选择器 / 指标树 | [a] 展开最大档数据源<br />[b] 指标 `20,000` 个<br />[c] 读取全部未过期指标与页面分组 | [a] `SELECT ... FROM <metric_table> WHERE group_id = ? AND last_modify_time > ?`<br />[b] `SELECT ... FROM <definition_table> WHERE group_id = ?` | `108 ms` | `7,539 ms`（×69） | `144 ms`（×1.3） | `217 ms`（×2.0） |
+| 仪表盘 / 指标选择器 / 指标树 | [a] 展开最大档数据源<br />[b] 指标 `2w` 个<br />[c] 读取全部未过期指标与页面分组 | [a] `SELECT ... FROM <metric_table> WHERE group_id = ? AND last_modify_time > ?`<br />[b] `SELECT ... FROM <definition_table> WHERE group_id = ?` | `108 ms` | `7,539 ms`（×69） | `144 ms`（×1.3） | `217 ms`（×2.0） |
 | 策略 / 指标选择器 | [a] 刷新全平台指标缓存<br />[b] 活跃指标项 `100w` 行<br />[c] 按数据源整组扫描未过期指标 | [a] `SELECT ... FROM <metric_table> WHERE group_id = ? AND last_modify_time > ?`<br />[b] `SELECT ... FROM <definition_table> WHERE group_id = ?` | `4.9 s` | `72.0 s`（×15，推算） | `6.7 s`（×1.4） | `9.6 s`（×2.0） |
 | APM / 服务 / 自定义指标 | [a] 打开最大档数据源的一个服务<br />[b] 整组读取未过期指标、页面分组与服务关系<br />[c] 在内存中求交 | [a] `SELECT ... FROM <metric_table> WHERE group_id = ? AND last_modify_time > ?`<br />[b] `SELECT ... FROM <label_to_member> WHERE group_id = ? AND label_key = 'service_name' AND label_value = ?` | `103 ms`，不含白名单过滤 | -- | `140 ms`（×1.4） | `214 ms`（×2.1） |
 | Metadata / scope 查询 | [a] 读取一个 scope 的指标与元信息<br />[b] 只测 C、D 的服务关系与元信息读取 | [a] `SELECT ... FROM <relation_table> WHERE group_id = ? AND report_scope_id = ?`<br />[b] `SELECT ... FROM <meta_table> WHERE id IN (...)` | -- | -- | `36.2 ms` | `43.1 ms` |
@@ -440,21 +327,20 @@ E 在存储、写入、过期与类型正确性上优于 D，只在读取上慢�
 | 体积 | S1 | `346.7 MiB` | 🟢 `18.1 MiB` | `19.2` |
 | 体积 | S2 | `336.6 MiB` | 🟢 `41.2 MiB` | `8.2` |
 | 体积 | S3 | `7,849 MiB` | 🟢 `960.5 MiB` | `8.2` |
-| 冷启动写入，同用 `30,000` 条聚批 | S1 | `77.3 s` | 🟢 `29.1 s` | `2.7` |
+| 冷启动写入，同用 `3w` 条聚批 | S1 | `77.3 s` | 🟢 `29.1 s` | `2.7` |
 | 同日 `2 h` 重发 | S1 | 写 `2,000` 行 | 🟢 写 `0` 行 | -- |
 | 次日首次重发 | S1 | [a] `133.4 s`<br />[b] 写 `200.3w` 行 | [a] 🟢 `1.7 s`<br />[b] 🟢 写 `1,000` 行 | 行数 `2,003` |
 | 新服务加入 | S1 | `108 ms` | 🟢 `31 ms` | `3.5` |
 | 过期扫描一轮 | S1 | `1,190 ms` | 🟢 `0.34 ms` | `3,500` |
 | 服务视图 p50 | S1 / S2 / S3x | 🟢 `10.2` / `9.4` / `8.5 ms` | `16.8` / `15.5` / `13.3 ms` | `0.6` |
 | 整组预取有效元信息 p50 | S2 | 🟢 `133 ms` | `185 ms` | `0.7` |
-| 按指标取全部 scope p50 | S1 / S2 | 🟢 `10.2` / `0.53 ms` | `16.7` / `11.2 ms` | -- |
-| 读到错误类型 | S2 | 🔴 `29,447` 个 scope × 指标，占 `1.6%` | 🟢 `0` | -- |
+| 读到错误类型 | S2 | 🔴 `2.9w` 个 scope × 指标，占 `1.6%` | 🟢 `0` | -- |
 
 - *[1] 读取慢在不建标签表：每次读全组 scope 的 `id` 与 `labels` 约 `4 ms`，D 按标签表点查只要 `0.2 ms`，E 的服务视图 p95 仍低于 `21 ms`。*
 - *[2] 同库装两套表：用同一组打乱顺序的记录驱动，无其他负载，绝对耗时可用。*
 - *[3] D 的行数主要是成员：定义 `2,000` 行、例外 `0` 行、scope `1,000` 行、标签 `2,000` 行，「scope × 指标」成员 `200w` 行，每行约 `178 B`，含两个索引。*
 
-所以采用 E。E 的端到端读取未单独实测，上线前按「性能基线」复测。
+E 的端到端读取未单独实测，上线前按「性能基线」复测。
 
 ### f. 现有写入代码的约束
 
@@ -486,7 +372,8 @@ bmw、指标同步 *[1]* 与用户分别写入不同的表 *[2]*：
 flowchart LR
     Collector["bk-collector<br/>元信息 DataID"] --> Apply["MetricMetaSvc.Apply()<br/>bmw 写入"]
     Discover["BkBase 或 Redis<br/>指标发现"] --> Sync["RefreshTimeSeriesMetric()<br/>指标同步"]
-    User["modify_metric()<br/>用户修改"]
+    User["modify_metric()<br/>用户指标修改"]
+    GroupEdit["页面分组与维度编辑"]
     subgraph Report["上报事实 · 随上报过期"]
         direction TB
         Value[("TimeSeriesReportValue<br/>取值")]
@@ -502,9 +389,8 @@ flowchart LR
     Apply ==> RScope
     Sync ==> Metric
     Sync ==> Page
-    User ==> Metric
-    User ==> Page
     User ==> Override
+    GroupEdit ==> Page
     Report -.-> Resolver["MetricConfigResolver<br/>有效配置"]
     Setting -.-> Resolver
     Resolver -->|"effective_config"| Readers["管理页 · 指标树<br/>图表 · 策略指标缓存"]
@@ -515,31 +401,31 @@ flowchart LR
     classDef change fill:#eff6ff,stroke:#2563eb,color:#1e3a8a
     classDef old fill:#f1f5f9,stroke:#94a3b8,color:#334155
     class Apply,Value,RScope,Override,User,Resolver,SMS add
-    class Collector,Sync,Page,Readers change
+    class Collector,Sync,Page,GroupEdit,Readers change
     class Discover,Metric old
     style Report fill:#f8fafc,stroke:#94a3b8,stroke-dasharray:4 3
     style Setting fill:#f8fafc,stroke:#94a3b8,stroke-dasharray:4 3
 ```
 
 - *[1] 指标同步是现有任务：bmw 即 Go 后台服务 bk-monitor-worker，每 `5 min` 从 BkBase 或 Redis 发现指标并创建指标项。*
-- *[2] 指标同步只在归属时读 scope：新建指标项与 `1 h` 重放时按 scope 标签选页面分组，见「页面分组与归属」。*
+- *[2] 指标同步与 Report 表互不推断：新指标只按全局页面分组的 `auto_rules` 与默认分组计算基础 `scope_id`。*
 
 ### a. 对象模型
 
-**上报事实与用户设置分表存放：bmw 只写取值与 scope，用户只写指标项、覆盖与页面分组。**
+**上报事实与页面设置分表存放：bmw 只写取值与上报 scope；指标同步只写指标项及系统基础页面分组；用户只写覆盖、页面分组与维度配置。**
 
 | 对象 | 模型 | 一行表示 | 写入方 | 随上报过期 | 例子 |
 | --- | --- | --- | --- | --- | --- |
-| 指标项 | `TimeSeriesMetric` | 数据源内的一个指标名，带全局配置与全局分组 | [a] 指标同步：新建与活跃状态<br />[b] 用户：全局修改 | 否，过期只隐藏 *[1]* | `1003`：`duration_seconds_sum` |
-| 页面分组 | `TimeSeriesScope` | 用户看到的一个指标目录 | [a] 指标同步：全局分组<br />[b] 用户：自建分组 | 否 | [a] `21`：全局分组 `http`<br />[b] `31`：checkout 的分组「支付」 |
+| 指标项 | `TimeSeriesMetric` | 数据源内的一个规范指标名，`field_scope=default` | 指标同步：新建、活跃状态与系统基础 `scope_id` | 否，过期只隐藏 *[1]* | `1003`：`duration_seconds_sum`，基础分组 `21` |
+| 页面分组 | `TimeSeriesScope` | 用户看到的一个指标目录，带维度配置与自动规则 | [a] 指标同步：全局基础分组<br />[b] 用户：分组 CRUD 与 `dimension_config` | 否 | [a] `21`：全局默认分组<br />[b] `31`：checkout 的分组「支付」 |
 | 取值 | `TimeSeriesReportValue` | 一个指标的一种完整上报元信息，数据源内按内容去重 | bmw | 是，无 scope 引用即删除 | `3`：`duration_seconds_sum`，单位 `s` |
 | scope | `TimeSeriesReportScope` | 一个上报来源，带它当前上报的取值 ID 列表 | bmw | 是，`30 d` 未上报即删除 | `11`：checkout 在 `http` 下上报 |
-| 覆盖 | `TimeSeriesMetricOverride` | 某个选择器下对某个指标的修改 | 用户 | 否 *[2]* | `1`：checkout 的 `duration_seconds_sum` 改用 `ms` |
+| 覆盖 | `TimeSeriesMetricOverride` | 某个选择器下对一个指标的配置与页面归属 | 用户，包含全局 `{}` | 否 *[2]* | [a] `1`：全局别名与分组<br />[b] `2`：checkout 单位与分组 |
 
 - *[1] 指标项过期只隐藏：`last_modify_time` 超过过期时长后读取方不再显示，行与 `field_id` 保留。*
 - *[2] 用户数据只随用户操作删除：覆盖与页面分组在用户清除或指标项删除时才删，scope 过期不影响用户修改。*
 
-**scope 不是页面分组**：scope `11` 与页面分组 `21` 都叫 `http`，前者是数据来源，后者是页面目录，两者没有引用关系。
+`TimeSeriesReportScope` 记录上报来源，`TimeSeriesScope` 记录页面目录。scope `11` 的 `scope_name=http` 只表示数据来源，页面分组 `21` 是独立目录；两者不建立引用，Report 表不会查找、创建或移动页面分组。
 
 指标项仍是「数据源 × 指标名」一行，存量 APM V2 的同名多行按「APM V2 收敛」合并。
 
@@ -549,7 +435,7 @@ flowchart LR
 erDiagram
     TimeSeriesGroup ||--o{ TimeSeriesScope : "group_id"
     TimeSeriesGroup ||--o{ TimeSeriesMetric : "group_id"
-    TimeSeriesScope ||--o{ TimeSeriesMetric : "scope_id 全局归属"
+    TimeSeriesScope ||--o{ TimeSeriesMetric : "scope_id 系统基础归属"
     TimeSeriesScope |o--o{ TimeSeriesMetricOverride : "scope_id 按选择器归属"
     TimeSeriesMetric ||..o{ TimeSeriesMetricOverride : "group_id, field_name"
     TimeSeriesMetric |o..o{ TimeSeriesReportValue : "group_id, field_name"
@@ -561,10 +447,10 @@ erDiagram
     TimeSeriesMetric {
         int field_id PK
         int group_id UK
-        string field_scope UK "default"
+        string field_scope UK "default，兼容占位"
         string field_name UK
-        int scope_id "全局页面分组"
-        json field_config "全局用户配置"
+        int scope_id "系统基础页面分组"
+        json field_config "系统与存量配置基线"
     }
     TimeSeriesScope {
         int id PK
@@ -572,13 +458,16 @@ erDiagram
         string selector_hash UK "新增，空串为全局"
         string scope_name UK "页面目录名"
         json selector "新增，NULL 为全局"
+        json dimension_config "维度 alias · common · hidden"
+        json auto_rules "全局分组的自动归类规则"
+        string create_from "data · user · default"
     }
     TimeSeriesMetricOverride {
         bigint id PK
         int group_id UK
         string selector_hash UK
         string field_name UK
-        json selector "service_name 与 scope_name"
+        json selector "{} · service_name · scope_name"
         json field_config "NULL 继承上一级"
         int scope_id "NULL 继承上一级"
     }
@@ -708,7 +597,7 @@ Histogram(duration_seconds)
 
 ### c. scope 身份
 
-**scope 由 scope 类型与规范标签串唯一确定，bmw 把 Collector 的 scope 值解码为标签后计算 `scope_hash`。**
+**scope 由类型与规范标签串唯一确定：bmw 先解码 Collector 的 scope 值，再按键名排序并拼接标签，最后计算 `scope_hash`。**
 
 ```text
 规范标签串 = 标签按键名升序，每个写成 k:v，以 || 连接
@@ -716,7 +605,7 @@ scope_hash = MD5(scope_type + 规范标签串)
 scope 11   = MD5("APM" + "scope_name:http||service_name:checkout")
 ```
 
-Collector 协议不变，bmw 按 scope 类型解码 *[1]*，解码与转义规则见「接收协议」：
+Collector 的 `__scope` 编码不变，元信息协议另新增 `__original_type` 并调整 `__type` 语义；bmw 按 scope 类型解码 *[1]*，解码与转义规则见「接收协议」：
 
 | scope 类型 | 解码后的 `labels` | 说明 |
 | --- | --- | --- |
@@ -731,12 +620,12 @@ DEFAULT 上报也建一个 scope，让作用于整个指标的元信息与普通
 按标签找 scope 不建索引表，读出本数据源全部 scope 的 `id` 与 `labels` 后在内存中过滤 *[1]*：
 
 ```sql
-SELECT id, labels FROM TimeSeriesReportScope WHERE group_id = 9;  -- 不选 report_value_ids
+SELECT id, labels FROM metadata_timeseriesreportscope WHERE group_id = 9;  -- 不选 report_value_ids
 ```
 
 - *[1] 不选列表可跳过溢出页：超过约 `8 KB` 的列表存在溢出页，更短的列表随行读入，不选它只省传输与解码。*
 
-每个数据源最多 `2,000` 个 scope、`60,000` 个取值。超限时 bmw 丢弃新 scope 或新取值并计数，防止 Pod 名等高基数标签撑大新表。
+每个数据源最多 `2,000` 个 scope、`6w` 个取值。超限时 bmw 丢弃新 scope 或新取值并计数，防止 Pod 名等高基数标签撑大新表。
 
 ### d. 生命周期
 
@@ -838,53 +727,44 @@ flowchart LR
 
 ### e. 与指标发现的分工
 
-**指标同步仍是指标项唯一的创建方：元信息链路不建指标项，只给新指标项提供分组提示，并在同一轮里清理过期的 scope 与取值。**
+**指标同步仍是指标项唯一的创建方，上报链路只保存事实与元信息，两者不互相推断页面分组。**
 
-改动叠加在现有 `RefreshTimeSeriesMetric` 链路上 *[1]* *[2]*：
+改动叠加在现有 `RefreshTimeSeriesMetric` 链路上 *[1]*：
 
 ```mermaid
 %%{init: {"flowchart": {"nodeSpacing": 28, "rankSpacing": 56, "wrappingWidth": 400}}}%%
 flowchart LR
     Refresh["RefreshTimeSeriesMetric()<br/>每 5 min"] -->|"BkBase 名单内"| BkBase["QueryMetricAndDimension()<br/>BkBase"]
     Refresh -->|"其余"| Redis["GetRedisData()<br/>Redis"]
-    BkBase -->|"useV2"| V2["useV2 分支<br/>field_scope = 分组维度值"]
-    BkBase -->|"v1"| V1["field_scope = default"]
-    Redis --> V1
-    V1 --> Scopes["BulkRefreshTSScopes()<br/>determineScopeNameForNewMetric()"]
-    V2 -.-> Scopes
+    BkBase --> Normalize["规范指标身份<br/>field_scope = default"]
+    Redis --> Normalize
+    Normalize --> Scopes["BulkRefreshTSScopes()<br/>auto_rules → 默认分组"]
     Scopes --> Metrics["BulkRefreshTSMetrics()<br/>差集新建、置为不活跃"]
     Metrics ==> TSM[("TimeSeriesMetric<br/>TimeSeriesScope")]
     Refresh --> Expire["MetricMetaSvc.Expire()<br/>删除过期 scope 与取值"]
     Collector["bk-collector"] --> Apply["MetricMetaSvc.Apply()"]
     Apply ==> New[("TimeSeriesReportScope<br/>TimeSeriesReportValue")]
     Expire ==> New
-    New -.-> Hints["MetricMetaSvc.PlacementHints()<br/>scope 标签给出分组名"]
-    Hints -->|"新建时的分组提示"| Scopes
 
     classDef old fill:#f1f5f9,stroke:#94a3b8,color:#334155
     classDef add fill:#ecfdf3,stroke:#16a34a,color:#14532d
     classDef change fill:#eff6ff,stroke:#2563eb,color:#1e3a8a
     classDef del fill:#fef2f2,stroke:#dc2626,color:#7f1d1d,stroke-dasharray:4 3
-    class BkBase,Redis,V1,Metrics,TSM,Collector old
-    class Refresh,Scopes change
-    class Apply,New,Expire,Hints add
-    class V2 del
-    linkStyle 6 stroke:#dc2626,stroke-dasharray:4 3
+    class BkBase,Redis,Metrics,TSM,Collector old
+    class Refresh,Normalize,Scopes change
+    class Apply,New,Expire add
 ```
 
-- *[1] V2 分支随白名单下线删除：删除时机见「发布顺序」，未收敛的 V2 数据源在此之前照旧同步。*
-- *[2] 分组提示失败不阻断同步：查询出错或新表不存在时返回空提示，新指标按 `auto_rules` 与默认分组归属。*
+- *[1] V2 分支随白名单下线删除：存量同名多行先按「APM V2 收敛」选出规范项；新指标只按全局页面分组的 `auto_rules` 与默认分组写系统基础 `scope_id`。*
 
 ### f. 现有功能怎么变
-
-**五处现有功能改读新入口，配置读取与服务视图改动最大：**
 
 | 现有功能 | 怎么变 | 详见 |
 | --- | --- | --- |
 | 配置读取 | 读取方改取解析器合成的 `effective_config` | 本节 |
 | 服务视图 | 按该服务上报的 scope 过滤，不再比对页面分组名 | 本节 |
-| 页面编辑 | 一个入口按选择器写指标项或覆盖表 | 「有效配置与页面编辑」 |
-| 新指标归属 | 分组提示改取 scope 标签，V2 前缀机制下线 | 「页面分组与归属」 |
+| 页面编辑 | 指标编辑统一写覆盖；分组与维度配置写页面分组 | 「有效配置与页面编辑」 |
+| 新指标归属 | 只按页面 `auto_rules` 与默认分组，V2 前缀机制下线 | 「页面分组与归属」 |
 | Histogram 展示 | 按 `original_type` 组族，一个族一个面板 | 「指标族与复合视图」 |
 
 **配置读取**：四个读取方都经解析器取单位与描述，指标项的查询语句不变：
@@ -900,7 +780,7 @@ flowchart LR
     Query --> Resolver["MetricConfigResolver<br/>合成 effective_config"]
     Info --> Resolver
     Resolver -.->|"按数据源一次预取"| New[("TimeSeriesMetricOverride<br/>TimeSeriesReportValue<br/>TimeSeriesReportScope")]
-    Resolver -.->|"第五级兜底"| RTF[("ResultTableField")]
+    Resolver -.->|"末级兜底"| RTF[("ResultTableField")]
 
     classDef old fill:#f1f5f9,stroke:#94a3b8,color:#334155
     classDef add fill:#ecfdf3,stroke:#16a34a,color:#14532d
@@ -961,34 +841,32 @@ flowchart LR
 
 **例子**
 
-分组 `31` 只属于 checkout，与全局分组 `22` 同名不冲突：
+分组 `31` 只属于 checkout，与全局分组 `22` 同名不冲突；分组 `21` 是系统默认的「未分组」：
 
 | id | selector_hash | selector | scope_name | 说明 |
 | --- | --- | --- | --- | --- |
-| 21 | `''` | NULL | `http` | 全局分组 |
+| 21 | `''` | NULL | `default` | 全局默认分组，页面显示「未分组」 |
 | 22 | `''` | NULL | `支付` | 全局分组 |
 | 31 | `md5("service_name:checkout")` | `{"service_name": "checkout"}` | `支付` | 只属于 checkout |
 
-指标所在分组取最具体选择器的覆盖 `scope_id`，都没有时用 `TimeSeriesMetric.scope_id`：
+指标所在分组按服务加 scope、服务、全局三级覆盖依次查找，都没有时才用 `TimeSeriesMetric.scope_id` 的系统基础分组：
 
 | 视图 | 可见的页面分组 | `duration_seconds_sum` 所在分组 | 来源 |
 | --- | --- | --- | --- |
-| 不分服务 | `21`、`22` | `22` | 指标项 `1003` 的全局 `scope_id` |
-| checkout | `21`、`22`、`31` | `31` | 覆盖 `1` |
-| cart | `21`、`22` | `22` | 指标项 `1003` 的全局 `scope_id` |
+| 不分服务 | `21`、`22` | `22` | 全局覆盖 `1` |
+| checkout | `21`、`22`、`31` | `31` | 服务覆盖 `2` |
+| cart | `21`、`22` | `22` | 继承全局覆盖 `1` |
 
 **新指标项的默认归属**
 
-新指标项的全局分组沿用现有归属规则，只把分组提示的来源换成 scope 标签 *[1]*：
+新指标项的系统基础分组只按页面配置决定：
 
-1. **分组提示**：取引用该指标的 scope 的 `scope_name`，落入同名全局分组 *[2]*。
-2. **自动规则**：没有提示时，指标名匹配用户分组的 `auto_rules` 正则。
-3. **默认分组**：都不命中时落入默认分组。
+1. **自动规则**：指标名匹配全局页面分组的 `auto_rules` 时，写入该分组的 `scope_id`。
+2. **默认分组**：未命中时写入 `scope_name=default` 的页面分组。
 
-- *[1] 晚到的元信息再归属一次：`1 h` 内新建、仍在默认分组的指标项出现提示时，重新归属一次。*
-- *[2] 多个提示取上报最多者：按引用该指标的 scope 数取提示，相同时按名称升序，指标同步只读写全局分组。*
+ReportScope 的 `scope_name` 只参与真实数据过滤，不查找、不创建、不移动 `TimeSeriesScope`。例如 `request_total` 只从 checkout · http 上报，但没有命中页面自动规则时，它仍进入「未分组」，不会自动创建 `http` 页面分组。
 
-例如 `request_total` 被 scope `11`、`13` 以 `http` 上报，被 `12` 以 `grpc` 上报。提示取 `http`，指标项 `1001` 落入分组 `21`。
+维度的 `alias`、`common` 与 `hidden` 保存在当前生效页面分组的 `dimension_config` 中，同一分组内的指标共享。服务需要独立维度别名时，先创建服务分组并用逐指标 Override 移入；Report 表不保存维度编辑。
 
 **V2 前缀机制下线**
 
@@ -996,37 +874,38 @@ flowchart LR
 
 | V2 机制 | 现有做法 | 下线后 |
 | --- | --- | --- |
-| 分组名前缀 | 多个分组维度的值拼成 `checkout\|\|http` 式的分组名 | 分组名只取 `scope_name` *[1]* |
+| 分组名前缀 | 多个分组维度的值拼成 `checkout\|\|http` 式的分组名 | 存量名称原样保留；新指标不再从上报 scope 派生分组名 *[1]* |
 | 每个前缀一个默认分组 | 自动补建 `<前缀>\|\|default` | 只有一个全局默认分组 |
 | 按前缀匹配自动规则 | 只在同前缀的分组里匹配 `auto_rules` | 在全部全局分组里匹配 |
 
-- *[1] 分组维度不含服务：APM 默认分组维度只有 `scope_name`，配置了 `service_name` 的存量数据源如何处理「待确认」。*
+- *[1] 迁移边界：存量 `checkout||http` 等名称按普通页面分组继续展示，迁移不从 ReportScope 重建或改名。*
 
 ### h. 有效配置与页面编辑
 
-**有效配置按配置键逐个取第一个已设置的值，用户修改总在上报值之前。用户每次修改只写一张表。**
+**有效配置按配置键逐个取第一个已设置的值。所有用户指标编辑统一写 Override；页面分组与维度配置写 `TimeSeriesScope`。**
 
 **生效顺序**
 
-解析器 `MetricConfigResolver` 按以下五级逐级查找 *[1]*。不分服务视图从第三级开始。服务视图不指定 scope 名时，指标只由一个 scope 名上报才用第一级。例如 checkout 的 `queue_size` 只在 grpc 下上报，服务视图显示 checkout · grpc 页设置的别名：
+解析器 `MetricConfigResolver` 按以下六级逐级查找 *[1]*。服务视图不指定 scope 名时，指标只由一个 scope 名上报才使用第一级。例如 checkout 的 `queue_size` 只在 grpc 下上报，服务视图显示 checkout · grpc 页设置的别名：
 
 ```mermaid
 %%{init: {"flowchart": {"nodeSpacing": 28, "rankSpacing": 48, "wrappingWidth": 400}}}%%
 flowchart LR
     L1["TimeSeriesMetricOverride<br/>service_name 与 scope_name"] -->|"未设置"| L2["TimeSeriesMetricOverride<br/>service_name"]
-    L2 -->|"未设置"| L3["TimeSeriesMetric<br/>field_config 全局"]
-    L3 -->|"未设置"| L4["TimeSeriesReportValue<br/>meta 上报取值"]
-    L4 -->|"未设置"| L5["ResultTableField<br/>表级兜底与默认值"]
+    L2 -->|"未设置"| L3["TimeSeriesMetricOverride<br/>全局 selector={}"]
+    L3 -->|"未设置"| L4["TimeSeriesMetric<br/>系统与存量基线"]
+    L4 -->|"未设置"| L5["TimeSeriesReportValue<br/>meta 上报取值"]
+    L5 -->|"未设置"| L6["ResultTableField<br/>表级兜底与默认值"]
 
     classDef add fill:#ecfdf3,stroke:#16a34a,color:#14532d
     classDef old fill:#f1f5f9,stroke:#94a3b8,color:#334155
-    class L1,L2,L4 add
-    class L3,L5 old
+    class L1,L2,L3,L5 add
+    class L4,L6 old
 ```
 
-- *[1] 空值不覆盖：管理页整包回写时把用户没填的键写成 `""`、`0`、`[]`，所以这三种值与键不存在都视为未设置。*
+- *[1] 以键是否存在判断覆盖：`false`、`0`、`""` 与 `[]` 都可能是用户的有效设置；清除继承时显式删除该键。*
 
-第四级的上报取值按视图选出：
+第五级的上报取值按视图选出：
 
 | 视图 | 选用的取值 |
 | --- | --- |
@@ -1036,55 +915,56 @@ flowchart LR
 
 **配置键映射**
 
-五个配置项都按生效顺序查找，单位、函数与聚合周期的上报值要先转换：
+五个配置项都按六级生效顺序查找，单位、函数与聚合周期的上报值要先转换：
 
 | 配置项 | `field_config` 键 | `meta` 键 | 上报值的转换 | 表级兜底与默认值 |
 | --- | --- | --- | --- | --- |
 | 单位 | `unit` | `unit` | [a] UCUM 单位转为 `core/unit` 已注册的 ID，未命中时不采用<br />[b] 时间与字节：`us → µs`、`min → m`、`By → bytes`<br />[c] 无量纲与百分比：`1 → none`、`% → percent` | `ResultTableField.unit` |
-| 描述 | `alias` | `description` | 无 | `ResultTableField.description` |
+| 描述 | `alias` | `description` | -- | `ResultTableField.description` |
 | 汇聚方法 | `aggregate_method` | `usage` | 映射表「待确认」 | `AVG` |
 | 函数 | `function` | `temporality` | `cumulative` 的 Counter 补 `increase` | `[]` |
 | 聚合周期 | `interval` | `interval` | 毫秒转为秒 | `auto` |
 
 **写入路由**
 
-用户修改只走一个入口，按选择器写一张表 *[1]*，清除覆盖即恢复继承 *[2]*。上报值只由 bmw 写入：
+用户指标修改只走一个入口，三种选择器都写 Override；清除覆盖即恢复继承 *[1]*。页面分组 CRUD 与维度别名、常用、隐藏配置写 `TimeSeriesScope`，上报值只由 bmw 写入：
 
 ```mermaid
 %%{init: {"flowchart": {"nodeSpacing": 28, "rankSpacing": 56, "wrappingWidth": 400}}}%%
 flowchart LR
     Page["ModifyCustomTsFields<br/>管理页保存"] --> Modify["modify_metric()<br/>group_id, field_name, selector"]
     Apm["ApmModifyCustomTsFields<br/>服务页保存"] -->|"selector"| Modify
-    Modify ==>|"selector = {}"| TSM[("TimeSeriesMetric<br/>field_config · scope_id")]
-    Modify ==>|"selector 非空"| Override[("TimeSeriesMetricOverride<br/>field_config · scope_id")]
+    Modify ==>|"selector = {} / service / scope"| Override[("TimeSeriesMetricOverride<br/>field_config · scope_id")]
+    Group["页面分组 · 维度编辑"] ==> TSS[("TimeSeriesScope<br/>分组 · dimension_config")]
     Apply["MetricMetaSvc.Apply()"] ==> New[("TimeSeriesReportValue<br/>TimeSeriesReportScope")]
 
     classDef old fill:#f1f5f9,stroke:#94a3b8,color:#334155
     classDef add fill:#ecfdf3,stroke:#16a34a,color:#14532d
     classDef change fill:#eff6ff,stroke:#2563eb,color:#1e3a8a
-    class TSM old
-    class Page,Apm change
-    class Modify,Override,Apply,New add
+    class Page,Apm,Group change
+    class Modify,Override,TSS,Apply,New add
 ```
 
-- *[1] 全局修改不进覆盖表：读取方与 bmw 的指标同步都直接读写 `TimeSeriesMetric`，存量约 `100w` 指标项零搬迁，覆盖表保持约 `0.1%` 的稀疏度。*
-- *[2] 来源随有效配置返回：每个键标明来自本服务覆盖还是继承全局，清除覆盖后回到上一级的生效值。*
+- *[1] 来源随有效配置返回：每个键标明来自哪一级，清除后回到上一级；迁移不批量补约 `100w` 条全局 Override，只在用户后续编辑时按需创建。*
 
 例子中的四次修改分别写入：
 
 | 修改 | `modify_metric` 参数 | 写入的行 |
 | --- | --- | --- |
-| 全局把 `duration_seconds_sum` 的别名改为「请求耗时」 | [a] `selector={}`<br />[b] `field_config={"alias": "请求耗时"}` | 指标项 `1003` 的 `field_config` |
-| 全局把它移入「支付」 | [a] `selector={}`<br />[b] `scope_id=22` | 指标项 `1003` 的 `scope_id`：`21 → 22` |
-| checkout 把它的单位改为 `ms`，并移入自己的「支付」 | [a] `selector={"service_name": "checkout"}`<br />[b] `field_config={"unit": "ms"}`<br />[c] `scope_id=31` | 新增覆盖 `1` |
-| checkout 在 `grpc` 下把 `queue_size` 的别名改为「gRPC 队列长度」 | [a] `selector={"service_name": "checkout", "scope_name": "grpc"}`<br />[b] `field_config={"alias": "gRPC 队列长度"}` | 新增覆盖 `2` |
+| 全局把 `duration_seconds_sum` 的别名改为「请求耗时」 | [a] `selector={}`<br />[b] `field_config={"alias": "请求耗时"}` | upsert 全局覆盖 `1` |
+| 全局把它移入「支付」 | [a] `selector={}`<br />[b] `scope_id=22` | 合并到全局覆盖 `1` |
+| checkout 把它的单位改为 `ms`，并移入自己的「支付」 | [a] `selector={"service_name": "checkout"}`<br />[b] `field_config={"unit": "ms"}`<br />[c] `scope_id=31` | 新增服务覆盖 `2` |
+| checkout 在 `grpc` 下把 `queue_size` 的别名改为「gRPC 队列长度」 | [a] `selector={"service_name": "checkout", "scope_name": "grpc"}`<br />[b] `field_config={"alias": "gRPC 队列长度"}` | 新增 scope 覆盖 `3` |
 
-后两次修改写入的覆盖：
+上述四次修改后的覆盖表：
 
 | id | selector | field_name | field_config | scope_id |
 | --- | --- | --- | --- | --- |
-| 1 | `{"service_name": "checkout"}` | `duration_seconds_sum` | `{"unit": "ms"}` | 31 |
-| 2 | `{"service_name": "checkout", "scope_name": "grpc"}` | `queue_size` | `{"alias": "gRPC 队列长度"}` | NULL |
+| 1 | `{}` | `duration_seconds_sum` | `{"alias": "请求耗时"}` | 22 |
+| 2 | `{"service_name": "checkout"}` | `duration_seconds_sum` | `{"unit": "ms"}` | 31 |
+| 3 | `{"service_name": "checkout", "scope_name": "grpc"}` | `queue_size` | `{"alias": "gRPC 队列长度"}` | NULL |
+
+页面分组 selector 只控制目录在哪些页面可见，不自动纳入该页面的全部指标。同一 selector 下一个指标只属于一个页面分组；把 `N` 个现有指标移入分组时批量 upsert `N` 条 Override。未来指标也要自动进入时，另配全局分组 `auto_rules`。
 
 **读取结果**
 
@@ -1092,21 +972,21 @@ flowchart LR
 
 | 视图 | 单位 | 别名 | 页面分组 |
 | --- | --- | --- | --- |
-| 不分服务 | [a] `s`<br />[b] 取值 `3`、`5` 各被 `1` 个 scope 引用，取 ID 小者 `3` | 请求耗时，来自全局 | 支付 `22`，来自全局 |
-| checkout · `http` | [a] `ms`<br />[b] 来自覆盖 `1` | 请求耗时，来自全局 | 支付 `31`，来自覆盖 `1` |
-| cart · `http` | [a] `ms`<br />[b] scope `13` 引用取值 `5` | 请求耗时，来自全局 | 支付 `22`，来自全局 |
+| 不分服务 | [a] `s`<br />[b] 取值 `3`、`5` 各被 `1` 个 scope 引用，取 ID 小者 `3` | 请求耗时，来自全局覆盖 `1` | 支付 `22`，来自全局覆盖 `1` |
+| checkout · `http` | [a] `ms`<br />[b] 来自服务覆盖 `2` | 请求耗时，继承全局覆盖 `1` | 支付 `31`，来自服务覆盖 `2` |
+| cart · `http` | [a] `ms`<br />[b] scope `13` 引用取值 `5` | 请求耗时，继承全局覆盖 `1` | 支付 `22`，继承全局覆盖 `1` |
 
 **同步不覆盖用户设置**
 
 | 写入方 | 入口 | 写入 | 从不写 |
 | --- | --- | --- | --- |
 | bmw 元信息写入 | `MetricMetaSvc.Apply()` | 取值与 scope | 指标项、覆盖与页面分组 |
-| bmw 指标同步 | `RefreshTimeSeriesMetric()` | [a] 新建指标项与活跃状态<br />[b] 新建与 `1 h` 重放时写全局 `scope_id` | 覆盖与服务分组 |
-| 用户 | `modify_metric()` | 指标项的配置与分组、覆盖与页面分组 | 取值与 scope |
+| bmw 指标同步 | `RefreshTimeSeriesMetric()` | [a] 新建指标项与活跃状态<br />[b] 仅新建时按 `auto_rules → default` 写系统基础 `scope_id` | 覆盖、用户配置与服务分组 |
+| 用户 | [a] `modify_metric()`<br />[b] 页面分组接口 | [a] 全局、服务与 scope Override<br />[b] 页面分组与 `dimension_config` | 指标项基础归属、取值与上报 scope |
 
 ### i. 读取路径
 
-**新表有两个查询方向：服务视图按 scope 取全部指标，属于高频读取；分组提示按指标取全部 scope，只在新建指标项与 `1 h` 重放时调用。**
+**新表只服务真实上报范围与上报元信息读取；页面归属不查询 Report 表。**
 
 **按 scope 取所有指标**
 
@@ -1128,30 +1008,11 @@ flowchart LR
 
 - *[1] 第一步不读列表：未命中的 scope 不读列表溢出页，S2 场景实测 p50 `15.5 ms`。*
 
-**按指标取所有 scope**
-
-分组提示为 `duration_seconds_sum` 找上报它的 scope，只要数量时直接读 `scope_count` *[1]*：
-
-```mermaid
-%%{init: {"flowchart": {"nodeSpacing": 24, "rankSpacing": 40, "wrappingWidth": 400}}}%%
-flowchart LR
-    P1["① TimeSeriesReportValue<br/>SELECT id, scope_count<br/>WHERE group_id = 9<br/>AND field_name = duration_seconds_sum"] -->|"3 · 5"| P2["② TimeSeriesReportScope<br/>SELECT id, labels, report_value_ids<br/>WHERE group_id = 9"]
-    P2 -->|"含 3 或 5：11 · 13"| P3["③ 内存取 scope_name<br/>http · http<br/>分组提示 http"]
-    P1 -.->|"只要数量"| Cnt(["scope_count<br/>3：1 · 5：1"])
-
-    classDef add fill:#ecfdf3,stroke:#16a34a,color:#14532d
-    classDef io fill:#ffffff,stroke:#334155,color:#0f172a
-    class P1,P2,P3 add
-    class Cnt io
-```
-
-- *[1] 低频调用可读全部列表：S1 实测 p50 `16.7 ms`，见「性能基线」。*
-
 **查询接口与服务范围对象**
 
 查询接口新增 `report_labels` 与 `view` 两个可选参数，每个指标多返回七个字段，协议见「查询与写入接口」。
 
-服务范围对象每个请求构造一次，汇总该服务各指标上报的 `scope_name`，接口见「服务范围对象」。指标树按 `visible()` 过滤，图表与维度值按 `scope_name_filter()` 写 `scope_name` 条件。维度值请求要带 `field_id`，后端才能反查 scope。
+服务范围对象每个请求构造一次，汇总该服务各指标真实上报的 `scope_name`，接口见「服务范围对象」。指标树按 `visible()` 过滤，图表与维度值按 `scope_name_filter()` 写 `scope_name` 条件。维度值请求要带 `field_id`，后端才能反查 scope；不得把 `TimeSeriesMetric.field_scope` 转成 scope 条件。
 
 **读取约束**
 
@@ -1271,7 +1132,7 @@ checkout · `http` 视图中，取值 `2`、`3`、`4` 组成 `duration_seconds` 
 
 - *[1] `alias` 非空即表示族面板：读取方按 `alias` 区分统计方法。*
 - *[2] 示例只节选三个 target：SUM 与 COUNT 同构，其余分位方法只改 `scalar`，`table` 是数据源 `9` 结果表的示意值。*
-- *[3] 单位与标题取 `_sum` 的有效配置：checkout 视图中覆盖 `1` 把单位改为 `ms`，别名「请求耗时」来自指标项 `1003`。*
+- *[3] 单位与标题取 `_sum` 的有效配置：checkout 视图中服务覆盖 `2` 把单位改为 `ms`，别名「请求耗时」来自全局覆盖 `1`。*
 
 **现有代码的调整**
 
@@ -1368,12 +1229,12 @@ class TimeSeriesReportScope(models.Model):
 
 
 class TimeSeriesMetricOverride(models.Model):
-    """覆盖：用户在一个选择器下对一个指标的修改。全局修改写 TimeSeriesMetric，不进这张表。"""
+    """覆盖：用户在全局、服务或服务 scope 选择器下对一个指标的修改。"""
 
     id = models.BigAutoField(primary_key=True)
     group_id = models.IntegerField()
-    selector_hash = models.CharField(max_length=32, db_collation=ASCII)  # selector_hash(selector)，永不为空串
-    selector = models.JSONField(null=True)                               # {"service_name": "checkout"} 或再带 scope_name
+    selector_hash = models.CharField(max_length=32, db_collation=ASCII)  # 全局 {} 为 ""，其余为 MD5
+    selector = models.JSONField(null=True)                               # {}、{service_name} 或再带 scope_name
     field_name = models.CharField(max_length=255, db_collation=UTF8)
     field_config = models.JSONField(null=True)                           # 只存设置过的键，其余继承上一级
     scope_id = models.IntegerField(null=True)                            # 该选择器下的页面分组，NULL 继承上一级
@@ -1387,6 +1248,9 @@ class TimeSeriesMetricOverride(models.Model):
 # metadata/models/custom_report/time_series.py：TimeSeriesScope 新增两列并换唯一键
 class TimeSeriesScope(models.Model):
     ...
+    dimension_config = models.JSONField(default=dict)                               # 维度 alias · common · hidden
+    auto_rules = models.JSONField(default=list)                                     # 新指标自动归类规则
+    create_from = models.CharField(max_length=32, default="data")                    # data · user · default
     selector = models.JSONField(null=True)                                           # NULL 表示全局分组
     selector_hash = models.CharField(max_length=32, default="", db_collation=ASCII)  # "" 表示全局分组
 
@@ -1510,26 +1374,27 @@ flowchart LR
 | 带 scope 标签 | ① 找 scope | `TimeSeriesReportScope.filter(group_id).values("id", "labels", "last_seen")` | 唯一键前缀，不选二进制列 *[2]* |
 | 带 scope 标签 | ② 读取值 ID | `TimeSeriesReportScope.filter(id__in).values("id", "report_value_ids")` | 主键，每批 `1,000` 个 |
 | 带 scope 标签 | ③ 读取值 | `TimeSeriesReportValue.filter(id__in)` | 主键，每批 `1,000` 个 |
-| 带 scope 标签 | ④ 读覆盖 | `TimeSeriesMetricOverride.filter(group_id, selector_hash__in)` | 唯一键前缀，哈希最多 `1 + scope_name 数` 个 |
+| 带 scope 标签 | ④ 读覆盖 | `TimeSeriesMetricOverride.filter(group_id, selector_hash__in)` | 唯一键前缀，读取 scope、服务与全局哈希 |
 | 不分服务 | ① 读取值 | `TimeSeriesReportValue.filter(group_id, field_name__in)` | 唯一键前缀，每批 `500` 个指标名 |
 | 不分服务 | ② 读 DEFAULT scope | `TimeSeriesReportScope.filter(group_id, scope_hash)` | 唯一键 |
+| 不分服务 | ③ 读全局覆盖 | `TimeSeriesMetricOverride.filter(group_id, selector_hash="")` | 唯一键前缀 |
 
 - *[1] 三种写法一律不用：三列行构造 `IN`、`(a > ? OR (a = ? AND b > ?))` 分段扫描、按标签回连其他表。*
 - *[2] 不选二进制列就不读溢出页：`report_value_ids` 超过约 `8 KB` 时存在溢出页，第一步不选该列。*
 
-解析器以视图的 scope 标签 `labels` 构造，`resolve()` 逐个配置键合成五级配置：
+解析器以视图的 scope 标签 `labels` 构造，`resolve()` 逐个配置键合成六级配置：
 
 ```python
 RESOLVED_KEYS = ("unit", "alias", "aggregate_method", "function", "interval")
-OVERRIDE_KEYS = RESOLVED_KEYS                  # 覆盖不接受 disabled 与 hidden，停用与隐藏只能全局操作
-UNSET_VALUES = (None, "", 0, [])
+OVERRIDE_KEYS = (*RESOLVED_KEYS, "hidden", "disabled")
 UCUM_UNIT_ALIASES = {"us": "µs", "min": "m", "By": "bytes", "1": "none", "%": "percent"}  # 未列出的按原值匹配 core/unit
 
 
 class Source(StrEnum):
     SCOPE = "scope"        # {service_name, scope_name} 覆盖
     SERVICE = "service"    # {service_name} 覆盖
-    GLOBAL = "global"      # TimeSeriesMetric.field_config 与 scope_id
+    GLOBAL = "global"      # {} 覆盖
+    METRIC = "metric"      # TimeSeriesMetric 系统与存量基线
     REPORT = "report"      # 上报取值
     TABLE = "table"        # ResultTableField 与默认值
 
@@ -1548,12 +1413,12 @@ class MetricConfigResolver:
         hits = self._hits.get(metric.field_name, [])   # [(scope, value)]，按 last_seen 降序、scope.id 升序
         value, conflict = self._report_value(metric.field_name, hits)
         layers = [*self._override_layers(metric.field_name, hits),
-                  (Source.GLOBAL, metric.field_config or {}),
+                  (Source.METRIC, metric.field_config or {}),
                   (Source.REPORT, convert_report_meta(value)),     # 转换规则见「有效配置与页面编辑」
                   (Source.TABLE, table_fallback(rt_field))]
         config, source = {}, {}
-        for key in RESOLVED_KEYS:                                  # 每个键各自取第一个已设置的值，都未设置时取默认值
-            src, layer = next(((s, l) for s, l in layers if l.get(key) not in UNSET_VALUES), layers[-1])
+        for key in RESOLVED_KEYS:                                  # 按键是否存在取值；False、0、""、[] 都是有效覆盖
+            src, layer = next(((s, l) for s, l in layers if key in l), layers[-1])
             config[key], source[key] = layer[key], src
         scope_id, source["scope_id"] = self._page_group(metric, layers)
         return ResolvedMetric(config, source, scope_id, value, conflict,
@@ -1561,13 +1426,15 @@ class MetricConfigResolver:
                               family=metric_family_of(value, metric.field_name))
 
     def _override_layers(self, field_name, hits) -> list[tuple[Source, dict]]:
-        if not self.labels:                                        # 不分服务的视图只有全局一级
-            return []
-        service = {"service_name": self.labels["service_name"]}
-        scope_names = {s.labels.get("scope_name", "") for s, _ in hits}
-        scope_name = self.labels.get("scope_name") or (scope_names.pop() if len(scope_names) == 1 else None)
-        layers = [(Source.SCOPE, self._override(field_name, {**service, "scope_name": scope_name}))] if scope_name else []
-        return [*layers, (Source.SERVICE, self._override(field_name, service))]
+        layers = []
+        if self.labels:
+            service = {"service_name": self.labels["service_name"]}
+            scope_names = {s.labels.get("scope_name", "") for s, _ in hits}
+            scope_name = self.labels.get("scope_name") or (scope_names.pop() if len(scope_names) == 1 else None)
+            if scope_name:
+                layers.append((Source.SCOPE, self._override(field_name, {**service, "scope_name": scope_name})))
+            layers.append((Source.SERVICE, self._override(field_name, service)))
+        return [*layers, (Source.GLOBAL, self._override(field_name, {}))]
 
     def _report_value(self, field_name, hits) -> tuple[TimeSeriesReportValue | None, bool]:
         if self.labels:                                            # 同一服务多个 scope 引用不同取值时取 last_seen 最近者
@@ -1580,10 +1447,12 @@ class MetricConfigResolver:
         return pick, len({(v.metric_type, v.original_type) for v in candidates}) > 1  # 任一类型不止一种时返回冲突标志
 
     def _page_group(self, metric, layers) -> tuple[int | None, Source]:
-        for src, override in layers[:-3]:                          # 最具体的覆盖在前
+        for src, override in layers:                               # scope → service → global
+            if src not in {Source.SCOPE, Source.SERVICE, Source.GLOBAL}:
+                break
             if override.get("scope_id") is not None:
                 return override["scope_id"], src
-        return metric.scope_id, Source.GLOBAL
+        return metric.scope_id, Source.METRIC
 
 
 # original_type 为 histogram 且 field_name 是规范化原名加 _bucket、_sum、_count、_min、_max 时返回 {"original_name", "role"}
@@ -1592,19 +1461,19 @@ def metric_family_of(value: TimeSeriesReportValue | None, field_name: str) -> di
 
 下表可直接作为单测用例：前三行是 `duration_seconds_sum` 的单位按生效顺序逐级查找的结果，与「有效配置与页面编辑」一致，末行是 `queue_size` 的别名。
 
-| 视图 | `{service_name, scope_name}` 覆盖 | `{service_name}` 覆盖 | 全局 `field_config` | 上报取值 | 生效值与来源 |
-| --- | --- | --- | --- | --- | --- |
-| 不分服务 | 不参与 | 不参与 | 未设置 | 取值 3，`s` *[1]* | `s`，`report` |
-| checkout · http | 无 | 覆盖 1，`ms` | 未设置 | 取值 3，`s` | `ms`，`service` |
-| cart · http | 无 | 无 | 未设置 | 取值 5，`ms` | `ms`，`report` |
-| checkout，`queue_size` 别名 | 覆盖 2，gRPC 队列长度 *[2]* | 无 | 未设置 | 取值 6，未设置 | gRPC 队列长度，`scope` |
+| 视图 | `{service_name, scope_name}` 覆盖 | `{service_name}` 覆盖 | `{}` 覆盖 | 指标基线 | 上报取值 | 生效值与来源 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 不分服务 | 不参与 | 不参与 | 无单位 | 未设置 | 取值 3，`s` *[1]* | `s`，`report` |
+| checkout · http | -- | 覆盖 2，`ms` | -- | -- | 取值 3，`s` | `ms`，`service` |
+| cart · http | -- | -- | -- | -- | 取值 5，`ms` | `ms`，`report` |
+| checkout，`queue_size` 别名 | 覆盖 3，gRPC 队列长度 *[2]* | -- | -- | -- | 取值 6，未设置 | gRPC 队列长度，`scope` |
 
 - *[1] 并列时取较小 ID：取值 3、5 各被 `1` 个 scope 引用，没有 DEFAULT scope，按 ID 取 3。*
-- *[2] scope 名唯一时补全选择器：`queue_size` 在 checkout 下只由 grpc 上报，服务视图按 checkout · grpc 取覆盖 2。*
+- *[2] scope 名唯一时补全选择器：`queue_size` 在 checkout 下只由 grpc 上报，服务视图按 checkout · grpc 取覆盖 3。*
 
 | 变更点 *[1]* | 目标 |
 | --- | --- |
-| **[Add]** `metadata.models.custom_report.metric_config.MetricConfigResolver` | 按上述五级合成有效配置与页面归属，返回来源与冲突标志 |
+| **[Add]** `metadata.models.custom_report.metric_config.MetricConfigResolver` | 按上述六级合成有效配置与页面归属，返回来源与冲突标志 |
 | **[Change]** `TimeSeriesMetric.to_metric_info`<br />`TimeSeriesMetric.to_metric_info_with_label` | [a] 新增关键字参数 `resolver: MetricConfigResolver \| None`<br />[b] `description` 与 `unit` 改取 `resolve()` 的结果<br />[c] 未传时按单指标构造解析器 |
 | **[Change]** `TimeSeriesGroup.get_metric_info_list`<br />`TimeSeriesGroup.get_metric_info_list_with_label` | 为该数据源构造不带标签的解析器并预取，传给逐指标的转换方法 |
 | **[Change]** `TimeSeriesGroup.batch_get_metric_info_maps` | 增加返回值 `resolver_by_group`，取值按 `group_id__in` 每批 `500` 个数据源预取 |
@@ -1624,15 +1493,13 @@ flowchart LR
     Svc["FieldsModifyService<br/>apply_change()"] -->|"selector"| CU["create_or_update_time_series_metric()<br/>api.metadata"]
     CU --> Write["CreateOrUpdateTimeSeriesMetricResource<br/>metadata.resources"]
     Write --> Modify["modify_metric()"]
-    Modify ==>|"selector = {}"| TSM[("TimeSeriesMetric<br/>field_config · scope_id")]
-    Modify ==>|"selector ≠ {}"| Override[("TimeSeriesMetricOverride")]
+    Modify ==>|"selector = {} / service / scope"| Override[("TimeSeriesMetricOverride")]
 
     classDef add fill:#ecfdf3,stroke:#16a34a,color:#14532d
     classDef change fill:#eff6ff,stroke:#2563eb,color:#1e3a8a
     classDef old fill:#f1f5f9,stroke:#94a3b8,color:#334155
     class Resolver,Modify,Override add
     class Conv,Gw,Res,DTO,Svc,CU,Write change
-    class TSM old
 ```
 
 **查询协议**：`QueryTimeSeriesMetricResource` 与 `QueryTimeSeriesScopeResource` 新增两个可选参数：
@@ -1650,7 +1517,7 @@ flowchart LR
   "name": "duration_seconds_sum",
   "field_scope": "default",
   "scope": {"id": 31, "name": "支付", "create_from": "user", "selector": {"service_name": "checkout"}},
-  "field_config": {"alias": "请求耗时"},
+  "field_config": {},
   "override": {"selector": {"service_name": "checkout"}, "field_config": {"unit": "ms"}, "scope_id": 31},
   "meta": {"value_id": 3, "original_name": "duration_seconds", "original_type": "histogram", "metric_type": "counter", "unit": "s"},
   "effective_config": {"unit": "ms", "alias": "请求耗时", "aggregate_method": "AVG", "function": [], "interval": "auto"},
@@ -1669,7 +1536,7 @@ flowchart LR
 | `metrics[].override` | `object \| null` | 是 | 选择器与 `report_labels` 完全相同的覆盖，供页面编辑与清除 |
 | `metrics[].meta` | `object \| null` | 是 | 该视图解析出的上报取值，`value_id` 是取值主键 |
 | `metrics[].effective_config` | `object` | 是 | [a] 按「有效配置与页面编辑」合成的有效配置<br />[b] 键为 `RESOLVED_KEYS` |
-| `metrics[].effective_source` | `object` | 是 | 每个键与 `scope_id` 的来源，取 `Source` 的五个值之一 |
+| `metrics[].effective_source` | `object` | 是 | 每个键与 `scope_id` 的来源，取 `Source` 的六个值之一 |
 | `metrics[].type_conflict` | `bool` | 是 | 候选取值的 `metric_type` 或 `original_type` 不止一种 |
 | `metrics[].report_scopes[]` | `array<object> \| null` | 是 | [a] 命中视图且上报该指标的 scope 标签<br />[b] 数据源没有任何 scope 时为 `null`<br />[c] 有 scope 但都未上报时为 `[]` *[1]* |
 | `metrics[].family` | `object \| null` | 是 | [a] 所属指标族与族内角色 `role`，规则见「指标族与复合视图」<br />[b] 由 `metric_family_of()` 计算，`key` 由有效页面分组与原名组成 |
@@ -1678,7 +1545,7 @@ flowchart LR
 
 **页面分组查询**：`QueryTimeSeriesScopeResource` 不带 `report_labels` 时只返回全局分组，旧调用方看到的结果不变。带 `report_labels` 时返回全局分组与选择器命中该视图的分组，指标按有效页面分组归入，`duration_seconds_sum` 在 checkout 视图归入 `31`，在 cart 视图归入 `22`。
 
-**写入路由**：入口 `modify_metric()` 按选择器写指标项或覆盖，路由规则见「有效配置与页面编辑」：
+**写入路由**：入口 `modify_metric()` 对三种选择器都写 Override，路由规则见「有效配置与页面编辑」：
 
 ```python
 # metadata/models/custom_report/metric_report.py
@@ -1686,11 +1553,9 @@ flowchart LR
 def modify_metric(group_id: int, field_name: str, selector: Mapping[str, str],
                   field_config: Mapping | None = None, scope_id: int | None = None) -> None:
     selector = normalize_selector(selector)
-    if not selector:                                               # 全局：沿用 TimeSeriesMetric.batch_create_or_update
-        return _modify_global(group_id, field_name, field_config, scope_id)
     inherited = MetricConfigResolver(group_id, selector).inherited(field_name)  # 去掉本级覆盖后的生效值与页面分组
     config = {k: v for k, v in (field_config or {}).items()
-              if k in OVERRIDE_KEYS and v not in UNSET_VALUES and v != inherited.config.get(k)}
+              if k in OVERRIDE_KEYS and v != inherited.config.get(k)}
     scope_id = None if scope_id == inherited.scope_id else scope_id
     _check_page_group(group_id, selector, scope_id)                # 分组的选择器必须是本选择器的子集
     key = {"group_id": group_id, "selector_hash": selector_hash(selector), "field_name": field_name}
@@ -1706,7 +1571,7 @@ def modify_metric(group_id: int, field_name: str, selector: Mapping[str, str],
 | 校验 | 规则 |
 | --- | --- |
 | 选择器 | 只能是三级之一，值不为空且不含 `\|\|` |
-| 配置键 | 只接受 `OVERRIDE_KEYS`，带 `disabled` 时拒绝 |
+| 配置键 | 只接受 `OVERRIDE_KEYS`；`disabled`、`hidden` 与显式空值按键存在即生效 |
 | 页面分组 | [a] 分组属于该数据源<br />[b] 分组的选择器是写入选择器的子集，即全局分组或同一服务的分组 |
 | 指标项 | 只能修改已有指标项，选择器下不能新建 |
 
@@ -1723,7 +1588,7 @@ def modify_metric(group_id: int, field_name: str, selector: Mapping[str, str],
 }
 ```
 
-第一项的 `alias` 与全局相同，不写入覆盖，落库结果即例子中的覆盖 1。
+第一项的 `alias` 与全局覆盖相同，不重复写入服务层，落库结果即例子中的服务覆盖 `2`。
 
 **页面分组带选择器**：页面分组只开放全局与 `{service_name}` 两级，即新建到整个数据源或某个服务。按服务建分组受开关控制，开放时机见「发布顺序」：
 
@@ -1746,7 +1611,7 @@ def modify_metric(group_id: int, field_name: str, selector: Mapping[str, str],
 | --- | --- |
 | **[Change]** `metadata.resources.resources.QueryTimeSeriesMetricResource` | [a] 声明 `report_labels` 与 `view`<br />[b] 每项输出上表的新字段<br />[c] `view=family` 的节点分页见「族视图与 Histogram 复合面板」 |
 | **[Change]** `metadata.resources.resources.QueryTimeSeriesScopeResource` | [a] 声明 `report_labels`<br />[b] 按视图返回分组并归入指标，每项带新字段 |
-| **[Change]** `metadata.resources.resources.CreateOrUpdateTimeSeriesMetricResource` | 声明 `selector` 与 `reset_override`，选择器非空时逐项调用 `modify_metric()` |
+| **[Change]** `metadata.resources.resources.CreateOrUpdateTimeSeriesMetricResource` | 声明 `selector` 与 `reset_override`，三种选择器都逐项调用 `modify_metric()` |
 | **[Change]** `api.metadata.default` 的五个同名资源 | 声明上述参数并原样透传 |
 | **[Change]** `monitor_web.custom_report.handlers.metric.query.MetricQueryConverter`<br />`monitor_web.custom_report.handlers.metric.query.ScopeQueryConverter` | 查询方法加 `report_labels` 与 `view`，写入方法加 `selector` |
 | **[Change]** `monitor_web.custom_report.handlers.metric.query.MetricQueryResponseDTO`<br />`monitor_web.custom_report.handlers.metric.query.ScopeQueryMetricResponseDTO` | 解析新字段，缺失时置 `None`，`scope.create_from` 平铺为 `scope_create_from` |
@@ -1760,7 +1625,7 @@ def modify_metric(group_id: int, field_name: str, selector: Mapping[str, str],
 | 删除数据源 | `TimeSeriesGroup.remove_metrics` | 该数据源在三张新表中的全部行，每批按主键删 `1,000` 行 |
 | 命令删除指标项 | `check_ts_metrics.Command._delete` | 调用 `purge_metric_report()` |
 | bmw 删除不活跃指标项 | `TimeSeriesMetricSvc.BulkUpdateMetricsByKeys` | Go 侧按 `purge_metric_report()` 同样清理，见「消费与写入」 |
-| 管理页删除指标 | `FieldsModifyService.delete_metric` | 不清理，只把 `scope_id` 置 `0`，恢复后覆盖仍生效 |
+| 管理页删除指标 | `FieldsModifyService.delete_metric` | 按请求 selector 写 Override `disabled=true`；恢复时清除本级 `disabled`，不修改指标项与 Report 表 |
 | 删除页面分组 | `TimeSeriesScope.bulk_delete_scopes` | 见「查询与写入接口」 |
 
 清理函数按 scope 逐行改写列表，与 bmw 写入共用 `version` 校验：
@@ -1809,9 +1674,9 @@ def purge_metric_report(group_id: int, field_names: Collection[str]) -> None:
 | **[Change]** `monitor_web.data_migrate.fetcher.metadata.data_source.get_metadata_result_table_fetcher` | 按 `group_id__in` 导出三张新表 |
 | **[Change]** `monitor_web.data_migrate.partial` | 取值主键冲突时按上表改写 scope 的列表 |
 
-## 0x04 开发方案 —— bmw 消费、写入与分组提示
+## 0x04 开发方案 —— bmw 消费、写入与过期清理
 
-**bmw 新增一个常驻消费任务写取值与 scope，过期清理与分组提示并入现有指标同步，不新增周期任务。**
+**bmw 新增一个常驻消费任务写取值与 scope，过期清理并入现有指标同步，不新增周期任务。**
 
 ### a. 接收协议
 
@@ -1840,7 +1705,7 @@ Kafka 消息体是记录的 JSON 数组。以 checkout 在 `http` 下上报的 `
 
 | 字段 | 类型 | 必填 | 写入列 | 说明 |
 | --- | --- | --- | --- | --- |
-| `dataid` | `int32` | 是 | 无 | [a] 指标数据所属的 DataID<br />[b] 按 `TimeSeriesGroup.bk_data_id` 映射到启用且未删除的数据源，未命中时丢弃 *[2]*<br />[c] 映射与 `enable_metric_metadata` 每 `5 min` 重读一次 |
+| `dataid` | `int32` | 是 | -- | [a] 指标数据所属的 DataID<br />[b] 按 `TimeSeriesGroup.bk_data_id` 映射到启用且未删除的数据源，未命中时丢弃 *[2]*<br />[c] 映射与 `enable_metric_metadata` 每 `5 min` 重读一次 |
 | `__scope_type` | `string` | 是 | `scope_type` | 选择 scope 解码器，见下表 |
 | `__scope` | `string` | 是 | [a] `labels`<br />[b] `raw_scope` | 解码失败时丢弃，原值截断到 `512` 字符存入 `raw_scope` |
 | `__metric` | `string` | 是 | `field_name` | 存储中的实际指标名 |
@@ -1900,7 +1765,7 @@ func fingerprint(v ReportValueContent) string {
 
 ### b. 消费与写入
 
-**每个元信息 DataID 一个常驻任务，各分区的消息汇入一个协程聚批，按数据源调用 `Apply()`，全部提交后才标记 offset。**
+**每个元信息 DataID 运行一个常驻任务。各分区只负责收消息，统一交给一个协程按数据源聚批调用 `Apply()`；全部写入成功后，才提交消费位点（offset）。**
 
 `pkg/bk-monitor-worker/internal/metadata/task/metricmeta.go`（新增）、`pkg/bk-monitor-worker/internal/metadata/service/metricmeta.go`（新增）
 
@@ -1990,7 +1855,11 @@ func (s *MetricMetaSvc) Apply(ctx context.Context, groupID uint, records []Repor
 			continue
 		}
 		p := plans.of(r, st)
-		if old := st.idOf(c, r.FieldName); old == vid {
+		old := uint32(0)
+		if st != nil {
+			old = st.idOf(c, r.FieldName)
+		}
+		if old == vid {
 			p.touch = now.Sub(st.lastSeen) >= 24*time.Hour // 已含这个取值：只按 24 h 刷新 last_seen
 		} else {
 			p.replace(r.FieldName, old, vid) // old 为 0 表示不含这个指标名，或 scope 不存在
@@ -2034,7 +1903,7 @@ func (s *MetricMetaSvc) commitBatch(ctx context.Context, c *groupCache, groupID 
 }
 ```
 
-`commitBatch()` 一批一个事务，S1 冷启动 `29.1 s`。逐个 scope 提交要刷盘 `67,000` 次，耗时 `142 s`，redo 从 `597 MiB` 增到 `868 MiB`。
+`commitBatch()` 一批一个事务，S1 冷启动 `29.1 s`。逐个 scope 提交要刷盘 `6.7w` 次，耗时 `142 s`，redo 从 `597 MiB` 增到 `868 MiB`。
 
 例如 cart 升级 SDK 后改报 `unit=s`，scope 13 的列表从 `[1, 2, 4, 5]` 变为 `[1, 2, 3, 4]`，事务内三条语句：
 
@@ -2107,14 +1976,14 @@ var (
 	MetricMetaRowsTotal = newCounterVec("metric_meta_rows_total", "table", "op")
 	// reason：version_conflict、value_missing、duplicate_key
 	MetricMetaRetriesTotal = newCounterVec("metric_meta_retries_total", "reason")
-	// op：apply、expire、placement_hints；code：MySQL 错误码
+	// op：apply、expire；code：MySQL 错误码
 	MetricMetaDBErrorsTotal = newCounterVec("metric_meta_db_errors_total", "op", "code")
 	// 单个数据源一次 Apply() 的耗时
 	MetricMetaApplySeconds = newHistogram("metric_meta_apply_seconds")
 )
 ```
 
-各类上报的写库量与耗时见「性能基线」。S1 中新服务加入时新建 `1` 个 scope 与 `1` 个取值，并给 `2,001` 个取值的 `scope_count` 加 `1`。
+各类上报的写库量与耗时见「性能基线」。S1 中新服务加入时新建 `1` 个 scope，不新增取值，并给 `2,000` 个既有取值的 `scope_count` 加 `1`。
 
 **bk-monitor**
 
@@ -2130,7 +1999,7 @@ var (
 | --- | --- |
 | **[Add]** `internal/metadata/task.metricMetaOperator` | 消费元信息 topic，聚批交给 `Apply()`，提交后标记 offset |
 | **[Change]** `service/scheduler/daemon.taskDefine` | [a] 注册 `daemon:metadata:metric_meta_consume`<br />[b] `initialFunc` 返回 `metricMetaOperator` |
-| **[Add]** `internal/metadata/service.MetricMetaSvc` | [a] 提供 `Apply()`、`Expire()`、`Purge()` 与 `PlacementHints()`<br />[b] 新表不存在时 `Apply()` 报错并计数，常驻任务退避重试 |
+| **[Add]** `internal/metadata/service.MetricMetaSvc` | [a] 提供 `Apply()`、`Expire()` 与 `Purge()`<br />[b] 新表不存在时 `Apply()` 报错并计数，常驻任务退避重试 |
 | **[Add]** `internal/metadata/models/customreport.TimeSeriesReportValue`<br />`internal/metadata/models/customreport.TimeSeriesReportScope` | [a] 表名为 Django 默认的 `metadata_<小写模型名>`<br />[b] 不声明 `default` 标签<br />[c] 带 `//go:generate goqueryset` 与 `// gen:qs` 注释 |
 | **[Keep]** `internal/metadata/models/customreport.TimeSeriesMetric` | 字段不变，bmw 不读写覆盖表 |
 | **[Change]** `internal/metadata/service.TimeSeriesMetricSvc.BulkUpdateMetricsByKeys` | 删除指标项后调用 `MetricMetaSvc.Purge()`，规则与 Python 的 `purge_metric_report()` 相同 |
@@ -2153,7 +2022,7 @@ flowchart LR
     Refresh["RefreshTimeSeriesMetric()<br/>每 5 min · 每个数据源一个协程"] --> Update["UpdateTimeSeriesMetrics()<br/>指标发现"]
     Update --> Metrics["BulkRefreshTSMetrics()<br/>last_modify_time 每 24 h 刷新"]
     Metrics ==>|"UPDATE"| TSM[("TimeSeriesMetric<br/>过期只隐藏，行保留")]
-    Refresh --> Expire["MetricMetaSvc.Expire()<br/>UpdateTimeSeriesMetrics() 之后"]
+    Update -->|"finally，前者失败也执行"| Expire["MetricMetaSvc.Expire()<br/>UpdateTimeSeriesMetrics() 之后"]
     Expire ==>|"步骤 1：DELETE<br/>last_seen 过期的 scope"| Scope[("TimeSeriesReportScope")]
     Expire ==>|"步骤 1：scope_count - 1<br/>步骤 2：DELETE scope_count = 0"| Value[("TimeSeriesReportValue")]
     Cfg["GlobalTimeSeriesMetricExpiredSeconds<br/>默认 30 d"] -.-> Metrics
@@ -2209,95 +2078,6 @@ DELETE FROM metadata_timeseriesreportvalue WHERE id IN (…) AND scope_count = 0
 | **[Keep]** `service/scheduler/periodic.getPeriodicTasks` | 不新增周期任务，`refresh_ts_metric` 的 `10 min` 超时同时覆盖 `Expire()` |
 
 - *[1] 路径省略模块前缀：均相对 `pkg/bk-monitor-worker/`。*
-
-### d. 分组提示
-
-**新建指标项时，`PlacementHints()` 按指标反查上报它的 scope，用 scope 标签拼出全局页面分组名。**
-
-`pkg/bk-monitor-worker/internal/metadata/service/timeseriesscope.go`、`bkmonitor/metadata/models/custom_report/time_series.py`
-
-分组提示接入现有指标同步的新建分支，归属规则见「页面分组与归属」：
-
-```mermaid
-flowchart LR
-    Update["UpdateMetrics()<br/>每 5 min"] --> Scopes["BulkRefreshTSScopes()<br/>只取全局分组"]
-    Scopes --> Collect["collectMetricsAndDimensions()<br/>新指标与 1 h 重放"]
-    Collect --> Hints["MetricMetaSvc.PlacementHints()"]
-    Hints -.->|"field_name → 取值 ID"| Value[("TimeSeriesReportValue")]
-    Hints -.->|"全部 scope 的 labels<br/>与 report_value_ids"| Scope[("TimeSeriesReportScope")]
-    Hints -->|"提示分组名"| Determine["determineScopeNameForNewMetric()<br/>签名不变"]
-    Determine -->|"无提示"| Rules["isMatchAutoRules()<br/>auto_rules 或默认分组"]
-    Determine --> Create["doBulkRefreshTSScopes()<br/>缺失时新建全局分组"]
-    Scopes --> Metrics["BulkRefreshTSMetrics()"]
-    Metrics ==>|"全局 scope_id"| TSM[("TimeSeriesMetric")]
-
-    classDef add fill:#ecfdf3,stroke:#16a34a,color:#14532d
-    classDef change fill:#eff6ff,stroke:#2563eb,color:#1e3a8a
-    classDef old fill:#f1f5f9,stroke:#94a3b8,color:#334155
-    class Hints,Value,Scope add
-    class Scopes,Collect,Create,Metrics change
-    class Update,Determine,Rules,TSM old
-```
-
-```go
-// 提示分组名只取 labels.scope_name，V2 前缀机制下线后不再拼分组维度
-// 查询出错（含 1146）时记日志、计数并返回空 map
-func (s *MetricMetaSvc) PlacementHints(groupID uint, fieldNames []string) map[string]string {
-	fieldOf := selectValueFields(groupID, fieldNames) // SELECT id, field_name … WHERE group_id = ? AND field_name IN (…)
-	counts := map[string]map[string]int{}            // field_name → 提示分组名 → scope 数
-	for _, sc := range selectAllScopes(groupID) {    // SELECT labels, report_value_ids … WHERE group_id = ?
-		name := sc.Labels["scope_name"]
-		if name == "" || name == "default" {
-			continue // DEFAULT scope 与默认分组的 scope 不算提示
-		}
-		for _, id := range sc.ValueIDs {
-			if f, ok := fieldOf[id]; ok {
-				counts[f][name]++
-			}
-		}
-	}
-	return pickMost(counts) // 取 scope 数最多的分组名，相同时按名称升序
-}
-```
-
-例如新指标 `duration_seconds_sum` 有取值 3、5，分别被 scope 11、13 引用 *[1]*。两个 scope 的 `scope_name` 都是 `http`，提示为 `http`，新指标项落入全局分组 21。
-
-- *[1] 反查要读整个数据源：不建标签表，按指标找 scope 要读全部 scope 的 `report_value_ids`，耗时见「性能基线」。*
-
-提示只决定全局 `TimeSeriesMetric.scope_id`，实现上另有两条约束：
-
-- **重放不重置配置**：`create_time` 在 `1 h` 内、仍在默认分组且出现提示的指标项改入提示分组，不重置 `field_config`。
-- **不改 `field_scope`**：提示只作为 `determineScopeNameForNewMetric()` 的分组名参数传入，指标项仍按 `default` 新建。
-
-**bk-monitor**
-
-| 变更点 *[1]* | 目标 |
-| --- | --- |
-| **[Change]** `time_series.TimeSeriesGroup.is_default_scope_info` | 改从 `ResultTableOption(metric_group_dimensions)` 读取分组维度 |
-| **[Add]** `metric_report.placement_hints` | 签名为 `placement_hints(group_id, field_names)`，与 Go 共用测试样例 |
-| **[Change]** `time_series.TimeSeriesScope._collect_metrics_and_dimensions` | [a] 为新指标取分组提示<br />[b] 按名称只匹配全局分组 |
-| **[Change]** `time_series.TimeSeriesScope._do_bulk_refresh_ts_scopes` | 按名称只匹配 `selector_hash = ''` 的分组，新建分组为全局分组 |
-| **[Change]** `time_series.TimeSeriesScope.bulk_refresh_ts_scopes` | 收集 `1 h` 重放的指标项 |
-| **[Change]** `time_series.TimeSeriesMetric._bulk_update_metrics` | 重放的指标项改写 `scope_id`，不重置 `field_config` |
-| **[Change]** `time_series.TimeSeriesGroup.get_metric_from_bkdata` | [a] 阶段四删除 v2 分支<br />[b] `is_enabled_data_scope()` 另有调用方，保留不删 |
-
-- *[1] 路径省略模块前缀：均相对 `metadata.models.custom_report`，模块文件见「数据模型与迁移」。*
-
-**bmw**
-
-| 变更点 *[1]* | 目标 |
-| --- | --- |
-| **[Change]** `collectMetricsAndDimensions` | [a] 新指标以提示作为分组名，无提示时传 `default`<br />[b] 按名称只匹配全局分组 |
-| **[Keep]** `determineScopeNameForNewMetric` | 提示分组走「数据带分组信息」分支，`default` 仍走 `auto_rules` 分支 |
-| **[Change]** `doBulkRefreshTSScopes` | [a] 按名称只匹配 `SelectorHash == ""` 的分组<br />[b] 插入用 `Omit("selector", "selector_hash")` *[2]* |
-| **[Change]** `BulkRefreshTSScopes` | [a] 刷新后整行读取分组，在内存中过滤全局分组<br />[b] 标记 `1 h` 重放的指标项 |
-| **[Change]** `TimeSeriesMetricSvc.BulkUpdateMetricsByKeys` | 重放的指标项改写 `scope_id`，现有逻辑只在 `scope_id = 0` 时改写 |
-| **[Change]** `internal/metadata/models/customreport.TimeSeriesScope` | 新增只读字段 `SelectorHash`，重新生成 QuerySet |
-| **[Change]** `TimeSeriesGroupSvc.IsDefaultScopeInfo` | 改从 `ResultTableOption(metric_group_dimensions)` 读取分组维度 |
-| **[Change]** `internal/metadata/apiservice.BkdataService.QueryMetricAndDimension` | 阶段四删除 `useV2` 分支 |
-
-- *[1] 路径省略模块前缀：未写全的路径均相对 `internal/metadata/service`。*
-- *[2] 插入依赖库默认值：省略两列后由库默认值 `''` 写成全局分组，列缺失时插入也不报错。*
 
 ## 0x05 开发方案 —— SaaS 与 APM
 
@@ -2368,9 +2148,7 @@ class ServiceMetricScope:
             return True                                            # 两份数据都没有时不过滤
         return bool((self.reported or {}).get(metric_name)) or metric_name in (self.legacy or {})
 
-    def scope_name_filter(self, metric_name: str, field_scope: str) -> str | list[str] | None:
-        if field_scope != DEFAULT_FIELD_SCOPE:                     # 未收敛的 V2 数据源照旧
-            return field_scope
+    def scope_name_filter(self, metric_name: str) -> str | list[str] | None:
         names = (self.reported or {}).get(metric_name) or (self.legacy or {}).get(metric_name) or set()
         return None if not names else next(iter(names)) if len(names) == 1 else sorted(names)
 ```
@@ -2395,7 +2173,7 @@ class ServiceMetricScope:
 
 ### b. 图表与维度值
 
-**图表与维度值只换查询条件和配置的来源，面板组装与 PromQL 拼接不变。** 未收敛的数据源行为也不变：
+**图表与维度值只换查询条件和配置的来源，面板组装与 PromQL 拼接不变。** 真实 `scope_name` 只来自 ReportScope 或过渡期白名单：
 
 - **图表**：带 `report_labels` 查询指标，scope 名条件取 `scope_name_filter()`，单位、别名、汇聚方法与函数取 `effective_config`。
 - **维度值**：请求新增可选的 `field_id`，后端据此反查 scope 并取 `scope_name_filter()`，不带时沿用请求值。
@@ -2410,7 +2188,7 @@ scope = ServiceMetricScope.load(params, metrics)
 for m in metrics:
     metrics_list.append({
         "name": m["name"],
-        "scope_name": scope.scope_name_filter(m["name"], m["field_scope"]) if scope else m["field_scope"],
+        "scope_name": scope.scope_name_filter(m["name"]) if scope else None,
         **m["effective_config"],                                   # unit、alias、aggregate_method、function、interval
         "family": m["family"], "meta": m["meta"],
     })
@@ -2437,7 +2215,8 @@ APM 管理页请求中的 `service_name` 只表示页面上下文，不用来推
 | --- | --- | --- |
 | `scope` | 本 scope 覆盖 | 是 |
 | `service` | 本服务覆盖 | 是 |
-| `global` | 继承全局 | 否 |
+| `global` | 全局覆盖 | 是 |
+| `metric` | 系统或存量基线 | 否 |
 | `report` | 上报值 | 否 |
 | `table` | 默认值 | 否 |
 
@@ -2451,21 +2230,20 @@ flowchart LR
     Modify --> Svc["FieldsModifyService<br/>apply_change()"]
     Svc --> CU["create_or_update_time_series_metric()"]
     CU --> Route["modify_metric()<br/>Metadata"]
-    Route ==>|"selector = {}"| TSM[("TimeSeriesMetric<br/>field_config · scope_id")]
-    Route ==>|"selector ≠ {}"| Override[("TimeSeriesMetricOverride")]
+    Route ==>|"selector = {} / service / scope"| Override[("TimeSeriesMetricOverride")]
     Page -->|"selector"| Rule["CreateOrUpdateGroupingRule<br/>DeleteGroupingRule"]
     Rule --> ScopeApi["create_or_update_time_series_scope()<br/>delete_time_series_scope()"]
-    ScopeApi ==> TSS[("TimeSeriesScope<br/>selector · selector_hash")]
+    Page -->|"维度别名 · 常用 · 隐藏"| ScopeApi
+    ScopeApi ==> TSS[("TimeSeriesScope<br/>selector · dimension_config")]
 
     classDef add fill:#ecfdf3,stroke:#16a34a,color:#14532d
     classDef change fill:#eff6ff,stroke:#2563eb,color:#1e3a8a
     classDef old fill:#f1f5f9,stroke:#94a3b8,color:#334155
     class Route,Override add
     class Page,Modify,Svc,CU,Rule,ScopeApi,TSS change
-    class TSM old
 ```
 
-在 checkout 服务页把 `duration_seconds_sum` 改为 `ms` 并移入服务分组「支付」，同时清除 `request_total` 的覆盖：
+在 checkout 服务页把 `duration_seconds_sum` 改为 `ms` 并移入服务分组「支付」：
 
 ```json
 {
@@ -2474,8 +2252,7 @@ flowchart LR
   "service_name": "checkout",
   "selector": {"service_name": "checkout"},
   "update_fields": [
-    {"type": "metric", "id": 1003, "scope": {"id": 31}, "config": {"unit": "ms", "alias": "请求耗时"}},
-    {"type": "metric", "id": 1001, "scope": {"id": 21}, "reset_override": true}
+    {"type": "metric", "id": 1003, "scope": {"id": 31}, "config": {"unit": "ms", "alias": "请求耗时"}}
   ],
   "delete_fields": []
 }
@@ -2490,10 +2267,11 @@ flowchart LR
 | **[Change]** `GetCustomTsFields.get_movable` | 改按 `scope_create_from != "data"` 判定 *[2]* |
 | **[Change]** `ModifyCustomTsFields.RequestSerializer` | [a] 新增可选参数 `selector`，默认 `{}`<br />[b] `UMetricSerializer` 新增 `reset_override` |
 | **[Change]** `ModifyCustomTsFields.perform_request` | 把 `selector` 与 `reset_override` 交给 `FieldsModifyService` |
-| **[Change]** `monitor_web.custom_report.handlers.metric.service.FieldsModifyService` | [a] `__init__` 新增参数 `selector`<br />[b] 全局回写跳过 `""`、`0`、`[]` |
+| **[Change]** `monitor_web.custom_report.handlers.metric.service.FieldsModifyService` | [a] `__init__` 新增参数 `selector`<br />[b] 按键存在透传 `""`、`0`、`false` 与 `[]`，清除时使用 `reset_override` |
 | **[Change]** `apm_web.custom_metric.resources.ApmModifyCustomTsFields`<br />`apm_web.custom_metric.resources.ApmGetCustomTsFields` | `selector.service_name` 必须等于请求的 `service_name` |
 | **[Change]** `CustomTsGroupingRuleList`<br />`DeleteGroupingRule` | 新增可选参数 `selector`，按视图列出或删除分组 |
-| **[Change]** `CreateOrUpdateGroupingRule` | [a] 新增可选参数 `selector`，新建的分组带选择器<br />[b] 带选择器时 `update_ids` 写覆盖的 `scope_id`<br />[c] `remove_ids` 把覆盖的 `scope_id` 置 `NULL` |
+| **[Change]** `CreateOrUpdateGroupingRule` | [a] 新增可选参数 `selector`，新建的分组带选择器<br />[b] 任一选择器的 `update_ids` 都逐指标写 Override `scope_id`<br />[c] `remove_ids` 清除本级 `scope_id`，恢复上级归属 |
+| **[Keep]** 维度编辑接口 | 按当前有效 `scope_id` 更新 `TimeSeriesScope.dimension_config`，不写 Override 与 Report 表 |
 | **[Change]** `ImportCustomTimeSeriesFields.perform_request` | 导入已收敛数据源时把非 `default` 的 `field_scope` 归一为 `default`，不静默跳过 |
 | **[Change]** `ModifyCustomTimeSeries.update_fields` | 带分组维度的数据源只更新、不删除指标 *[3]* |
 | **[Keep]** `metadata.models.custom_report.time_series.TimeSeriesMetric.field_id` | 收敛前后保留项的 `field_id` 与 `scope_id` 不变 |
@@ -2515,7 +2293,7 @@ flowchart LR
 
 ### d. 指标缓存与选择器
 
-**策略选择器的单位与描述改在 Metadata 的 `to_metric_info()` 中经解析器补齐，SaaS 的缓存读取路径不变。** 指标缓存用不分服务的视图，只合成全局配置、默认取值与表级兜底 *[1]*：
+**策略选择器的单位与描述改在 Metadata 的 `to_metric_info()` 中经解析器补齐，SaaS 的缓存读取路径不变。** 指标缓存用不分服务的视图，只合成全局覆盖、指标基线、默认取值与表级兜底 *[1]*：
 
 | 变更点 | 目标 |
 | --- | --- |
@@ -2593,8 +2371,6 @@ def build_family_panel(
 
 ### a. 发布顺序
 
-**发布分四个阶段，按服务建分组与编辑在全部组件升级到阶段一之后单独开放，回退按相反顺序执行。**
-
 节点主标题是控制该步骤的迁移、开关或命令。实线是推荐顺序 *[1]*，阶段四例外 *[2]*：
 
 ```mermaid
@@ -2649,7 +2425,7 @@ flowchart LR
 
 | 步骤 | 组件 | 发布内容 | 进入条件 | 回退与后果 |
 | --- | --- | --- | --- | --- |
-| 建表与加列 | Metadata | [a] 建三张新表<br />[b] `TimeSeriesScope` 加两列并换唯一键，耗时见「已有表的 DDL 风险」 | 无 | [a] 重新发布上一版本，新表与新列保留<br />[b] 需要删除时先删全部服务分组，再反向执行 `0279`、`0278` |
+| 建表与加列 | Metadata | [a] 建三张新表<br />[b] `TimeSeriesScope` 加两列并换唯一键，耗时见「已有表的 DDL 风险」 | -- | [a] 重新发布上一版本，新表与新列保留<br />[b] 需要删除时先删全部服务分组，再反向执行 `0279`、`0278` |
 | 读取改造 | SaaS、Metadata、bmw | [a] 解析器、查询接口新字段与服务范围对象<br />[b] 按名称取分组的入口只取全局分组<br />[c] 分组维度只写 `ResultTableOption` | 建表与加列已发布 | [a] 关闭 `APM_CUSTOM_METRIC_REPORT_FILTER_ENABLED`<br />[b] 其余改造重新发布上一版本，前提是没有服务分组 *[1]* |
 | bmw 写入 | bmw、Metadata | [a] 配置 `METRIC_METADATA_DATA_IDS`<br />[b] 打开 `taskConfig.metadata.metricMeta.enabled`<br />[c] 逐个数据源打开 `enable_metric_metadata` | 读取改造已发布 | 关闭 `enable_metric_metadata` *[2]* |
 | Collector 上报 | Collector | 逐个集群打开 `metric_metadata.enabled` | bmw 写入已发布 | 关闭 `metric_metadata.enabled` *[2]* |
@@ -2662,7 +2438,7 @@ flowchart LR
 - *[2] 关开关不撤销已写入值：撤销已显示的上报值要删除该数据源在两张上报表中的行，复用删除数据源的分批删除。*
 - *[3] 前缀逻辑即 V2 前缀机制：分组名前缀、按前缀建默认分组与匹配 `auto_rules`，见「页面分组与归属」。*
 
-发布与回退有五条顺序不能颠倒：
+必须遵守以下发布与回退顺序：
 
 | 顺序约束 | 原因 |
 | --- | --- |
@@ -2724,13 +2500,12 @@ flowchart LR
 
 | 入口 | 所在的已有功能 | 新表缺失 `1146` | 新列缺失 `1054` |
 | --- | --- | --- | --- |
-| `MetricConfigResolver.prefetch` | 指标缓存、管理页、指标树、图表与维度值 | 没有上报取值，配置回落到指标项与表级字段 | 不涉及 |
+| `MetricConfigResolver.prefetch` | 指标缓存、管理页、指标树、图表与维度值 | 没有上报取值，配置回落到指标项与表级字段 | -- |
 | `ServiceMetricScope.load` | APM 服务视图 | 服务过滤回落到白名单 | 只列全局分组 |
-| `metric_report.placement_hints`<br />bmw `MetricMetaSvc.PlacementHints` | 指标同步 | 返回空提示，新指标按 `auto_rules` 与默认分组归属 | 不涉及 |
-| `TimeSeriesScope` 的 Python 读取 | 管理页、指标树、指标同步 | 不涉及 | 去掉两列重查，全部视为全局分组 *[1]* |
-| `TimeSeriesScope` 的 Python 写入 | 指标同步、新建分组 | 不涉及 | 只写旧列，实现方式「待确认」 |
-| bmw `TimeSeriesScope` 读写 | 指标同步 | 不涉及 | 整行读取取不到该列即全局，插入省略两列，不报错 |
-| `TimeSeriesGroup.remove_metrics` | 删除数据源 | 跳过新表中的行 | 不涉及 |
+| `TimeSeriesScope` 的 Python 读取 | 管理页、指标树、指标同步 | -- | 去掉两列重查，全部视为全局分组 *[1]* |
+| `TimeSeriesScope` 的 Python 写入 | 指标同步、新建分组 | -- | 只写旧列，实现方式「待确认」 |
+| bmw `TimeSeriesScope` 读写 | 指标同步 | -- | 整行读取取不到该列即全局，插入省略两列，不报错 |
+| `TimeSeriesGroup.remove_metrics` | 删除数据源 | 跳过新表中的行 | -- |
 | `get_metadata_result_table_fetcher` | 数据迁移导出 | 不导出新表 | 不导出两列 |
 
 - *[1] 缺列状态每个进程记一次：首次遇到 `1054` 后，管理器对两列调用 `defer()`，且不再按选择器过滤。*
@@ -2739,18 +2514,21 @@ flowchart LR
 
 ### e. APM V2 收敛
 
-**存量 V2 数据源要逐个收敛，把同名指标项改写为一行 `field_scope=default`，页面分组不动，收敛完成后才删除前缀逻辑。**
+**存量 V2 数据源要逐个收敛为一个规范指标项，`field_scope=default` 只作唯一键兼容占位；页面布局与保留项的配置基线不动，收敛完成后才删除前缀逻辑。**
 
 停用 v2 后，指标同步按 `(field_name, default)` 匹配指标项。未收敛的数据源会新建指标项，并把原指标项置为不活跃，`field_id` 随之改变。
+
+收敛前必须先升级全部旧写入方，使其不再按真实 scope 写 `field_scope`。收敛后真实服务与 `scope_name` 只从 `TimeSeriesReportScope` 查询，ReportScope 不参与选择保留项，也不重算页面分组。
 
 收敛只改动以下对象：
 
 | 对象 | 收敛时的处理 |
 | --- | --- |
-| 同名指标项 | 改写 `field_scope`、`scope_id` 与 `field_config` |
+| 同名指标项 | 选出一个规范项，只把它的 `field_scope` 改为 `default`；保留其 `field_id`、`scope_id` 与 `field_config` 作为系统与存量基线 |
 | 占位的 `default` 旧指标项 | 删除 |
-| `TimeSeriesGroup.metric_group_dimensions` | 清空，`ResultTableOption` 中的同名选项保留，供分组提示使用 |
-| 页面分组 | 不动，加列时 `selector_hash` 已是 `''`，V2 页面分组即全局分组 *[1]* |
+| `TimeSeriesGroup.metric_group_dimensions` | 清空；`ResultTableOption` 中的同名选项只供存量配置兼容，不参与页面归属 |
+| 页面分组 | 原样保留；不从 ReportScope 创建、重命名或合并，加列时 `selector_hash` 已是 `''` *[1]* |
+| 全局 Override | 不批量回填；用户后续编辑时按需创建 |
 | VM 存储绑定 | 不动 |
 
 - *[1] 前缀分组名原样保留：多级分组维度留下的 `checkout||http` 等分组名，阶段四删除前缀逻辑后按普通名称处理。*
@@ -2787,13 +2565,12 @@ scope_id ≠ 0  →  is_active = true 优先  →  last_modify_time 最近  → 
 
 | 同名情况 | 保留项 | 其余指标项 |
 | --- | --- | --- |
-| 只有一个指标项 | 该指标项 | 无 |
-| 有多个指标项 | 按上述顺序选出 *[1]* | [a] `scope_id` 置 `0`，从列表隐藏<br />[b] `field_id` 保留<br />[c] 配置并入保留项 *[2]* |
-| 另有 `scope_id = 0` 的 `default` 旧指标项 | 从旧指标项以外的指标项中选出 *[3]* | 旧指标项记入快照后删除，其他非保留项按上一行处理 |
+| 只有一个指标项 | 该指标项 | -- |
+| 有多个指标项 | 按上述顺序选出 *[1]* | [a] `scope_id` 置 `0`，从列表隐藏<br />[b] `field_id` 与原配置保留，兼容旧引用<br />[c] 不把配置与页面归属并入规范项 |
+| 另有 `scope_id = 0` 的 `default` 旧指标项 | 从旧指标项以外的指标项中选出 *[2]* | 旧指标项记入快照后删除，其他非保留项按上一行处理 |
 
 - *[1] 活跃优先于修改时间：bmw 会把本轮缺失的指标项置为不活跃并刷新修改时间，只看修改时间会选中不活跃项。*
-- *[2] 保留项的键优先：其余指标项的 `field_config` 按修改时间由旧到新并入保留项。*
-- *[3] 旧指标项不能当保留项：它占用保留项改写后的唯一键，且 `scope_id = 0` 的指标项在同步命中时会被重置 `field_config`。*
+- *[2] 旧指标项不能当保留项：它占用保留项改写后的唯一键，且 `scope_id = 0` 的指标项不代表现有页面布局。*
 
 收敛命令的写法参照 `refresh_ts_metric`：
 
@@ -2833,7 +2610,7 @@ python manage.py collapse_ts_metric_scope [选项]
 其他执行约束：
 
 - **可重入**：`metric_group_dimensions` 为空且没有 `scope_id ≠ 0` 的非 `default` 指标项时视为已收敛，命令直接跳过。
-- **事务规模**：单事务改写一个数据源的全部同名指标项，最大数据源约 `20,000` 个，事务耗时与行锁等待未压测「待确认」。
+- **事务规模**：单事务改写一个数据源的全部同名指标项，最大数据源约 `2w` 个，事务耗时与行锁等待未压测「待确认」。
 - **前缀逻辑后删**：收敛后 `field_scope` 都是 `default`，前缀为空，前缀逻辑不再生效，阶段四删除。
 
 从读取改造起，分组维度的写回入口只写 `ResultTableOption`，收敛窗口内不写回 `metric_group_dimensions` 列：
@@ -2863,7 +2640,7 @@ python manage.py collapse_ts_metric_scope [选项]
 | `sql_mode` | `SELECT @@sql_mode` | 是否含 `STRICT_TRANS_TABLES` | 含该模式时确认四字节字符替换生效 |
 | 单包上限 | `SELECT @@max_allowed_packet` | 是否不小于 `4 MiB` | 单个 scope 的 `report_value_ids` 最大约 `234 KiB`，默认值满足 |
 | V2 同名指标项 | `collapse_ts_metric_scope --dry-run` | 同名指标项是否跨 `scope_name` | 跨 `scope_name` 时人工确认保留项 |
-| 多级分组维度 | 列出 `metric_group_dimensions` 多于一级的数据源 | 分组提示名是否带 `\|\|` 前缀 | 人工确认提示名，APM 默认只有 `scope_name` 一级 |
+| 多级分组维度 | 列出 `metric_group_dimensions` 多于一级的数据源 | 存量页面分组名是否带 `\|\|` 前缀 | 原样保留页面布局，不从 ReportScope 重建 |
 | 组件版本 | 发布记录 | Python 与 bmw 是否都已运行读取改造之后的版本 | 未齐时不开放按服务建分组与编辑 |
 | 服务分组 | `SELECT COUNT(*) FROM metadata_timeseriesscope WHERE selector_hash <> ''` | 回退阶段一前是否为 `0` | 不为 `0` 时先删除服务分组 |
 
@@ -2895,20 +2672,20 @@ cd pkg/bk-monitor-worker && go test -race ./internal/metadata/...
 
 | 用例 | 断言重点 |
 | --- | --- |
-| `TestMetricMetaApply` | [a] 四种情况的写库行数与「生命周期」的写入表一致<br />[b] cart 改报 `unit=s` 后，scope 13 的列表由 `[1, 2, 4, 5]` 变为 `[1, 2, 3, 4]`<br />[c] 同一次改动让取值 3 的 `scope_count` 增到 `2`，取值 5 降到 `0`<br />[d] 取值已存在时不插入，不消耗自增 ID<br />[e] 超出 `2,000` 个 scope 或 `60,000` 个取值时丢弃新增并计数 |
+| `TestMetricMetaApply` | [a] 四种情况的写库行数与「生命周期」的写入表一致<br />[b] cart 改报 `unit=s` 后，scope 13 的列表由 `[1, 2, 4, 5]` 变为 `[1, 2, 3, 4]`<br />[c] 同一次改动让取值 3 的 `scope_count` 增到 `2`，取值 5 降到 `0`<br />[d] 取值已存在时不插入，不消耗自增 ID<br />[e] 超出 `2,000` 个 scope 或 `6w` 个取值时丢弃新增并计数 |
 | `TestMetricMetaApplyResend` | [a] 同日 `2 h` 重发不访问数据库<br />[b] 次日首次重发不改列表，每个 scope 只刷新一次 `last_seen`<br />[c] 同批重复记录与消息重放都不产生写入 |
 | `TestMetricMetaApplyVersion` | [a] 提交前 `version` 被改时，重读该 scope 并重放本批改动<br />[b] 重放结果与串行写入一致，`version` 只增 `1`<br />[c] 进程缓存过期只会多写，不会写错 |
 | `TestMetricMetaExpire` | [a] scope 13 的 `last_seen` 超过 `30 d` 时被删除，取值 1、2、4 的 `scope_count` 各减 `1`<br />[b] 取值 5 降到 `0` 后在同一轮删除<br />[c] scope 仍在上报时，停报的指标留在列表中<br />[d] 每天上报一次的 scope 在 `30 d` 内不被删除 |
-| `TestPlacementHints`（Go、Python） | [a] 两侧共用样例，输出一致<br />[b] `duration_seconds_sum` 查到取值 3、5，提示来自 scope 11、13<br />[c] scope 不带 `scope_name` 或新表不存在时返回空，指标同步照常完成 |
-| `TestSyncKeepsUserSettings`（Go、Python） | [a] `Apply()` 不写覆盖表与页面分组的选择器<br />[b] 指标项 1003 移入分组 22 后，多轮同步与 `1 h` 重放都不改它的 `scope_id`<br />[c] 覆盖 1 的 `scope_id = 31` 在同步后不变 |
+| `TestSyncKeepsUserSettings`（Go、Python） | [a] `Apply()` 只写 Report 表，不写指标项、覆盖与页面分组<br />[b] ReportScope 新增、改名与过期都不会创建、移动或删除 `TimeSeriesScope`<br />[c] 新指标只按 `auto_rules → default` 写基础 `scope_id`，多轮同步不改已有基础归属 |
 
 **解析、写入路由与族**：
 
 | 用例 | 断言重点 |
 | --- | --- |
-| `TestMetricConfigResolver` | [a] 逐键按五级生效顺序查找，三个视图的结果与统一例子的读取结果表一致<br />[b] `""`、`0`、`[]` 视为未设置<br />[c] 不分服务视图中 DEFAULT scope 的取值优先<br />[d] 无 DEFAULT 时取值 3、5 并列，取 ID 小者 3<br />[e] 同一服务的多个 scope 引用不同取值时，取 `last_seen` 最近者<br />[f] `metric_type` 或 `original_type` 不止一种时返回冲突标志 |
-| `TestModifyMetric` | [a] `selector = {}` 只写 `TimeSeriesMetric`，覆盖表不变<br />[b] `selector` 非空只写覆盖表，指标项不变<br />[c] 清除覆盖后读取回到继承，查询结果能区分「本服务覆盖」与「继承全局」<br />[d] 按服务建分组的入口在开放前拒绝写入 |
-| `TestPagePlacement` | [a] `duration_seconds_sum` 在 checkout 视图归入分组 31，在 cart 视图与不分服务视图归入 22<br />[b] checkout 视图的分组为全局 21、22 与选择器命中的 31<br />[c] 22 与 31 同名共存 |
+| `TestMetricConfigResolver` | [a] 逐键按六级生效顺序查找，三个视图的结果与统一例子的读取结果表一致<br />[b] `false`、`0`、`""` 与 `[]` 按键存在视为显式覆盖<br />[c] 不分服务视图中 DEFAULT scope 的取值优先<br />[d] 无 DEFAULT 时取值 3、5 并列，取 ID 小者 3<br />[e] 同一服务的多个 scope 引用不同取值时，取 `last_seen` 最近者<br />[f] `metric_type` 或 `original_type` 不止一种时返回冲突标志 |
+| `TestModifyMetric` | [a] 全局、服务与 scope 三种 selector 都只写 Override，指标项不变<br />[b] 删除与恢复分别写入、清除本级 `disabled`，全局与服务 selector 都覆盖<br />[c] 清除本级覆盖后读取回到上级或指标基线<br />[d] 查询结果区分三级覆盖、指标基线、上报值与表级值<br />[e] 按服务建分组的入口在开放前拒绝写入 |
+| `TestPagePlacement` | [a] `duration_seconds_sum` 在 checkout 视图归入分组 31，在 cart 视图与不分服务视图归入 22<br />[b] 无 Override 时回退到指标项基础 `scope_id=21`<br />[c] 分组 selector 只控制可见性，不自动纳入服务指标<br />[d] 批量移动 `N` 个指标写 `N` 条 Override，22 与 31 同名共存 |
+| `TestDimensionConfig` | [a] 维度别名、常用与隐藏只更新有效 `TimeSeriesScope.dimension_config`<br />[b] 同组指标共享配置<br />[c] Override 与两张 Report 表不变 |
 | `TestServiceMetricScope` | [a] checkout 命中 scope 11、12，可见指标为取值 1、2、3、4、6 对应的指标项<br />[b] 筛选 scope 的语句只选 `id`、`labels` 两列<br />[c] 指标移入用户分组后仍可见<br />[d] `request_total` 的 `scope_name_filter()` 返回 `["grpc", "http"]`<br />[e] 白名单下线前，scope 数据为空时等价于现状白名单 |
 | `TestMetricFamily` | [a] scope 11 视图中取值 2、3、4 组成族 `duration_seconds`<br />[b] 族判断只看 `original_type` 与 `original_name`，族成员的 `metric_type` 为 counter 不影响<br />[c] `original_name` 为自身的独立 Counter `duration_seconds_sum` 不入族 |
 | `TestBuildFamilyPanel` | [a] 校验 delta 与 cumulative 的 `functions`，规则见「族视图与 Histogram 复合面板」<br />[b] 缺 `_bucket` 时不生成分位方法<br />[c] `_bucket` 之外的查询不带 `le` |
@@ -2918,8 +2695,8 @@ cd pkg/bk-monitor-worker && go test -race ./internal/metadata/...
 | 用例 | 断言重点 |
 | --- | --- |
 | `TestTimeSeriesScopeMigration` | [a] 迁移后 `selector_hash` 仍带库默认值 `''`，写法见「数据模型与迁移」<br />[b] 旧 Django 模型与旧 bmw gorm 模型不写新列也能新建分组，新行落为全局分组<br />[c] 新代码按 `(group_id, selector_hash, scope_name)` 匹配分组，同名的服务分组不被改写 |
-| `TestDegrade` | [a] 新表报 `1146` 时，解析器、服务范围对象与分组提示回落到改造前<br />[b] `TimeSeriesScope` 缺新列报 `1054` 时，指标树、管理页与指标同步照常<br />[c] 两种降级都按入口与错误码计数，新功能入口直接报错 |
-| `TestCollapseTsMetricScope` | [a] 三种同名情况的保留项与配置合并正确，不活跃的指标项不被选为保留项<br />[b] 模拟 `T0` 前启动的 v2 同步写入后，复跑删除新建的指标项<br />[c] 按快照回退后与收敛前一致<br />[d] 收敛后新指标按 v1 归属，不再新建带 `\|\|` 前缀的分组 |
+| `TestDegrade` | [a] 新表报 `1146` 时，解析器与服务范围对象回落到改造前<br />[b] `TimeSeriesScope` 缺新列报 `1054` 时，指标树、管理页与指标同步照常<br />[c] 两种降级都按入口与错误码计数，新功能入口直接报错 |
+| `TestCollapseTsMetricScope` | [a] 三种同名情况选出规范项，保留其 `field_id`、`scope_id` 与 `field_config`，不合并其他项配置<br />[b] 模拟 `T0` 前启动的 v2 同步写入后，复跑删除新建的指标项<br />[c] 按快照回退后与收敛前一致<br />[d] ReportScope 不参与保留项与页面分组选择 |
 
 **数据库兼容**：在 MySQL `5.7` 与 `8.0` 上各执行一遍，两个版本结果一致才算通过：
 
@@ -2937,7 +2714,7 @@ Collector 的协议用例见「关联方案」中 Collector 方案的验收章�
 
 ### b. 场景验收
 
-**场景验收逐项核对端到端结果，不以配置正确代替数值正确。** 每行都从统一例子的初始数据开始，互不叠加 *[1]*。
+**场景验收逐项核对端到端结果，不以配置正确代替数值正确。** 每行都从统一例子的初始数据开始，单独执行并还原，互不叠加 *[1]*。
 
 - *[1] 新增数据不写 ID：场景中新出现的取值与 scope 按自增分配 ID，例子中已有的 ID 与数值不变。*
 
@@ -2959,12 +2736,14 @@ Collector 的协议用例见「关联方案」中 Collector 方案的验收章�
 
 | 场景 | 操作 | 预期 |
 | --- | --- | --- |
-| 按服务修改 | 在 checkout 视图把 `duration_seconds_sum` 的单位改为 `ms` | [a] 写入覆盖 1，指标项 1003 不变<br />[b] checkout · http 为 `ms`，不分服务仍为 `s` |
-| 同步不覆盖修改 | 覆盖 1 写入后，bmw 继续消费 checkout 上报的 `unit=s`，指标同步跑满 `1 h` | checkout · http 仍为 `ms`，覆盖 1 与分组 31 不变 |
-| 全局修改不覆盖按服务修改 | 全局把 `duration_seconds_sum` 的单位改为 `us` | [a] 不分服务与 cart · http 为 `us`<br />[b] checkout · http 仍为 `ms`<br />[c] 三个视图的别名都是「请求耗时」 |
-| 清除覆盖 | 在 checkout 视图清除单位覆盖 | [a] 全局未设单位，checkout · http 的单位回到取值 3 的 `s`，页面标为「上报值」<br />[b] 覆盖 1 只保留 `scope_id = 31` |
-| 按服务分组 | 在 checkout 视图把 `duration_seconds_sum` 移入「支付」 | [a] 新建分组 31，与全局分组 22 同名共存<br />[b] checkout 视图中它在 31 下，cart 视图与不分服务视图中在 22 下 |
-| 按 scope 修改 | 在 checkout · grpc 视图把 `queue_size` 的别名改为「gRPC 队列长度」 | [a] 写入覆盖 2<br />[b] checkout · grpc 视图与 checkout 服务视图显示新别名，不分服务视图不显示 |
+| 按服务修改 | 在 checkout 视图把 `duration_seconds_sum` 的单位改为 `ms` | [a] 写入服务覆盖 2，指标项 1003 不变<br />[b] checkout · http 为 `ms`，不分服务仍为 `s` |
+| 同步不覆盖修改 | 服务覆盖 2 写入后，bmw 继续消费 checkout 上报的 `unit=s`，指标同步运行多轮 | checkout · http 仍为 `ms`，覆盖 2 与分组 31 不变 |
+| 全局修改不覆盖按服务修改 | 全局把 `duration_seconds_sum` 的单位改为 `us` | [a] 写入全局覆盖 1，指标项 1003 不变<br />[b] 不分服务与 cart · http 为 `us`<br />[c] checkout · http 仍为 `ms` |
+| 清除覆盖 | 在 checkout 视图清除单位覆盖 | [a] checkout · http 的单位回到取值 3 的 `s`，别名仍继承全局覆盖 1<br />[b] 服务覆盖 2 只保留 `scope_id = 31` |
+| 按服务分组 | 在 checkout 视图把 `duration_seconds_sum` 移入「支付」 | [a] 服务分组 31 与全局分组 22 同名共存<br />[b] checkout 视图中它在 31 下，cart 视图与不分服务视图中在 22 下 |
+| 批量移动指标 | 把 checkout 当前的 `N` 个指标移入分组 31 | [a] 写入 `N` 条服务 Override<br />[b] 分组 selector 本身不纳入其他 checkout 指标 |
+| 编辑维度别名 | 在 checkout 分组 31 把维度 `status_code` 改为「状态码」 | [a] 只更新分组 31 的 `dimension_config`<br />[b] 组内指标共享别名<br />[c] Report 表不变 |
+| 按 scope 修改 | 在 checkout · grpc 视图把 `queue_size` 的别名改为「gRPC 队列长度」 | [a] 写入 scope 覆盖 3<br />[b] checkout · grpc 视图与 checkout 服务视图显示新别名，不分服务视图不显示 |
 
 **Histogram 族面板**：族成员按各自视图的取值判断，复合计算与 cumulative 窗口两行要核对实际存储的查询结果。
 
@@ -2980,9 +2759,9 @@ Collector 的协议用例见「关联方案」中 Collector 方案的验收章�
 
 | 场景 | 操作 | 预期 |
 | --- | --- | --- |
-| 元信息先到 | 元信息早于指标同步到达 | 新指标项直接按分组提示归入页面分组 |
-| 元信息后到 | 元信息晚于指标同步到达 | 默认分组中的新指标项在 `1 h` 内重放一次 |
-| V2 收敛 | 已保存视图引用收敛前的 `field_id` | 视图正常打开，页面分组不变，图表有数据 |
+| 元信息先到 | ReportScope 早于指标同步到达，`scope_name=http` | 新指标只按 `auto_rules → default` 归属，不创建 `http` 页面分组 |
+| 元信息后到 | ReportScope 晚于指标同步到达或之后改名、过期 | 指标基础 `scope_id` 与页面分组都不变 |
+| V2 收敛 | 已保存视图引用收敛前的 `field_id` | [a] 引用规范保留项时页面分组不变、图表有数据<br />[b] 引用非保留项时按已知兼容边界缺少该指标 |
 | 新表缺失 | 新代码运行在没有三张新表的库上 | 指标同步、指标缓存、管理页、指标树、APM 服务视图、图表与删除数据源正常 |
 | 页面分组表未迁移 | 新代码运行在 `TimeSeriesScope` 缺新列的库上 | 已有功能正常，按服务建分组报错并计数 |
 | 旧版本共存 | 旧 bmw 与旧 SaaS 在迁移后的 `TimeSeriesScope` 上新建页面分组 | 新建成功，新行落为全局分组 |
@@ -3000,9 +2779,8 @@ Collector 的协议用例见「关联方案」中 Collector 方案的验收章�
 | 新服务加入 | S1，每服务 `2,000` 条 | p50 | `31 ms` | `108 ms` | `100 ms` |
 | 服务视图 | S1 / S2 / S3x | p50 | `16.8 ms` / `15.5 ms` / `13.3 ms` | `10.2 ms` / `9.4 ms` / `8.5 ms` | `20 ms` |
 | 整组预取有效元信息 | S2 | p50 | `185 ms` | `133 ms` | `250 ms` |
-| 按指标取全部 scope | S1 | p50 | `16.7 ms` | `10.2 ms` | `30 ms` |
-| 过期扫描一轮 | S1 / S3 | 一轮耗时 | `0.34 ms` / `2.6 s` | `1,190 ms` / 无 | `10 ms` / `10 s` |
-| `TimeSeriesScope` 迁移 | `5.7` / `8.0`，`10w` 行 | 加两列换唯一键 | `3.7 s` / `3.5 s` | 无 | `5 s` |
+| 过期扫描一轮 | S1 / S3 | 一轮耗时 | `0.34 ms` / `2.6 s` | `1,190 ms` / -- | `10 ms` / `10 s` |
+| `TimeSeriesScope` 迁移 | `5.7` / `8.0`，`10w` 行 | 加两列换唯一键 | `3.7 s` / `3.5 s` | -- | `5 s` |
 
 - *[1] 上限取早期压测版实测：该版本列表每条占 `6 B` 并多一张 scope 标签表，体积与写入是本方案的上界，读取上限留约 `2` 倍余量。*
 - *[2] 次日只刷新 scope：每个 scope 每天至多写 `1` 行 `last_seen`，S1 有 `1,000` 个 scope，取值行不写。*
@@ -3027,7 +2805,7 @@ Collector 的协议用例见「关联方案」中 Collector 方案的验收章�
 
 | 时间 | 结论性进展 |
 | --- | --- |
-| `2026-10-13 20:30` | [a] 方案由 D「元信息建表」改为 E「取值去重」，D 有三个问题<br />[b] 问题一：定义与例外取值结构相同，同一份元信息存两张表<br />[c] 问题二：类型放在指标级，S2 中 D 有 `1.6%` 的上报读到错误类型，E 为 `0`<br />[d] 问题三：每「scope × 指标」仍占一行，S1 存 `200.5w` 行、`346.7 MiB`<br />[e] 画像共享、取值倒排与 E 三个方向与 D 同库压测，选定 E<br />[f] 终版复测 S1 为 `18.1 MiB`，次日重发写库从 `200.3w` 行降到 `1,000` 行，读取比 D 慢 `1.4～1.7` 倍<br />[g] 用户拍板：选择器只有全局、服务、服务加 `scope_name` 三级，全局修改仍写 `TimeSeriesMetric`<br />[h] 用户同意 `TimeSeriesScope` 加两列并换唯一键，指标项表仍零 DDL<br />[i] 废弃 scope 标签表，按标签找 scope 改为读出 `id`、`labels` 后在内存中过滤<br />[j] `report_value_ids` 只存取值 ID 列表，过期并入指标同步，不按单个指标清理<br />[k] Collector 新增 `__original_type`，`__type` 改为输出序列自身类型，族判断改用 `original_type`<br />[l] 写入改为一批一个事务，S1 冷启动从 `142 s` 降到 `29.1 s` |
+| `2026-10-13 20:30` | [a] 方案由 D「元信息建表」改为 E「取值去重」，D 有三个问题<br />[b] 问题一：定义与例外取值结构相同，同一份元信息存两张表<br />[c] 问题二：类型放在指标级，S2 中 D 有 `1.6%` 的上报读到错误类型，E 为 `0`<br />[d] 问题三：每「scope × 指标」仍占一行，S1 存 `200.5w` 行、`346.7 MiB`<br />[e] 画像共享、取值倒排与 E 三个方向与 D 同库压测，选定 E<br />[f] 终版复测 S1 为 `18.1 MiB`，次日重发写库从 `200.3w` 行降到 `1,000` 行，读取比 D 慢 `1.4～1.7` 倍<br />[g] 选择器只有全局、服务、服务加 `scope_name` 三级，所有用户指标编辑统一写 Override<br />[h] `TimeSeriesScope` 保存页面分组、维度配置与自动规则，ReportScope 永不驱动页面归属<br />[i] `TimeSeriesMetric.field_scope` 固定为兼容占位，`scope_id` 只作系统基础归属<br />[j] 用户同意 `TimeSeriesScope` 加两列并换唯一键，指标项表仍零 DDL<br />[k] 废弃 scope 标签表，按标签找 scope 改为读出 `id`、`labels` 后在内存中过滤<br />[l] `report_value_ids` 只存取值 ID 列表，过期并入指标同步，不按单个指标清理<br />[m] Collector 新增 `__original_type`，`__type` 改为输出序列自身类型，族判断改用 `original_type`<br />[n] 写入改为一批一个事务，S1 冷启动从 `142 s` 降到 `29.1 s` |
 | `2026-10-13 02:30` | [a] 在 MySQL `5.7` 上把 C、D 的关系表装满上界规模 `4009w` 行复测，读写耗时与 `232w` 行时相差在 `11%` 以内，结论不变<br />[b] 方案对比与性能基线的数字换为全量实测<br />[c] 管理页首页增量为 `1.2 ms`，回到原上限 `2 ms` 以内 |
 | `2026-10-12 18:00` | [a] 收敛复跑的等待改从事务提交起算<br />[b] 按快照回退只恢复四项：`field_scope`、`scope_id`、`field_config`、`metric_group_dimensions`<br />[c] 补齐 bmw 写入的四条边界规则，均「待确认」：同批去重、超长字段、成员超限、并发写入遇 `1062` 重试<br />[d] 不再区分迁移失败是否阻断发布，统一按迁移失败设计降级 |
 | `2026-10-12 16:00` | [a] 在 MySQL `5.7` 上完成四个方案的端到端压测与 arm64 原生复核，结论仍为元信息建表<br />[b] 方案对比与性能基线的数字换为 `5.7` 实测<br />[c] 定义改为单独一条语句读取，族视图节点改在内存中组装<br />[d] 管理页搜索与现状持平，节点分页低于 `150 ms`<br />[e] 两项性能上限按 `5.7` 实测重定「待确认」：管理页首页增量 `3.5 ms`，指标缓存扫描 `15 s` |
@@ -3059,7 +2837,7 @@ Collector 的协议用例见「关联方案」中 Collector 方案的验收章�
 | `TimeSeriesMetric.Meta` | [<源码> time_series.py#L1916](https://github.com/TencentBlueKing/bk-monitor/blob/0925d8561fe9012df30b4be276f876a04663defe/bkmonitor/metadata/models/custom_report/time_series.py#L1916-L1918) | 指标项唯一键 `(group_id, field_scope, field_name)` 不变 |
 | `TimeSeriesMetric.bulk_refresh_ts_metrics` | [<源码> time_series.py#L2167](https://github.com/TencentBlueKing/bk-monitor/blob/0925d8561fe9012df30b4be276f876a04663defe/bkmonitor/metadata/models/custom_report/time_series.py#L2167-L2240) | Python 指标同步建行与刷新活跃时间 |
 | `TimeSeriesMetric.to_metric_info` | [<源码> time_series.py#L2436](https://github.com/TencentBlueKing/bk-monitor/blob/0925d8561fe9012df30b4be276f876a04663defe/bkmonitor/metadata/models/custom_report/time_series.py#L2436-L2512) | 单位与描述取 `field_config`，缺键才取表级字段 |
-| `CreateOrUpdateTimeSeriesMetricResource` | [<源码> resources.py#L1449](https://github.com/TencentBlueKing/bk-monitor/blob/0925d8561fe9012df30b4be276f876a04663defe/bkmonitor/metadata/resources/resources.py#L1449-L1483) | 指标项写入接口，全局修改沿用 |
+| `CreateOrUpdateTimeSeriesMetricResource` | [<源码> resources.py#L1449](https://github.com/TencentBlueKing/bk-monitor/blob/0925d8561fe9012df30b4be276f876a04663defe/bkmonitor/metadata/resources/resources.py#L1449-L1483) | 现有指标项写入入口，方案中改为统一路由到 Override |
 | `QueryTimeSeriesMetricResource` | [<源码> resources.py#L1612](https://github.com/TencentBlueKing/bk-monitor/blob/0925d8561fe9012df30b4be276f876a04663defe/bkmonitor/metadata/resources/resources.py#L1612-L1779) | 指标查询的计数、分页与排序 |
 | `QueryTimeSeriesScopeResource` | [<源码> resources.py#L1841](https://github.com/TencentBlueKing/bk-monitor/blob/0925d8561fe9012df30b4be276f876a04663defe/bkmonitor/metadata/resources/resources.py#L1841) | 指标树的整组读取 |
 | `api.metadata.default` 的三个同名资源 | [<源码> default.py#L539](https://github.com/TencentBlueKing/bk-monitor/blob/0925d8561fe9012df30b4be276f876a04663defe/bkmonitor/api/metadata/default.py#L539) | SaaS 侧请求声明，另两个在 L609、L658 |
@@ -3143,6 +2921,6 @@ Collector 的协议用例见「关联方案」中 Collector 方案的验收章�
 | --- | --- | --- | --- |
 | 🔄 | `<branch_name>` | 里程碑 1：Metadata 三张新表、`TimeSeriesScope` 迁移、解析器与查询接口 | 待创建 |
 | 🔄 | `<branch_name>` | 里程碑 2：SaaS/APM 服务视图、图表、维度值、管理页与按服务编辑 | 待创建 |
-| 🔄 | `<branch_name>` | 里程碑 3：bmw 元信息消费、写入、过期清理与页面分组提示 | 待创建 |
-| 🔄 | `<branch_name>` | 里程碑 4：APM V2 收敛与白名单下线 | 待创建 |
+| 🔄 | `<branch_name>` | 里程碑 3：bmw 元信息消费、写入与过期清理 | 待创建 |
+| 🔄 | `<branch_name>` | 里程碑 4：规范指标项收敛、APM V2 与白名单下线 | 待创建 |
 | 🔄 | `<branch_name>` | 里程碑 5：指标族与 Histogram 复合视图 | 待创建 |
