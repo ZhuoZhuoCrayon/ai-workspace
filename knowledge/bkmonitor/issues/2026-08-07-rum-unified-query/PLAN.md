@@ -1506,7 +1506,7 @@ View Span 关联信息获取（后端）：
 
 | 对象 | Hover 落点 | 约束 |
 | --- | --- | --- |
-| Resource 加载阶段 | `sections.loading_timing.data.phases[].hover` | 按 A–E 场景输出阶段；Hover 按语义键取值，文案必须对应当前色条范围。 |
+| Resource 加载阶段 | `sections.loading_timing.data.phases[].hover` | 按语义键取值。`prepare` 是 C / D / E 共用文案，用「可能包含」覆盖缓存、连接复用等场景，不按单条色条改写。 |
 | View 加载阶段 | `sections.loading_timing.data.phases[].hover` | 阶段缺失时随阶段一起省略。 |
 | View 指标标记 | `sections.loading_timing.data.markers[].hover` | TTFB、FCP、LCP 与 `web_vitals` 使用同一指标定义。 |
 | View 累计里程碑 | `sections.loading_timing.data.milestones[].hover` | 覆盖 DOM Complete、Load Event 和页面稳定。 |
@@ -1550,7 +1550,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 
 | 时间 | 结论性进展 |
 | --- | --- |
-| `2026-10-16 11:00` | [a] 复查 Resource 加载时序 PR（[#12798](https://github.com/TencentBlueKing/bk-monitor/pull/12798)）<br />[b] `loading_timing` 按 `resource.timing.*` 匹配 A–E 瀑布，缺新时间点时回退旧阶段字段<br />[c] 有重定向时 B/C/D/E 先输出 `redirect`；D/E 的发起前等待画到 `domain_lookup_start` |
+| `2026-10-16 11:00` | [a] 复查 Resource 加载时序 PR（[#12798](https://github.com/TencentBlueKing/bk-monitor/pull/12798)）并 Approve<br />[b] `loading_timing` 按 `resource.timing.*` 匹配 A–E 瀑布，缺新时间点时回退旧阶段字段<br />[c] 有重定向时 B/C/D/E 先输出 `redirect`；D/E 的发起前等待画到 `domain_lookup_start`<br />[d] `prepare` hover 是 C/D/E 共用文案，去掉重定向后保留「可能包含」缓存等场景，不按单条色条改写 |
 | `2026-10-15 00:00` | [a] 完成统一 Hover 协议、后台 Builder 和接口文档，排除计算方式与原始字段表达式<br />[b] Resource 只采用 bk-rum 新文档的阶段术语，不修改现有算法<br />[c] Timeline View record 复用 Span Builder 的 Hover<br />[d] Builder 与 Timeline 定向测试 `138` 项通过，交付 [TencentBlueKing/bk-monitor #12784](https://github.com/TencentBlueKing/bk-monitor/pull/12784) |
 | `2026-10-12 11:00` | 会话时间线支持按 `view_id` 查询单个 View，供 Span 详情的链路上下文复用，起止时间取该 View 的开始与 `view.phase=end` 快照 |
 | `2026-10-10 00:00` | [a] 设计会话时间线 Builder，节点按 View ID 和 Action ID 挂载，详情复用 Span Builder<br />[b] View 停留时长徽标通过 `field_unit` 声明毫秒，前端负责格式化 |
@@ -1600,7 +1600,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 | 🔄 | `feat/rum_span_detail/#1010158081138079323` | 里程碑 7：提供 RUM Span 详情类接口（`record_detail`） *[1]* | [TencentBlueKing/bk-monitor #12463](https://github.com/TencentBlueKing/bk-monitor/pull/12463) |
 | 🔄 | `<branch_name>` | 里程碑 8：提供 RUM 分析接口（`statistic`） *[1]* | 待创建 |
 | 🔄 | `feat/rum-hover-protocol/#1010158081139035316` | RUM 详情支持 Hover 解释协议（TAPD `#1010158081139035316`） | [TencentBlueKing/bk-monitor #12784](https://github.com/TencentBlueKing/bk-monitor/pull/12784) |
-| 🔄 | `feat/rum_resource_timing/#1010158081139063287` | Resource 加载时序重构（TAPD `#1010158081139063287`） | [TencentBlueKing/bk-monitor #12798](https://github.com/TencentBlueKing/bk-monitor/pull/12798) |
+| ✅ | `feat/rum_resource_timing/#1010158081139063287` | Resource 加载时序重构（TAPD `#1010158081139063287`） | [TencentBlueKing/bk-monitor #12798](https://github.com/TencentBlueKing/bk-monitor/pull/12798) |
 
 - *[1] RUM 接口里程碑实施期间，随接口落地补充 `rum_web/docs/api/search.md`。*
 - *[2] Mock 数据为每种 Span 类型分配固定 `span_id`；详情请求根据 `record_id` 返回对应类型的 Mock 数据。*
