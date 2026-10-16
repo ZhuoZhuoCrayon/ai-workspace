@@ -30,6 +30,10 @@ make bootstrap
 - 链接项目 skills，并把自研 skills 挂到 `.claude/skills/` 和 `.codebuddy/skills/`。
 - 安装 git `pre-commit` hook。
 
+`make bootstrap` 还会安装 GitHub CLI。尚未登录 github.com 且当前是交互终端时，接着执行 `gh auth login`。没有交互终端时只打印登录命令。
+
+登录凭据留在 GitHub CLI 的凭据存储里，不进仓库。
+
 `PROJECTS_ROOT` 覆盖项目存放根目录，默认 `~/Project`。私有仓库的改动在 `private/` 里提交：先 `git -C private pull --ff-only`，再执行 `make repos-sync` 补齐新登记的项目。
 
 `make bootstrap` 不处理这些本机内容：

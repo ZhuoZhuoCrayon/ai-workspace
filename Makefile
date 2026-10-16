@@ -10,7 +10,7 @@ SKILLS_MOUNT_TARGETS ?= .codebuddy .claude
 SKILLS_MOUNT_BLACKLIST ?=
 REGISTRY_SCRIPT ?= $(SKILLS_DIR)/project-mgr/scripts/registry.py
 
-.PHONY: help init init-pre-commit init-skills verify verify-pre-commit verify-skills \
+.PHONY: help init init-pre-commit init-skills init-gh verify verify-pre-commit verify-skills \
 	skills-update skills-update-projects skills-mount repos-sync bootstrap private-pull private-push
 
 define with_node
@@ -31,6 +31,7 @@ help:
 		"  make init                # 安装 pre-commit hook 和锁文件中的 skills" \
 		"  make init-pre-commit     # 安装 git pre-commit hook" \
 		"  make init-skills         # 按 skills-lock.json 安装外部 skills" \
+		"  make init-gh             # 安装 GitHub CLI，并在终端里登录 github.com" \
 		"  make verify              # 验证 hook、断链和 skill 来源" \
 		"  make skills-mount        # 将 .agents/skills 下的目录挂载到 IDE 目录" \
 		"  make skills-update       # 更新工作区内的外部 skills，并链接项目 skills" \
@@ -51,6 +52,9 @@ init-pre-commit:
 
 init-skills:
 	@$(call with_node,npx skills experimental_install)
+
+init-gh:
+	@bash scripts/init_gh.sh
 
 verify: verify-pre-commit verify-skills
 
@@ -155,3 +159,4 @@ bootstrap:
 	@$(MAKE) --no-print-directory skills-mount
 	@$(MAKE) --no-print-directory init-pre-commit
 	@$(MAKE) --no-print-directory verify
+	@$(MAKE) --no-print-directory init-gh

@@ -27,6 +27,7 @@ make bootstrap
 - 把注册表中缺失的项目克隆到 `~/Project`。已有目录不拉取、不改动。
 - 按 `skills-lock.json` 安装外部 skills，链接项目 skills，并把自研 skills 挂到 `.claude/skills/` 和 `.codebuddy/skills/`。
 - 安装 `pre-commit` hook。
+- 本机没有 `gh` 时安装 GitHub CLI，尚未登录 github.com 时在交互终端里执行 `gh auth login`。
 
 没有内网权限时，`private/` 和内网项目记为失败，其余继续。项目存放位置用 `PROJECTS_ROOT` 覆盖：
 

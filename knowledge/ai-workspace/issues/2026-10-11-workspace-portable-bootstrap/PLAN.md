@@ -46,7 +46,7 @@ updated: 2026-10-11
 
 - 两份注册表共 `20` 个条目，都克隆在 `~/Project` 下，只有 `bkmonitor` 位于仓库子目录。
 - 两份注册表各有一个 `bkmonitor-ecosystem`，分别是 GitHub 外部版和内网内部版。
-- `bk-product-designs` 等条目指向内网 `git.woa.com`。
+- `bk-product-designs` 等条目指向内网 Git，地址只记在私有注册表。
 - Cursor 读取 `.agents/skills/`、`.cursor/skills/` 和 `.claude/skills/`，Codex 读取 `.agents/skills/`，Claude Code 和 CodeBuddy 只读取各自的 `skills/`。
 - `.claude/skills/code-review-workspace` 是 skill-creator 的评测目录，被 Cursor 误加载为过期的 `code-review` skill。
 
@@ -191,6 +191,7 @@ sync_one(key, url, branch, dir):
 | `skills-mount` | 生成挂载链接 | 退出 |
 | `init-pre-commit` | 安装 `pre-commit` hook | 退出 |
 | `verify` | [a] 检查断开的符号链接<br />[b] 按「skills 来源模型」的声明位置判定来源，报告来源未知的 skill、未安装的外部 skill 和缺失的注册项目 | 存在断链时非零退出，其余只告警 |
+| `init-gh` | 安装 GitHub CLI。未登录 github.com 且当前是交互终端时执行 `gh auth login` | 安装失败则退出。没有交互终端且未登录时打印登录命令并继续 |
 
 - *[1] 单独执行 `make init-skills` 时，失败照常返回非零。*
 
