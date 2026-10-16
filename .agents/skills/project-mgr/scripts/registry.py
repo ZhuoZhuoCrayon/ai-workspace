@@ -293,51 +293,6 @@ def skill_paths(entries: Sequence[Entry]) -> list[Path]:
     return paths
 
 
-def configure_git_identity(repo: Path, user_name: str, user_email: str) -> bool:
-    """Write ``user.name`` and ``user.email`` into one repository's local config."""
-
-    if not user_name or not user_email or not repo.is_dir():
-        return False
-    probe: subprocess.CompletedProcess[str] = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "--is-inside-work-tree"],
-        capture_output=True,
-        text=True,
-    )
-    if probe.returncode != 0 or probe.stdout.strip() != "true":
-        return False
-    pairs: tuple[tuple[str, str], ...] = (
-        ("user.name", user_name),
-        ("user.email", user_email),
-    )
-    for key, value in pairs:
-        subprocess.run(
-            ["git", "-C", str(repo), "config", "--local", key, value],
-            check=True,
-        )
-    return True
-
-
-def _apply_declared_identity(entry: Entry, repos: Sequence[Path]) -> None:
-    if not entry.user_name or not entry.user_email:
-        return
-    for repo in repos:
-        try:
-            if configure_git_identity(repo, entry.user_name, entry.user_email):
-                print(f"registry: configured git identity {entry.key} at {repo}", file=sys.stderr)
-        except subprocess.CalledProcessError as error:
-            print(
-                f"registry: git identity failed {entry.key} at {repo}: {error.returncode}",
-                file=sys.stderr,
-            )
-
-
-def _identity_repos(entry: Entry) -> list[Path]:
-    repos: list[Path] = [entry.clone_dir()]
-    if entry.key == "private/ai-workspace-private":
-        repos.append(entry.workspace_root / "private")
-    return repos
-
-
 def _git_clone(url: str, branch: str, destination: Path) -> None:
     command: list[str] = ["git", "clone"]
     if branch:
@@ -350,11 +305,7 @@ def _git_clone(url: str, branch: str, destination: Path) -> None:
 
 
 def sync(workspace_root: Path) -> list[tuple[str, str, str]]:
-    """Clone missing repositories. Existing checkouts are not fetched or reset.
-
-    A private entry that declares ``user_name`` and ``user_email`` receives those
-    values in the checkout's local Git config.
-    """
+    """Clone missing repositories. Existing directories stay untouched."""
 
     root: Path = workspace_root.expanduser().resolve()
     results: list[tuple[str, str, str]] = []
@@ -386,7 +337,6 @@ def sync(workspace_root: Path) -> list[tuple[str, str, str]]:
                 detail = "shared clone"
             results.append((entry.key, state, detail))
             cloned_dirs.add(destination)
-            _apply_declared_identity(entry, _identity_repos(entry))
             continue
         if not entry.git_url:
             results.append((entry.key, "skipped", "no git_url"))
@@ -395,7 +345,6 @@ def sync(workspace_root: Path) -> list[tuple[str, str, str]]:
             _git_clone(entry.git_url, entry.branch, destination)
             results.append((entry.key, "cloned", str(destination)))
             cloned_dirs.add(destination)
-            _apply_declared_identity(entry, _identity_repos(entry))
         except subprocess.CalledProcessError as error:
             results.append((entry.key, "failed", str(error.returncode)))
     return results
@@ -409,12 +358,6 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     path_parser = subparsers.add_parser("path")
     path_parser.add_argument("key")
 
-    identity_parser = subparsers.add_parser("identity")
-    identity_parser.add_argument("key")
-
-    configure_parser = subparsers.add_parser("configure")
-    configure_parser.add_argument("key")
-
     subparsers.add_parser("skills")
     subparsers.add_parser("sync")
     return parser.parse_args(argv)
@@ -426,14 +369,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "path":
             entry: Entry = find(load(args.root), args.key)
             print(f"{entry.project_dir()}\t{entry.language}")
-        elif args.command == "identity":
-            entry = find(load(args.root), args.key)
-            print(f"{entry.user_name}\t{entry.user_email}")
-        elif args.command == "configure":
-            entry = find(load(args.root), args.key)
-            if not entry.user_name or not entry.user_email:
-                raise RegistryError(f"{entry.key}: user_name and user_email are not set")
-            _apply_declared_identity(entry, _identity_repos(entry))
         elif args.command == "skills":
             for skill_path in skill_paths(load(args.root)):
                 print(skill_path)

@@ -103,13 +103,14 @@ private 条目在同一对象中追加 `user_name` 和 `user_email`。两项同�
 
 2. 创建 `knowledge/<name>/INDEX.md`（或 `private/knowledge/<name>/INDEX.md`）
 3. 更新 `knowledge/INDEX.md`
-4. private 条目写了 `user_name` 和 `user_email` 时，把这两项写入该仓库的本地 Git 配置：
+4. private 条目写了 `user_name` 和 `user_email`，且检出目录已存在时，在该仓库内执行：
 
 ```bash
-python3 .agents/skills/project-mgr/scripts/registry.py configure private/<name>
+git config --local user.name "<user_name>"
+git config --local user.email "<user_email>"
 ```
 
-命令只执行 `git config --local`。检出目录还不存在时，`make repos-sync` 会在克隆后写入。`private/ai-workspace-private` 同时写入工作区里的 `private/`。
+`private/ai-workspace-private` 的日常副本是工作区 `private/`，同一对值也写到那里。之后提交直接使用这份本地配置。
 
 ## 0x02 删除项目
 
@@ -138,13 +139,6 @@ python3 .agents/skills/project-mgr/scripts/registry.py configure private/<name>
 * **【CRITICAL（必须执行不可协商）】** `language`：
   - 对话：以 `self` 条目的 `language` 为准，与目标项目无关，全局约定见根目录 `AGENTS.md`。
   - 产出（如 commit message、代码注释、文档、PR review 等）：以目标项目的 `language` 为准，默认中文。
-* private 条目的 `user_name`、`user_email` 是该仓库的 Git 提交身份，在加入项目时写入仓库本地配置。读取命令：
-
-```bash
-python3 .agents/skills/project-mgr/scripts/registry.py identity <key>
-```
-
-输出是 `<user_name>\t<user_email>`。两项都为空表示未配置。提交使用这份本地配置，用法见 `git-workflow`。
 
 2）通过 `cd <local_path>` 切换到项目目录，阅读项目级别规范（如 `CONTRIBUTING.md`、`README.md`、`AGENTS.md` 等）。
 

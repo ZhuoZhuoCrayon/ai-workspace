@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 import json
 import subprocess
 import sys
@@ -16,7 +15,6 @@ sys.path.insert(0, str(PROJECT_MGR_ROOT))
 from scripts.registry import (  # noqa: E402
     RegistryError,
     load,
-    main,
     normalize_git_url,
     skill_paths,
     sync,
@@ -169,26 +167,6 @@ class ResolveTest(RegistryTestCase):
         self.assertEqual(entries["private/shared"].user_email, "sandrincai@tencent.com")
         self.assertEqual(entries["private/plain"].user_name, "")
         self.assertEqual(entries["private/plain"].user_email, "")
-
-    def test_identity_command_prints_author_pair(self) -> None:
-        self._public([{"name": "ai-workspace", "self": True}])
-        self._write(
-            "private/repos.json",
-            [
-                {
-                    "name": "shared",
-                    "git_url": "https://git.example.com/internal/shared.git",
-                    "local_path": "git.example.com/internal/shared",
-                    "user_name": "sandrincai",
-                    "user_email": "sandrincai@tencent.com",
-                }
-            ],
-        )
-        stdout: io.StringIO = io.StringIO()
-        with unittest.mock.patch("sys.stdout", stdout):
-            code: int = main(["--root", str(self.workspace_root), "identity", "private/shared"])
-        self.assertEqual(code, 0)
-        self.assertEqual(stdout.getvalue(), "sandrincai\tsandrincai@tencent.com\n")
 
     def test_rejects_public_git_identity(self) -> None:
         self._public(
@@ -360,109 +338,6 @@ class SyncTest(RegistryTestCase):
 
         self.assertEqual(rows["broken"], "failed")
         self.assertEqual(rows["valid"], "cloned")
-
-
-class GitIdentityTest(RegistryTestCase):
-    def _init_repo(self, path: Path) -> None:
-        path.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["git", "init", str(path)], check=True, capture_output=True)
-
-    def _local_value(self, repo: Path, key: str) -> str:
-        result: subprocess.CompletedProcess[bytes] = subprocess.run(
-            ["git", "-C", str(repo), "config", "--local", "--get", key],
-            capture_output=True,
-        )
-        self.assertEqual(result.returncode, 0)
-        return result.stdout.decode().strip()
-
-    def test_configure_writes_repository_local_identity(self) -> None:
-        checkout: Path = self.projects_root / "git.example.com/internal/shared"
-        self._init_repo(checkout)
-        self._public([{"name": "ai-workspace", "self": True}])
-        self._write(
-            "private/repos.json",
-            [
-                {
-                    "name": "shared",
-                    "git_url": "https://git.example.com/internal/shared.git",
-                    "local_path": "git.example.com/internal/shared",
-                    "user_name": "sandrincai",
-                    "user_email": "sandrincai@tencent.com",
-                }
-            ],
-        )
-        with unittest.mock.patch.dict(
-            "os.environ", {"PROJECTS_ROOT": str(self.projects_root)}
-        ):
-            code: int = main(["--root", str(self.workspace_root), "configure", "private/shared"])
-
-        self.assertEqual(code, 0)
-        self.assertEqual(self._local_value(checkout, "user.name"), "sandrincai")
-        self.assertEqual(self._local_value(checkout, "user.email"), "sandrincai@tencent.com")
-
-    def test_configure_also_writes_workspace_private_checkout(self) -> None:
-        clone_dir: Path = self.projects_root / "Tencent/bkm/ai-workspace-private"
-        private_dir: Path = self.workspace_root / "private"
-        self._init_repo(clone_dir)
-        self._public([{"name": "ai-workspace", "self": True}])
-        self._write(
-            "private/repos.json",
-            [
-                {
-                    "name": "ai-workspace-private",
-                    "git_url": "https://git.example.com/internal/private.git",
-                    "local_path": "Tencent/bkm/ai-workspace-private",
-                    "user_name": "sandrincai",
-                    "user_email": "sandrincai@tencent.com",
-                }
-            ],
-        )
-        self._init_repo(private_dir)
-        with unittest.mock.patch.dict(
-            "os.environ", {"PROJECTS_ROOT": str(self.projects_root)}
-        ):
-            code: int = main(
-                ["--root", str(self.workspace_root), "configure", "private/ai-workspace-private"]
-            )
-
-        self.assertEqual(code, 0)
-        self.assertEqual(self._local_value(clone_dir, "user.email"), "sandrincai@tencent.com")
-        self.assertEqual(self._local_value(private_dir, "user.email"), "sandrincai@tencent.com")
-
-    def test_sync_configures_existing_checkout_and_skips_unset_identity(self) -> None:
-        named: Path = self.projects_root / "named"
-        plain: Path = self.projects_root / "plain"
-        self._init_repo(named)
-        self._init_repo(plain)
-        self._public([{"name": "ai-workspace", "self": True}])
-        self._write(
-            "private/repos.json",
-            [
-                {
-                    "name": "named",
-                    "git_url": "https://git.example.com/named.git",
-                    "local_path": "named",
-                    "user_name": "sandrincai",
-                    "user_email": "sandrincai@tencent.com",
-                },
-                {
-                    "name": "plain",
-                    "git_url": "https://git.example.com/plain.git",
-                    "local_path": "plain",
-                },
-            ],
-        )
-        with unittest.mock.patch.dict(
-            "os.environ", {"PROJECTS_ROOT": str(self.projects_root)}
-        ):
-            sync(self.workspace_root)
-
-        self.assertEqual(self._local_value(named, "user.name"), "sandrincai")
-        missing: subprocess.CompletedProcess[bytes] = subprocess.run(
-            ["git", "-C", str(plain), "config", "--local", "--get", "user.name"],
-            capture_output=True,
-        )
-        self.assertNotEqual(missing.returncode, 0)
 
 
 if __name__ == "__main__":

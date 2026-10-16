@@ -25,7 +25,6 @@ description: >
 - 查找并读取贡献者文档，例如 `CONTRIBUTING.md`。
 - 查看项目提交历史，再起草分组方案和 commit message。
 - 项目规范与工作区规范冲突时，以项目规范为准。
-- 目标键是 `private/<name>` 时，作者使用该仓库本地的 `user.name` 与 `user.email`。这两项在项目加入时按注册身份写入。
 
 ## 0x03 工作区知识库提交
 
@@ -53,7 +52,7 @@ git diff HEAD
 git log
 ```
 
-按 `0x03` 的 Conventional Commits 和分组规则提交。作者使用该仓库本地的 `user.name` 与 `user.email`。`private/ai-workspace-private` 的注册身份在项目加入时写入这份本地配置。
+按 `0x03` 的 Conventional Commits 和分组规则提交。作者使用该仓库已配置的 `user.name` 与 `user.email`。
 
 ```bash
 git add <paths>
