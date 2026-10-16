@@ -21,3 +21,6 @@ dist/
 knowledge/bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/validation/
 # 自定义指标元信息调研原文（内部文档）：本地保留，不入库
 knowledge/bkmonitor/issues/2026-09-15-custom-metric-metadata/references/
+
+### PreCI ###
+.codecc
