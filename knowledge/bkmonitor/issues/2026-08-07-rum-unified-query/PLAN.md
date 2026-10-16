@@ -1506,7 +1506,7 @@ View Span 关联信息获取（后端）：
 
 | 对象 | Hover 落点 | 约束 |
 | --- | --- | --- |
-| Resource 加载阶段 | `sections.loading_timing.data.phases[].hover` | 按语义键取值。`prepare` 是 C / D / E 共用文案，用「可能包含」覆盖缓存、连接复用等场景，不按单条色条改写。 |
+| Resource 加载阶段 | `sections.loading_timing.data.phases[].hover` | [a] 按语义键取值<br />[b] `prepare` 是 C / D / E 共用文案，用「可能包含」覆盖缓存、连接复用等场景，不按单条色条改写 |
 | View 加载阶段 | `sections.loading_timing.data.phases[].hover` | 阶段缺失时随阶段一起省略。 |
 | View 指标标记 | `sections.loading_timing.data.markers[].hover` | TTFB、FCP、LCP 与 `web_vitals` 使用同一指标定义。 |
 | View 累计里程碑 | `sections.loading_timing.data.milestones[].hover` | 覆盖 DOM Complete、Load Event 和页面稳定。 |
