@@ -6,6 +6,7 @@ description: >
   用户只给出 PR 或本地变更、没有附带方案路径时也要使用：定位项目后，到该项目的 knowledge issues 中匹配关联方案。已经回写过的方案用 PR 链接定位；首次 review 用 diff 的一级目录和反复出现的模块、函数名回查 PLAN.md。不用 PR 标题，也不从标题或分支拆 story、bug 编号。
   用户已给出方案路径时直接采用该方案，并核对实现与方案一致性。review 结束时自动把版本锚点和本次确认的方案调整写回 PLAN.md。
   默认只输出对话草稿，仅在明确授权后发布 GitHub 评论。
+  用户要求交付 PR 或 MR，且该 PR/MR 已经创建时，该授权包含把本次 review 发布到这张 PR/MR；没有未修复的 P0、P1 时同时提交通过评审。不因此合并。
 ---
 
 # Code Review
@@ -16,7 +17,15 @@ description: >
 
 默认只在对话中输出 review 草稿，不发布到 PR。
 
-GitHub 写操作必须得到用户明确授权，包括评论、approve、request changes 和 dismiss review。
+用户要求交付 PR 或 MR，且该 PR/MR 已经创建时，这次交付授权覆盖发布：
+
+- 把本次 review 发到这张 PR/MR。
+- 没有未修复的 P0、P1 时，同时提交通过评审。
+- 仍有 P0 或 P1 时，先在同一分支修复并复查，此时不发布通过评审。
+- 交付授权不包含合并。
+- 对话中的审查结论就是发布稿，发布时不改写。
+
+GitHub 写操作必须得到用户明确授权，包括评论、approve、request changes 和 dismiss review。交付 PR/MR 按上一段执行，不再单独确认草稿。
 
 唯一例外：用户触发 review 后，针对已确认修复的既有未解决 review thread，可以自动 resolve。
 
@@ -31,6 +40,7 @@ GitHub 写操作必须得到用户明确授权，包括评论、approve、reques
 | `评论到 PR` / `发 review` / `发到 PR` | 发布对应 inline / conversation 评论。 |
 | `Request Changes` / `请求修改` | 存在 P0 或阻塞合入问题时执行 request changes。 |
 | `Approve` / `通过` | 先输出复查结论，再执行 approve，默认 approve body 为 `LGTM`。 |
+| `交付 PR` / `交付 MR` | 发布本次 review，并在没有未修复的 P0、P1 时提交通过评审，approve body 为 `LGTM` |
 
 授权模糊时必须先确认，不得猜测执行。
 
