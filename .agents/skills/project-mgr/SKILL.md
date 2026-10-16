@@ -39,6 +39,8 @@ python3 .agents/skills/project-mgr/scripts/registry.py path <key>
 | visibility | 否  | public（默认） / private                                        |
 | name       | 否  | 项目名称覆盖（默认从 `local_path` 的 basename 推断）                      |
 | language   | 否  | 项目语言偏好：`zh`（默认） / `en`，影响 PR review 评论、commit message 等交互语言 |
+| user_name  | 否  | 仅 private。仓库本地 Git `user.name`，与 `user_email` 成对填写或成对省略 |
+| user_email | 否  | 仅 private。仓库本地 Git `user.email`，与 `user_name` 成对填写或成对省略 |
 
 ### b. 自动发现
 
@@ -76,6 +78,8 @@ python3 .agents/skills/project-mgr/scripts/registry.py path <key>
 是否确认？
 ```
 
+private 且 `user_name`、`user_email` 都有值时，确认清单追加一行：`Git 作者：<user_name> <<user_email>>`。未配置时省略。
+
 用户确认后再执行写入操作。
 
 ### d. 执行步骤
@@ -93,10 +97,19 @@ python3 .agents/skills/project-mgr/scripts/registry.py path <key>
 }
 ```
 
+private 条目在同一对象中追加 `user_name` 和 `user_email`。两项同时写入，或同时省略。public 条目不写这两个字段。
+
 > 当执行“项目巡检/配置治理”时，允许对现有 registry 做 description 补齐（仅更新空描述字段，不改动其他字段）。
 
 2. 创建 `knowledge/<name>/INDEX.md`（或 `private/knowledge/<name>/INDEX.md`）
 3. 更新 `knowledge/INDEX.md`
+4. private 条目写了 `user_name` 和 `user_email` 时，把这两项写入该仓库的本地 Git 配置：
+
+```bash
+python3 .agents/skills/project-mgr/scripts/registry.py configure private/<name>
+```
+
+命令只执行 `git config --local`。检出目录还不存在时，`make repos-sync` 会在克隆后写入。`private/ai-workspace-private` 同时写入工作区里的 `private/`。
 
 ## 0x02 删除项目
 
@@ -125,6 +138,13 @@ python3 .agents/skills/project-mgr/scripts/registry.py path <key>
 * **【CRITICAL（必须执行不可协商）】** `language`：
   - 对话：以 `self` 条目的 `language` 为准，与目标项目无关，全局约定见根目录 `AGENTS.md`。
   - 产出（如 commit message、代码注释、文档、PR review 等）：以目标项目的 `language` 为准，默认中文。
+* private 条目的 `user_name`、`user_email` 是该仓库的 Git 提交身份，在加入项目时写入仓库本地配置。读取命令：
+
+```bash
+python3 .agents/skills/project-mgr/scripts/registry.py identity <key>
+```
+
+输出是 `<user_name>\t<user_email>`。两项都为空表示未配置。提交使用这份本地配置，用法见 `git-workflow`。
 
 2）通过 `cd <local_path>` 切换到项目目录，阅读项目级别规范（如 `CONTRIBUTING.md`、`README.md`、`AGENTS.md` 等）。
 

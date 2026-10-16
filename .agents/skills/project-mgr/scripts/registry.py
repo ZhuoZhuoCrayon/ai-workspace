@@ -30,6 +30,8 @@ class Entry:
     subdir: str
     language: str
     self_entry: bool
+    user_name: str = ""
+    user_email: str = ""
     skills: list[Any] = field(default_factory=list)
     workspace_root: Path = field(repr=False, default_factory=Path.cwd)
     projects_root: Path = field(repr=False, default_factory=Path.home)
@@ -80,6 +82,37 @@ def _projects_root(workspace_root: Path, local: dict[str, Any]) -> Path:
     return Path(configured).expanduser()
 
 
+def _git_identity(payload: dict[str, Any], *, private: bool, name: str) -> tuple[str, str]:
+    """Return optional Git author fields. Private entries may set both or neither."""
+
+    has_name: bool = "user_name" in payload
+    has_email: bool = "user_email" in payload
+    if not private and (has_name or has_email):
+        raise RegistryError(f"{name}: user_name and user_email belong to the private registry")
+    raw_name: Any = payload.get("user_name", "")
+    raw_email: Any = payload.get("user_email", "")
+    if raw_name is None:
+        raw_name = ""
+    if raw_email is None:
+        raw_email = ""
+    if not isinstance(raw_name, str) or not isinstance(raw_email, str):
+        raise RegistryError(f"{name}: user_name and user_email must be strings")
+    user_name: str = raw_name.strip()
+    user_email: str = raw_email.strip()
+    if bool(user_name) != bool(user_email):
+        raise RegistryError(f"{name}: user_name and user_email must be set together")
+    if any(char in user_name for char in "\r\n"):
+        raise RegistryError(f"{name}: user_name is invalid")
+    local: str
+    separator: str
+    domain: str
+    local, separator, domain = user_email.partition("@")
+    email_ok: bool = bool(separator and local and "." in domain and "@" not in domain and " " not in user_email)
+    if user_email and not email_ok:
+        raise RegistryError(f"{name}: user_email is invalid")
+    return user_name, user_email
+
+
 def _overrides(local: dict[str, Any]) -> dict[str, str]:
     projects: Any = local.get("projects", {})
     if not isinstance(projects, dict):
@@ -117,6 +150,7 @@ def _entry_from_payload(
         skills = []
     if not isinstance(skills, list):
         raise RegistryError(f"{name}: skills must be an array")
+    user_name, user_email = _git_identity(payload, private=private, name=name)
     return Entry(
         name=name,
         key=f"private/{name}" if private else name,
@@ -126,6 +160,8 @@ def _entry_from_payload(
         subdir=str(payload.get("subdir") or "."),
         language=str(payload.get("language") or "zh"),
         self_entry=self_entry,
+        user_name=user_name,
+        user_email=user_email,
         skills=skills,
         workspace_root=workspace_root,
         projects_root=projects_root,
@@ -257,6 +293,51 @@ def skill_paths(entries: Sequence[Entry]) -> list[Path]:
     return paths
 
 
+def configure_git_identity(repo: Path, user_name: str, user_email: str) -> bool:
+    """Write ``user.name`` and ``user.email`` into one repository's local config."""
+
+    if not user_name or not user_email or not repo.is_dir():
+        return False
+    probe: subprocess.CompletedProcess[str] = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--is-inside-work-tree"],
+        capture_output=True,
+        text=True,
+    )
+    if probe.returncode != 0 or probe.stdout.strip() != "true":
+        return False
+    pairs: tuple[tuple[str, str], ...] = (
+        ("user.name", user_name),
+        ("user.email", user_email),
+    )
+    for key, value in pairs:
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "--local", key, value],
+            check=True,
+        )
+    return True
+
+
+def _apply_declared_identity(entry: Entry, repos: Sequence[Path]) -> None:
+    if not entry.user_name or not entry.user_email:
+        return
+    for repo in repos:
+        try:
+            if configure_git_identity(repo, entry.user_name, entry.user_email):
+                print(f"registry: configured git identity {entry.key} at {repo}", file=sys.stderr)
+        except subprocess.CalledProcessError as error:
+            print(
+                f"registry: git identity failed {entry.key} at {repo}: {error.returncode}",
+                file=sys.stderr,
+            )
+
+
+def _identity_repos(entry: Entry) -> list[Path]:
+    repos: list[Path] = [entry.clone_dir()]
+    if entry.key == "private/ai-workspace-private":
+        repos.append(entry.workspace_root / "private")
+    return repos
+
+
 def _git_clone(url: str, branch: str, destination: Path) -> None:
     command: list[str] = ["git", "clone"]
     if branch:
@@ -269,7 +350,11 @@ def _git_clone(url: str, branch: str, destination: Path) -> None:
 
 
 def sync(workspace_root: Path) -> list[tuple[str, str, str]]:
-    """Clone missing repositories. Existing directories stay untouched."""
+    """Clone missing repositories. Existing checkouts are not fetched or reset.
+
+    A private entry that declares ``user_name`` and ``user_email`` receives those
+    values in the checkout's local Git config.
+    """
 
     root: Path = workspace_root.expanduser().resolve()
     results: list[tuple[str, str, str]] = []
@@ -301,6 +386,7 @@ def sync(workspace_root: Path) -> list[tuple[str, str, str]]:
                 detail = "shared clone"
             results.append((entry.key, state, detail))
             cloned_dirs.add(destination)
+            _apply_declared_identity(entry, _identity_repos(entry))
             continue
         if not entry.git_url:
             results.append((entry.key, "skipped", "no git_url"))
@@ -309,6 +395,7 @@ def sync(workspace_root: Path) -> list[tuple[str, str, str]]:
             _git_clone(entry.git_url, entry.branch, destination)
             results.append((entry.key, "cloned", str(destination)))
             cloned_dirs.add(destination)
+            _apply_declared_identity(entry, _identity_repos(entry))
         except subprocess.CalledProcessError as error:
             results.append((entry.key, "failed", str(error.returncode)))
     return results
@@ -322,6 +409,12 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     path_parser = subparsers.add_parser("path")
     path_parser.add_argument("key")
 
+    identity_parser = subparsers.add_parser("identity")
+    identity_parser.add_argument("key")
+
+    configure_parser = subparsers.add_parser("configure")
+    configure_parser.add_argument("key")
+
     subparsers.add_parser("skills")
     subparsers.add_parser("sync")
     return parser.parse_args(argv)
@@ -333,6 +426,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "path":
             entry: Entry = find(load(args.root), args.key)
             print(f"{entry.project_dir()}\t{entry.language}")
+        elif args.command == "identity":
+            entry = find(load(args.root), args.key)
+            print(f"{entry.user_name}\t{entry.user_email}")
+        elif args.command == "configure":
+            entry = find(load(args.root), args.key)
+            if not entry.user_name or not entry.user_email:
+                raise RegistryError(f"{entry.key}: user_name and user_email are not set")
+            _apply_declared_identity(entry, _identity_repos(entry))
         elif args.command == "skills":
             for skill_path in skill_paths(load(args.root)):
                 print(skill_path)
