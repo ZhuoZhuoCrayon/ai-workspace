@@ -879,25 +879,44 @@ def build(spans: Sequence[dict[str, Any]], view_id: str | None = None) -> dict[s
 
 #### 0）通用
 
-加载时序计算方式：
+Resource `loading_timing` 优先用 `attributes.resource.timing.*`（相对 timeOrigin 的时间点）按 A→E 匹配瀑布图，阶段起点再换成相对 `start_time` 的偏移。`start_time` 或 `response_end` 缺失时，回退到旧 `attributes.resource.*.start / duration`（相对 `entry.startTime` 的偏移）；旧偏移不能送进 TimingLayout。新区间 `end <= start` 时整段省略，不混用两套字段。
 
-| 指标                    | 计算方式                                                                            |
-| --------------------- | ------------------------------------------------------------------------------- |
-| `total_duration`      | `attributes.resource.download.start + attributes.resource.download.duration`    |
-| `prepare.start`       | `attributes.resource.redirect.start`                                            |
-| `prepare.duration`    | `attributes.resource.dns.start − attributes.resource.redirect.start`            |
-| `dns.start`           | `attributes.resource.dns.start`                                                 |
-| `dns.duration`        | `attributes.resource.dns.duration`                                              |
-| `connect.start`       | `attributes.resource.connect.start`                                             |
-| `connect.duration`    | `attributes.resource.connect.duration − attributes.resource.ssl.duration` *[1]* |
-| `tls.start`           | `attributes.resource.ssl.start`                                                 |
-| `tls.duration`        | `attributes.resource.ssl.duration`                                              |
-| `first_byte.start`    | `attributes.resource.first_byte.start`                                          |
-| `first_byte.duration` | `attributes.resource.first_byte.duration`                                       |
-| `download.start`      | `attributes.resource.download.start`                                            |
-| `download.duration`   | `attributes.resource.download.duration`                                         |
+```mermaid
+flowchart TD
+    G{"timing.start_time / response_end"}
+    G -- "缺任一" --> Legacy["_legacy_waterfall()"]
+    G -- "end <= start" --> Omit["omit loading_timing"]
+    G -- "有效" --> M["LAYOUTS.matches()"]
+    M --> A["CrossOriginLayout"]
+    M --> B["ServiceWorkerLayout"]
+    M --> C["LocalLayout"]
+    M --> D["ReusedLayout"]
+    M --> E["NetworkLayout"]
+    M -- "未命中" --> A
+```
 
-- *[1] TLS 分段有效时扣除其耗时，明确无 TLS 时直接取 `connect.duration`，缺少 TLS 字段不能视为未发生握手。*
+| 类型 | 判断 | 输出 |
+| --- | --- | --- |
+| A 跨域明细不可见 | `request_start = 0` 且 `response_start = 0` 且 `decoded_body_size = 0` | 只输出 `total` |
+| B Service Worker 响应 | `worker_start > 0`，`connect_end ∈ {0, fetch_start}`，`worker_matched_router_source ∈ {空, fetch-event}`，`worker_final_router_source ≠ cache` | 排队、SW 阶段、等待首字节、内容下载 |
+| C 非网络响应 | `connect_end ∈ {0, fetch_start}`，且缓存命中、推断缓存或 SW 静态路由缓存三者之一 | 发起前等待、等待首字节、内容下载 |
+| D 连接复用 | `domain_lookup_start = domain_lookup_end = connect_start = connect_end ≠ 0` | 与 E 同图；DNS / 连接建立 / TLS 以 0 耗时落在 `connect_end` |
+| E 网络请求 | 未匹配 A–D，且 `connect_start > 0` 且 `connect_end > 0` | 重定向、发起前等待、DNS、连接、TLS、等待首字节、内容下载 |
+
+- *[1] 匹配按 A→E 顺序。`ReusedLayout` 继承 `NetworkLayout`，必须排在 E 之前。未命中任何类型时只展示总耗时。*
+- *[2] `total_duration = response_end − start_time`。阶段 `duration <= 0` 或乱序不输出；D 的三根 0 耗时条除外，供前端合并为连接复用。*
+- *[3] `secure_connection_start` 落在 `[connect_start, connect_end]` 之外（含被钳到 `fetch_start`）时不画 TLS，连接建立计算到 `connect_end`。*
+- *[4] 发起前等待：C 画到 `fetch_start`；D / E 画到 `domain_lookup_start`，把 fetch 之后、DNS 之前的空隙算进这一段。*
+- *[5] 有重定向时，B / C / D / E 都先输出 `redirect`，后一段从 `redirect_end` 起算；无重定向时从 `start_time` 起算。*
+- *[6] B 在 `response_start > 0` 时，`respondWith` 与「等待首字节」同起止。*
+
+旧 SDK 回退仍用阶段字段：
+
+| 指标 | 计算方式 |
+| --- | --- |
+| `total_duration` | `attributes.resource.download.start + attributes.resource.download.duration` |
+| `prepare` | `dns.start − redirect.start` |
+| `connect` | TLS 字段有效时 `connect.duration − ssl.duration`，否则用完整 `connect.duration`；缺少 TLS 字段不能视为未发生握手 |
 
 #### 1）XHR & Fetch
 
@@ -958,45 +977,15 @@ def build(spans: Sequence[dict[str, Any]], view_id: str | None = None) -> dict[s
       "type": "waterfall",
       "data": {
         "unit": "ms",
-        "total_duration": 128,
+        "total_duration": 100,
         "phases": [
-	      {
-		    "key": "prepare",
-		    "alias": "浏览器准备",
-		    "start": 0,
-		    "duration": 1.2
-          },
-          {
-            "key": "dns",
-            "alias": "DNS",
-            "start": 1.2,
-            "duration": 3.8
-          },
-          {
-            "key": "connect",
-            "alias": "TCP",
-            "start": 5,
-            "duration": 4.1
-          },
-          {
-            "key": "tls",
-            "alias": "TLS",
-            "start": 9.1,
-            "duration": 5.9
-          },
-
-          {
-            "key": "first_byte",
-            "alias": "等待首字节",
-            "start": 15,
-            "duration": 86.7
-          },
-          {
-            "key": "download",
-            "alias": "内容下载",
-            "start": 101.7,
-            "duration": 26.3
-          }
+          {"key": "redirect", "alias": "重定向", "start": 0, "duration": 10},
+          {"key": "prepare", "alias": "发起前等待", "start": 10, "duration": 5},
+          {"key": "dns", "alias": "DNS", "start": 15, "duration": 5},
+          {"key": "connect", "alias": "连接建立", "start": 20, "duration": 8},
+          {"key": "tls", "alias": "TLS", "start": 28, "duration": 7},
+          {"key": "first_byte", "alias": "等待首字节", "start": 35, "duration": 45},
+          {"key": "download", "alias": "内容下载", "start": 80, "duration": 20}
         ]
       }
     }
@@ -1053,7 +1042,7 @@ def build(spans: Sequence[dict[str, Any]], view_id: str | None = None) -> dict[s
         {"field_name": "attributes.url.template", "value": "/static/img/db.svg"},
         {
 	      "field_name": "attributes.server.address",
-	      "value": "bkmonitor.bkop.woa.com"
+	      "value": "rum.example.com"
 	    },
         {"field_name": "attributes.http.request.method", "value": "GET"},
         {"field_name": "attributes.resource.protocol", "value": "h2"}
@@ -1517,7 +1506,7 @@ View Span 关联信息获取（后端）：
 
 | 对象 | Hover 落点 | 约束 |
 | --- | --- | --- |
-| Resource 加载阶段 | `sections.loading_timing.data.phases[].hover` | 只补充现有阶段的术语与说明，不修改阶段划分、数值或推断规则。 |
+| Resource 加载阶段 | `sections.loading_timing.data.phases[].hover` | 按 A–E 场景输出阶段；Hover 按语义键取值，文案必须对应当前色条范围。 |
 | View 加载阶段 | `sections.loading_timing.data.phases[].hover` | 阶段缺失时随阶段一起省略。 |
 | View 指标标记 | `sections.loading_timing.data.markers[].hover` | TTFB、FCP、LCP 与 `web_vitals` 使用同一指标定义。 |
 | View 累计里程碑 | `sections.loading_timing.data.milestones[].hover` | 覆盖 DOM Complete、Load Event 和页面稳定。 |
@@ -1542,6 +1531,7 @@ Builder 在 `packages/rum_web/handlers/builder/hover.py` 维护静态定义。Re
 | `test_level_handler.py`                | [a] 基类只保存 `data_sources`<br />[b] 具体 Level 可组合多个 Query<br />[c] TopK 方法只接收单个字段<br />[d] 9 项公共方法声明参数与返回类型<br />[e] 未知配置被拒绝，且不能覆盖公共参数或数据源                                                                                                              |
 | `test_query_resources.py`              | [a] 9 个 URL、HTTP 方法、Resource 和 Level 方法一一对应<br />[b] Resource 不依赖公共基类<br />[c] 请求协议不接受 `extra_config`，客户端无法覆盖 Level 配置<br />[d] `view_config` 保留 `origin_field`，顶层维护全量字段，分组通过字段名引用<br />[e] Span 视图返回按类型配置的默认列与分组适用范围<br />[f] semconv 补充别名、单位、展示类型、枚举选项和评级阈值 |
 | Span 详情验收（待实现） | [a] 五类详情复用字段元数据<br />[b] Long Task 保留上报的阻塞贡献<br />[c] Vital 与 Error 概览不使用 Span 耗时，Vital 徽标取指标值，CLS 无单位<br />[d] View 开始时间与停留时长取 `attributes.view.started_at`，结果不随点开的快照变化<br />[e] 非 View 类型不触发关联查询，记录不存在时明确失败 |
+| Resource 加载时序验收（待实现） | [a] 有 `resource.timing.start_time` 与 `response_end` 时按 A–E 匹配，缺一则回退旧阶段字段<br />[b] 新区间非法时整段省略，不混用旧偏移<br />[c] 有重定向时 B/C/D/E 先输出 `redirect`，发起前等待从 `redirect_end` 起算<br />[d] D/E 的发起前等待画到 `domain_lookup_start`；连接复用输出 0 耗时 DNS/连接/TLS<br />[e] `total_duration = response_end − start_time`，乱序或非正耗时不画条 |
 | View 加载时序验收（待实现） | [a] 前四段复用同条 TTFB 耗时，连接不拆 TLS，倒推起点保留空隙<br />[b] View 三段按首字节、DOMContentLoaded、Load 和自动 Loading Time 的边界计算并返回到 `phases`<br />[c] `markers` 仅包含 TTFB、FCP、LCP，评级阈值与 `web_vitals` 卡片一致，缺失指标不补造<br />[d] 非首次加载不返回 `loading_timing`，原点不一致、非法数值和倒序边界不组装伪时序，手动 Loading Time 不生成 `phases` 和 `milestones` 中的 `page_stable`，自动计时的微小负耗时按 `0` 处理<br />[e] `total_duration` 等于有效的 `view.loading_time`，缺失或非法时省略，有效零值保留，标记超出总耗时仅扩展横轴<br />[f] `milestones` 依次取 `dom_complete`、`load_event` 和 `loading_time`，不返回别名，缺失字段直接省略 |
 | Hover 协议验收（待实现） | [a] Resource、View、Vital 共用 `title`、`description`、`user_experience`、`source` 结构<br />[b] 可选字段按内容省略<br />[c] 响应不包含 `formula`、`calculation` 或原始字段表达式<br />[d] 指标标记与 Web Vital 卡片共用定义，View 与 Vital 详情共用评级定义 |
 | 异步分析验收（待实现） | [a] 基础详情不等待关联聚合<br />[b] 未加载、失败与统计为零可区分<br />[c] 应用、关联 ID 和时间边界一致，记录去重<br />[d] 区块合并保留基础字段，切换记录后丢弃旧响应 |
@@ -1560,6 +1550,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-10-16 11:00` | [a] 复查 Resource 加载时序 PR（[#12798](https://github.com/TencentBlueKing/bk-monitor/pull/12798)）<br />[b] `loading_timing` 按 `resource.timing.*` 匹配 A–E 瀑布，缺新时间点时回退旧阶段字段<br />[c] 有重定向时 B/C/D/E 先输出 `redirect`；D/E 的发起前等待画到 `domain_lookup_start` |
 | `2026-10-15 00:00` | [a] 完成统一 Hover 协议、后台 Builder 和接口文档，排除计算方式与原始字段表达式<br />[b] Resource 只采用 bk-rum 新文档的阶段术语，不修改现有算法<br />[c] Timeline View record 复用 Span Builder 的 Hover<br />[d] Builder 与 Timeline 定向测试 `138` 项通过，交付 [TencentBlueKing/bk-monitor #12784](https://github.com/TencentBlueKing/bk-monitor/pull/12784) |
 | `2026-10-12 11:00` | 会话时间线支持按 `view_id` 查询单个 View，供 Span 详情的链路上下文复用，起止时间取该 View 的开始与 `view.phase=end` 快照 |
 | `2026-10-10 00:00` | [a] 设计会话时间线 Builder，节点按 View ID 和 Action ID 挂载，详情复用 Span Builder<br />[b] View 停留时长徽标通过 `field_unit` 声明毫秒，前端负责格式化 |
@@ -1588,6 +1579,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 - [<源码> bk-monitor/packages/rum_web](https://github.com/TencentBlueKing/bk-monitor/tree/master/bkmonitor/packages/rum_web)
 - [<源码> bk-monitor/packages/apm_web/trace](https://github.com/TencentBlueKing/bk-monitor/tree/master/bkmonitor/packages/apm_web/trace)
 - [RUM 数据协议](../../articles/2026-07-12-rum-span-data-protocol/README.md)
+- bk-rum Span 协议 · 资源加载时序：`packages/open-telemetry/wikis/reference/span-protocol.md`
 - [web-vitals 5.2.0 TTFB 归因](https://github.com/GoogleChrome/web-vitals/blob/v5.2.0/src/attribution/onTTFB.ts)
 - [HTML 解析结束与加载事件](https://html.spec.whatwg.org/multipage/parsing.html#the-end)
 - [OpenTelemetry Tracing API](https://opentelemetry.io/docs/specs/otel/trace/api/)
@@ -1607,8 +1599,8 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 | 🔄 | `<branch_name>` | 里程碑 6：提供 RUM 详情 Mock 接口 *[2]* | 待创建 |
 | 🔄 | `feat/rum_span_detail/#1010158081138079323` | 里程碑 7：提供 RUM Span 详情类接口（`record_detail`） *[1]* | [TencentBlueKing/bk-monitor #12463](https://github.com/TencentBlueKing/bk-monitor/pull/12463) |
 | 🔄 | `<branch_name>` | 里程碑 8：提供 RUM 分析接口（`statistic`） *[1]* | 待创建 |
-| 🔄 | `feat/rum-hover-protocol/#1010158081139035316` | RUM 详情支持 Hover 解释协议（[TAPD #1010158081139035316](https://tapd.woa.com/tapd_fe/10158081/story/detail/1010158081139035316)） | [TencentBlueKing/bk-monitor #12784](https://github.com/TencentBlueKing/bk-monitor/pull/12784) |
-| 🔄 | `feat/rum_resource_timing/#1010158081139063287` | Resource 加载时序重构（[TAPD #1010158081139063287](https://tapd.woa.com/tapd_fe/10158081/story/detail/1010158081139063287)） | [TencentBlueKing/bk-monitor #12798](https://github.com/TencentBlueKing/bk-monitor/pull/12798) |
+| 🔄 | `feat/rum-hover-protocol/#1010158081139035316` | RUM 详情支持 Hover 解释协议（TAPD `#1010158081139035316`） | [TencentBlueKing/bk-monitor #12784](https://github.com/TencentBlueKing/bk-monitor/pull/12784) |
+| 🔄 | `feat/rum_resource_timing/#1010158081139063287` | Resource 加载时序重构（TAPD `#1010158081139063287`） | [TencentBlueKing/bk-monitor #12798](https://github.com/TencentBlueKing/bk-monitor/pull/12798) |
 
 - *[1] RUM 接口里程碑实施期间，随接口落地补充 `rum_web/docs/api/search.md`。*
 - *[2] Mock 数据为每种 Span 类型分配固定 `span_id`；详情请求根据 `record_id` 返回对应类型的 Mock 数据。*
