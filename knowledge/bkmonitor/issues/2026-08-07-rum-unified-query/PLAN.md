@@ -663,11 +663,22 @@ def build(
 | --- | --- | --- |
 | View 生命周期 | 同 View ID、`span_type=view` | 按 `view.version` 降序取最新一条 |
 | Web Vitals | 同 View ID、`span_type=vital` | 每个指标按 `end_time` 降序取最新一条 |
+| Session 生命周期 | 同 Session ID、`span_type=session` | `start` / `rotate` / `end` 全部保留，供结束判定 |
 
-- *[1] 关联查询沿用应用范围，按全局唯一的 View ID 定位，不追加 Session 条件。*
+- *[1] View 和 Vital 按全局唯一的 View ID 定位，不追加 Session 条件。Session 生命周期按主记录的 `attributes.session.id` 另查。*
 - *[2] 关联查询不指定时间边界，由查询层按保留期补齐窗口；其他类型返回空列表。*
 - *[3] `ViewSpanBuilder` 用最新快照构造展示数据，`origin_data`、`span_id` 保留主记录。*
 - *[4] Builder 不持有 Query，不引入 Context；计数和影响面仍由 `statistics` 获取。字段访问复用轻量取值函数，协议与计算公式直接遵循 `PLAN.md`，不在草稿重复维护。*
+- *[5] Session 关联结果只参与 `display.view.close_state`，不覆盖 View 快照字段，也不生成 Session 节点。*
+
+结束判定落点：
+
+| 变更点 | 目标 |
+| --- | --- |
+| **[Add]** `display.view.close_state` | `ViewSpanBuilder._prepare_flatten_data` 按 View 结束判定协议写入 |
+| **[Add]** `semconv` 虚拟字段 | `display.view.close_state` 进入字段目录，声明枚举别名 |
+| **[Add]** `key_info.duration` 副文案 | 前端按 `close_state` 映射「页面关闭」等标签，负停留展示为 `0` |
+| **[Keep]** 时间线 `end_time` | 无 `phase=end` 时仍为 `null`，不用 `15 min` / `4 h` 补造结束时刻 |
 
 ### i. Timeline Builder
 
@@ -742,7 +753,7 @@ def build(spans: Sequence[dict[str, Any]], view_id: str | None = None) -> dict[s
 | 入口 | `span` | `related_spans` |
 | --- | --- | --- |
 | `record_detail` | `query_detail(record_id)` | `_query_related_spans(span)` 回查存储 |
-| `timeline` | 查询范围内的 Span | 同一结果按 `attributes.view.id` 切分 |
+| `timeline` | 查询范围内的 Span | 同一结果按 `attributes.view.id` 切分，并把同 `session.id` 的 Session 生命周期 Span 一并传入 View 的 `related_spans` |
 
 ## 0x04 核心协议
 
@@ -1470,10 +1481,11 @@ View Span 关联信息获取（后端）：
 | :--------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | View 生命周期  | `attributes.span_type: view AND attributes.view.id: {当前 View ID}`  | [a] 头部时间：`end_time` 和 `display.view.duration`<br />[b] 加载字段：`attributes.view` 下的 `loading_time`、`loading_time_source`、`loading_type`、`first_byte`、`dom_content_loaded`、`dom_complete` 和 `load_event` |
 | Web Vitals | `attributes.span_type: vital AND attributes.view.id: {当前 View ID}` | TTFB 四段耗时，以及 FCP、LCP、INP 和 CLS 的 `attributes.vital.value`                                                                                                                              |
+| Session 生命周期 | `attributes.span_type: session AND attributes.session.id: {当前 Session ID}` | `display.view.close_state` 所需的 `start` / `rotate` / `end` 时刻 |
 
 * *[1] `origin_data` 和 `span_id` 保留主记录，补齐字段只覆盖展示值。*
 * *[2] View 生命周期 Span 是瞬时快照，`start_time` 等于上报时刻，`elapsed_time` 恒为 `0`，因此概览徽标使用 `display.view.duration`，通过 `field_unit` 声明毫秒，由前端格式化。*
-* *[3] 概览 `start_time` 取 `attributes.view.started_at`（毫秒）换算的微秒值，`display.view.duration` 为最新快照 `end_time` 与导航开始的差值，未取得 `phase=end` 时仅表示已观测时长。*
+* *[3] 概览 `start_time` 取 `attributes.view.started_at`（毫秒）换算的微秒值，`display.view.duration` 为最新快照 `end_time` 与导航开始的差值，未取得 `phase=end` 时仅表示已观测时长。结束语义见 View 结束判定，不从停留时长反推。*
 
 ### h. Hover
 
@@ -1517,6 +1529,86 @@ Builder 在 `packages/rum_web/handlers/builder/hover.py` 维护静态定义。Re
 不在各 Builder 复制文案。Timeline 继续调用 `span_builder.build()`；View record 直接复用
 `sections.web_vitals` 和 `sections.loading_timing`，不重算 Hover。
 
+### i. View 结束判定
+
+页面关闭只认 `view.end_reason=pagehide`。View 结束和 Session 过期是两条生命周期，产品用 `display.view.close_state` 同时表达关页、超时和未见结束。
+
+SDK 把同一 `view.id` 拆成 `start` / `update` / `end` 瞬时快照。`start` 的上报时刻等于 `view.started_at`，`display.view.duration` 就是 `0`（毫秒进微秒时还可能得到 `-0.001 ms`）。关页、无活动超时和满生命周期轮转都会让这条 View 停下，不能靠停留时长区分。
+
+| 机制 | SDK 常量 / 字段 | 行为 |
+| --- | --- | --- |
+| View `start` | `emitViewEvent(view, 'start', startedAt)` | Span 起止同一时刻，停留派生为 `0` |
+| 关页 | `view.end_reason=pagehide` | `pagehide` 结束当前 View，并 flush |
+| 往返缓存 | `view.end_reason=bfcache` | `pagehide.persisted=true` 时结束当前 View |
+| 路由切换 | `view.end_reason` 为 `pushState`、`popstate`、`load`、`manual` 等 | 创建新 View 前结束旧 View |
+| 无活动超时 | `SESSION_IDLE_TIMEOUT_MS = 15 min` | 交互续期，到期发 `session.phase=end`，并结束 View，`end_reason=session_expired` |
+| 最长生命周期 | `SESSION_MAX_DURATION_MS = 4 h` | 自 Session 创建起算，到期同样 `session_expired`，优先于无活动 |
+| 关页后的 Session | localStorage 仍为 `active` | 关页不发 `session.phase=end`。`15 min` 内回来续同一个 Session，超时后再发 `rotate` |
+
+过期原因 `inactivity` / `maxLifetime` 只存在于 SDK 内部 `notifySessionLifecycle`，不上报为 Span Attribute。产品用 Session 起止间隔回推：达到 `4 h` 判满生命周期，其余 `session_expired` 判无活动。
+
+```mermaid
+flowchart LR
+    latest["latest_view.phase"]
+    latest -- "end" --> reason["view.end_reason"]
+    latest -- "start / update" --> idle{"idle window"}
+    reason -- "pagehide" --> page_closed["page_closed"]
+    reason -- "bfcache" --> bf_cache["bf_cache"]
+    reason -- "shutdown" --> shutdown["shutdown"]
+    reason -- "session_expired" --> life{"lifetime"}
+    reason -- "other" --> route_changed["route_changed"]
+    life -- "ge MAX - slack" --> session_max_lifetime["session_max_lifetime"]
+    life -- "else" --> session_idle["session_idle"]
+    idle -- "within IDLE" --> open["open"]
+    idle -- "else" --> unobserved_end["unobserved_end"]
+```
+
+```text
+clock = min(request_end_time, server_now)
+last_snapshot = max(view / 同 View 成员 Span 的 end_time)
+session_start = min(session.phase in {start, rotate}.start_time)
+session_end = max(session.phase=end.end_time) 或 view.end 时刻
+lifetime = session_end - session_start
+slack = 5 s   # 与 SDK FUTURE_CLOCK_TOLERANCE_MS 对齐
+IDLE = 15 min
+MAX = 4 h
+```
+
+`display.view.close_state` 取值：
+
+| 值 | 条件 | 页面文案 |
+| --- | --- | --- |
+| `page_closed` | 最新快照 `phase=end` 且 `end_reason=pagehide` | 页面关闭 |
+| `bf_cache` | `end_reason=bfcache` | 进入往返缓存 |
+| `route_changed` | `phase=end`，且 `end_reason` 不是 `pagehide`、`bfcache`、`session_expired`、`shutdown` | 路由切换 |
+| `session_idle` | `end_reason=session_expired`，且 `lifetime < MAX - slack` | 无活动超时 |
+| `session_max_lifetime` | `end_reason=session_expired`，且 `lifetime >= MAX - slack` | 会话已满 4 小时 |
+| `shutdown` | `end_reason=shutdown` | SDK 关闭 |
+| `open` | 无 `phase=end`，且 `clock - last_snapshot < IDLE` | 进行中 |
+| `unobserved_end` | 无 `phase=end`，且已超出 `IDLE` | 未见结束上报 |
+
+```json
+{
+  "key": "key_info",
+  "type": "summary_cards",
+  "data": {
+    "duration": {
+      "display.view.duration": 0,
+      "display.view.close_state": "page_closed"
+    }
+  }
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `display.view.duration` | `number` | 否 | [a] 最新快照 `end_time` 减 `started_at`，单位 ms<br />[b] 展示层把负值收成 `0`，不改快照时间 |
+| `display.view.close_state` | `enum` | 是 | [a] 有 `phase=end` 时只认 `end_reason`<br />[b] 缺 Session 起止时，`session_expired` 回退为 `session_idle` |
+
+展示落点是停留时长卡片副文案和会话时间线 View 节点右缘。`page_closed` 且停留为 `0` 时文案是「页面关闭」，数值仍为 `0`。时间线无 `phase=end` 时 `end_time` 仍为 `null`，`close_state` 只改变标签。
+
+关页不等于 Session 结束。同一 Session 里可以先出现 `page_closed` 的 View，Session 仍是进行中，直到 `15 min` 无活动或满 `4 h`。`unobserved_end` 不写成「页面关闭」：可能是信标丢失，也可能是查询窗口没覆盖到 `end` 快照。
+
 ## 0x05 验收与验证
 
 查询测试位于 `packages/rum_web/tests/query/`，通用模块测试跟随 `core/` 和 `semconv/`：
@@ -1536,6 +1628,7 @@ Builder 在 `packages/rum_web/handlers/builder/hover.py` 维护静态定义。Re
 | Hover 协议验收（待实现） | [a] Resource、View、Vital 共用 `title`、`description`、`user_experience`、`source` 结构<br />[b] 可选字段按内容省略<br />[c] 响应不包含 `formula`、`calculation` 或原始字段表达式<br />[d] 指标标记与 Web Vital 卡片共用定义，View 与 Vital 详情共用评级定义 |
 | 异步分析验收（待实现） | [a] 基础详情不等待关联聚合<br />[b] 未加载、失败与统计为零可区分<br />[c] 应用、关联 ID 和时间边界一致，记录去重<br />[d] 区块合并保留基础字段，切换记录后丢弃旧响应 |
 | 会话时间线验收（待实现） | [a] 每个 View ID 只生成一个 View 节点，`records` 与同 `span_id` 的 `record_detail` 一致，包含相同 Hover<br />[b] Resource 只挂到同 View 内 `action.id` 相同的 Action，跨 View 的 Resource 留在自身 View<br />[c] Long Task 和 Error 携带 `action.id` 时仍挂在 View<br />[d] Vital 和 Session 不生成节点，无 `phase=end` 记录时 `end_time` 为 `null`<br />[e] 缺少 View ID 或所属 View 无快照的 Span 不进入时间线<br />[f] 按 `view_id` 查询时只返回一个 View 节点，起止时间取该 View，无 `view.phase=end` 快照时 `end_time` 为 `null` |
+| View 结束判定验收（待实现） | [a] `pagehide` 且停留 `0` 返回 `page_closed`，负停留展示为 `0`<br />[b] 无 `phase=end` 且在 `15 min` 内为 `open`，超出为 `unobserved_end`，时间线 `end_time` 仍为 `null`<br />[c] `session_expired` 按 Session 寿命区分 `session_idle` 与 `session_max_lifetime`，缺起止时回退 `session_idle`<br />[d] `page_closed` 不把 Session 标成已结束 |
 | `apm/tests/test_unified_query_base.py` | [a] APM 继承通用基类<br />[b] 3 类 Query 统一接收 Target 列表<br />[c] Proxy 统一构造原始表与预计算层级<br />[d] 列表查询复用 `_query_list()`，Proxy 固定补 `total=0`<br />[e] 查询配置保持列表形态，多 Target 不丢表                                                                                   |
 
 测试门禁：
@@ -1550,6 +1643,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-10-16 16:00` | 设计 View 结束判定：`display.view.close_state` 区分页面关闭、无活动超时、满 `4 h` 和未见结束，关页不等于 Session 结束 |
 | `2026-10-16 11:00` | [a] 复查 Resource 加载时序 PR（[#12798](https://github.com/TencentBlueKing/bk-monitor/pull/12798)）并 Approve<br />[b] `loading_timing` 按 `resource.timing.*` 匹配 A–E 瀑布，缺新时间点时回退旧阶段字段<br />[c] 有重定向时 B/C/D/E 先输出 `redirect`；D/E 的发起前等待画到 `domain_lookup_start`<br />[d] `prepare` hover 是 C/D/E 共用文案，去掉重定向后保留「可能包含」缓存等场景，不按单条色条改写 |
 | `2026-10-15 00:00` | [a] 完成统一 Hover 协议、后台 Builder 和接口文档，排除计算方式与原始字段表达式<br />[b] Resource 只采用 bk-rum 新文档的阶段术语，不修改现有算法<br />[c] Timeline View record 复用 Span Builder 的 Hover<br />[d] Builder 与 Timeline 定向测试 `138` 项通过，交付 [TencentBlueKing/bk-monitor #12784](https://github.com/TencentBlueKing/bk-monitor/pull/12784) |
 | `2026-10-12 11:00` | 会话时间线支持按 `view_id` 查询单个 View，供 Span 详情的链路上下文复用，起止时间取该 View 的开始与 `view.phase=end` 快照 |
@@ -1579,6 +1673,8 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 - [<源码> bk-monitor/packages/rum_web](https://github.com/TencentBlueKing/bk-monitor/tree/master/bkmonitor/packages/rum_web)
 - [<源码> bk-monitor/packages/apm_web/trace](https://github.com/TencentBlueKing/bk-monitor/tree/master/bkmonitor/packages/apm_web/trace)
 - [RUM 数据协议](../../articles/2026-07-12-rum-span-data-protocol/README.md)
+- bk-rum Session：`packages/open-telemetry/src/plugins/session.ts`、`session-state.ts`
+- bk-rum View：`packages/open-telemetry/src/plugins/page-view.ts`
 - bk-rum Span 协议 · 资源加载时序：`packages/open-telemetry/wikis/reference/span-protocol.md`
 - [web-vitals 5.2.0 TTFB 归因](https://github.com/GoogleChrome/web-vitals/blob/v5.2.0/src/attribution/onTTFB.ts)
 - [HTML 解析结束与加载事件](https://html.spec.whatwg.org/multipage/parsing.html#the-end)

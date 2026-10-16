@@ -21,8 +21,8 @@
 
 ## 0x02 最近更新
 
+- 2026-10-16：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（补充 View 结束判定：页面关闭、`15 min` 无活动和 `4 h` 会话轮转）
 - 2026-10-16：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（Resource `loading_timing` 改为 A–E 瀑布，并复查 PR #12798）
 - 2026-10-15：更新 [APM 服务数据状态下沉到后台服务发现](./bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md)（里程碑 1 补充已通过审查，版本锚点登记分支与 PR #12790）
 - 2026-10-14：更新 [APM 服务数据状态下沉到后台服务发现](./bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md)（心跳观测到有效 `last_data_at` 时补齐 `source`；不创建节点、不刷新 `updated_at`，并登记后续实现锚点）
 - 2026-10-14：更新 [指标元信息存储与 SaaS/APM 自定义指标改造](./bkmonitor/issues/2026-09-15-custom-metric-metadata/README.md)（重排完整方案对比：前置 S1～S3x 场景定义，按方案拆分规模与存储数据，并为 A～D 端到端压测补充读写动作与核心 SQL 模式）
-- 2026-10-12：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（会话时间线支持按 `view_id` 查询单个 View）
