@@ -50,7 +50,7 @@ schedules:
 字段含义：
 
 - `active`：当前默认周期
-- `key`：Webhook key（仅保存在 `schedules.yaml`）
+- `key`：Webhook key。运行时读取 `${SKILL_DIR}/config/schedules.yaml`；保管副本在私有仓库 `configs/work-schedule/schedules.yaml`，换机时复制到运行时路径，权限 `600`
 - `months_start`：`1` 或 `7`，用于 H1/H2 月份映射
 - `schema`：`field_id -> 列名`，不同文档 field_id 不同
 
@@ -58,7 +58,7 @@ schedules:
 
 1. 解析用户提供的 `schema + key`
 2. 打印拟新增配置摘要（`period/key/months_start/schema`）并确认
-3. 用户确认后再写入 `${SKILL_DIR}/config/schedules.yaml`
+3. 用户确认后写入私有仓库 `configs/work-schedule/schedules.yaml`，再复制到 `${SKILL_DIR}/config/schedules.yaml`
 4. 按用户要求决定是否切换 `active`
 
 ## 0x04 字段 Schema（扩展版）
