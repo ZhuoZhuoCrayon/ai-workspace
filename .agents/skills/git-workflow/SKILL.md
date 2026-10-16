@@ -33,6 +33,20 @@ Commit message 遵循 Conventional Commits：`<type>(<scope>): <subject>`。
 Scope 使用工作区约定：`knowledge`、`skill`、`project`、`issue`、`rules`。
 
 - 当用户说“提交工作区变更”时，同时检查工作区根目录和 `private/`。根目录的改动按本段提交；`private/` 有改动时按 `0x04` 提交。两边都有改动就各提一次。
+- 本机和开发机都会推送同一条主干。提交前用 rebase 把当前分支接到远端，再创建新提交。
+- 工作区不干净且 rebase 会改到这些文件时，先暂存改动，完成后再恢复。
+- 这次同步不新增 merge commit。
+
+```bash
+git fetch origin
+git rebase origin/main
+```
+
+分叉时改为：
+
+```bash
+git pull --rebase origin main
+```
 - 默认按变更主题拆分多个 commit，而不是合并成一个 commit。
 - 分类优先按“为什么要改”分组，例如：`docs/rules`、`feat/skill`、`ci/tooling`、`chore/workspace`。
 - 工作区内存在来自不同会话的改动时，默认先确认范围，用户明确要求一起提交时可继续分类提交。
@@ -50,6 +64,19 @@ Scope 使用工作区约定：`knowledge`、`skill`、`project`、`issue`、`rul
 git status
 git diff HEAD
 git log
+```
+
+提交前按 `0x03` 同步主干。私有仓主干是 `master`。
+
+```bash
+git fetch origin
+git rebase origin/master
+```
+
+`make private-pull` 只做快进。不能快进时用上面的 rebase，再执行：
+
+```bash
+make private-push
 ```
 
 按 `0x03` 的 Conventional Commits 和分组规则提交。作者使用该仓库已配置的 `user.name` 与 `user.email`。
