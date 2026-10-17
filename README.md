@@ -45,6 +45,10 @@ MCP、Codex 和 BKM CLI 的配置不在这一步里。`private/` 克隆完成后
 - `.agents/skills/`：工作区技能目录。
 - `scripts/config/lint/` 与 `scripts/`：文档检查配置和脚本。
 
-## 0x04 License
+## 0x04 应用
+
+[Agent Chat Bridge](apps/agent-chat-bridge/README.md) 把企业微信或终端接到 Codex 和 Cursor，通过 `/agent` 按会话切换执行器。
+
+## 0x05 License
 
 本项目采用 [MIT License](./LICENSE)。

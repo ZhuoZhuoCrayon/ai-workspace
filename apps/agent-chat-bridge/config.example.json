@@ -1,0 +1,10 @@
+{
+  "channel": "wecom",
+  "workspace": ".",
+  "defaultAgent": "codex",
+  "agents": {
+    "codex": { "writable": false },
+    "cursor": { "writable": false }
+  },
+  "wecom": { "allowedUsers": [] }
+}

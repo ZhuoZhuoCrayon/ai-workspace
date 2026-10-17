@@ -1,0 +1,45 @@
+{
+  "name": "agent-chat-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "将聊天平台接到 Codex 和 Cursor 的通用桥接组件",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "bin": {
+    "agent-chat-bridge": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit -p tsconfig.test.json && prettier --check src test package.json tsconfig*.json",
+    "format": "prettier --write src test package.json tsconfig*.json",
+    "test": "tsx --test test/*.test.ts",
+    "start": "npm run build --silent && node dist/cli.js",
+    "setup": "npm run build --silent && node dist/cli.js init"
+  },
+  "dependencies": {
+    "@wecom/aibot-node-sdk": "1.0.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.2",
+    "prettier": "^3.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0",
+    "ws": "^8.22.0"
+  },
+  "license": "MIT",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "config.example.json"
+  ]
+}

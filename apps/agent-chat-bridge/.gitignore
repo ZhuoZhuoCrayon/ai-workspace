@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+*.local.json
+.setup-*.tmp
+.pair-*.tmp
+.state/
+coverage/
