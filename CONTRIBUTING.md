@@ -66,6 +66,8 @@ make skills-update
 
 维护者确认差异后提交 `skills-lock.json`。`-p` 只更新安装在工作区内的 skills。
 
+初始化和更新会为旧版 GitHub 锁条目补齐 `sourceUrl`。上游 CLI 的删除检查直接克隆该地址，只记录 `owner/repo` 时会把它当成本地路径并跳过检查。
+
 `make init-skills` 同样同步项目链接和 IDE 挂载。只同步本地项目 skills 时执行 `make skills-update-projects`，无需联网更新外部 skills。
 
 同步脚本先校验完整清单，再更新链接。旧名称指向已注册项目技能目录时自动移除，后续取消注册的链接由本机 `.agents/.project-skills.json` 记录识别；普通目录和其他来源的软链接保持不动。

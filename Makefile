@@ -51,7 +51,9 @@ init-pre-commit:
 	@echo "Installed git hook: .git/hooks/pre-commit"
 
 init-skills:
+	@python3 scripts/normalize_skill_sources.py
 	@$(call with_node,npx skills experimental_install)
+	@python3 scripts/normalize_skill_sources.py
 	@$(MAKE) --no-print-directory skills-update-projects
 	@$(MAKE) --no-print-directory skills-mount
 
@@ -68,7 +70,9 @@ verify-skills:
 	@python3 scripts/verify_skills.py --root "$$(pwd)"
 
 skills-update:
+	@python3 scripts/normalize_skill_sources.py
 	@$(call with_node,npx skills update -p -y)
+	@python3 scripts/normalize_skill_sources.py
 	@$(MAKE) --no-print-directory skills-update-projects
 	@$(MAKE) --no-print-directory skills-mount
 
