@@ -14,6 +14,7 @@ import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
 import { parseEnv } from "node:util";
 import { BridgeError } from "./types.js";
+import { DEFAULT_TASK_TIMEOUTS } from "./config.js";
 
 export interface SetupPrompt {
   ask(label: string, secret?: boolean): Promise<string>;
@@ -113,6 +114,7 @@ export async function initialize(
       channel,
       workspace,
       defaultAgent: agent,
+      ...DEFAULT_TASK_TIMEOUTS,
       agents: { codex: { writable }, cursor: { writable } },
       wecom: { allowedUsers: [] },
     };

@@ -13,13 +13,16 @@ import type {
 import { conversationKey, SessionStore } from "./store.js";
 import { modelLabel } from "./agents/presets.js";
 import { buildPrompt } from "./prompt.js";
+import { DEFAULT_TASK_TIMEOUTS } from "./config.js";
 
 interface BridgeOptions {
   workspace?: string;
   defaultAgent: AgentName;
   maxConcurrent: number;
   requestsPerMinute: number;
-  timeoutMs: number;
+  timeoutMs?: number;
+  idleTimeoutMs?: number;
+  hardTimeoutMs?: number;
   authorize(message: IncomingMessage): boolean;
   models?: Partial<Record<AgentName, string[]>>;
   defaultModels?: Partial<Record<AgentName, string>>;
@@ -372,11 +375,45 @@ export class Bridge {
     prepare?: PrepareInput,
   ): Promise<void> {
     const name = conversation.selectedAgent;
-    const timer = setTimeout(
-      () => controller.abort(new BridgeError("任务超时，已停止执行。")),
-      this.options.timeoutMs,
+    const idleTimeoutMs =
+      this.options.idleTimeoutMs ?? DEFAULT_TASK_TIMEOUTS.idleTimeoutMs;
+    const hardTimeoutMs =
+      this.options.hardTimeoutMs ??
+      this.options.timeoutMs ??
+      DEFAULT_TASK_TIMEOUTS.hardTimeoutMs;
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+    const clearTimers = (): void => {
+      stopped = true;
+      clearTimeout(idleTimer);
+      clearTimeout(hardTimer);
+    };
+    const hardTimer = setTimeout(
+      () =>
+        controller.abort(
+          new BridgeError(
+            `任务执行超时：已达到总时限（${hardTimeoutMs / 1000} 秒），已停止执行。`,
+          ),
+        ),
+      hardTimeoutMs,
     );
-    timer.unref();
+    hardTimer.unref();
+    const onActivity = (): void => {
+      if (stopped || controller.signal.aborted) return;
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(
+        () =>
+          controller.abort(
+            new BridgeError(
+              `任务连续 ${idleTimeoutMs / 1000} 秒无输出，已按空闲超时停止。`,
+            ),
+          ),
+        idleTimeoutMs,
+      );
+      idleTimer.unref();
+    };
+    controller.signal.addEventListener("abort", clearTimers, { once: true });
+    onActivity();
     let content = "";
     let progress: Progress = {
       content: `${name} 正在思考，可使用 /cancel 取消。`,
@@ -410,6 +447,7 @@ export class Bridge {
       for await (const event of this.agents[name].run({
         prompt: buildPrompt(prompt, attachments, this.options.persona),
         signal: controller.signal,
+        onActivity,
         ...(attachments.some((attachment) =>
           attachment.mimeType.startsWith("image/"),
         )
@@ -425,6 +463,7 @@ export class Bridge {
         ...(model ? { model } : {}),
       })) {
         controller.signal.throwIfAborted();
+        onActivity();
         if (event.type === "session") {
           conversation.sessions[name] = event.id;
           conversation.updatedAt = Date.now();
@@ -455,7 +494,8 @@ export class Bridge {
       this.logger.error(`${name}: ${message}`);
       content = `${content ? `${content}\n\n` : ""}${message}`;
     } finally {
-      clearTimeout(timer);
+      clearTimers();
+      controller.signal.removeEventListener("abort", clearTimers);
     }
     await reply.finish(content || "任务完成，Agent 未返回文本。", {
       ...progress,

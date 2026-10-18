@@ -43,6 +43,9 @@ test("向导生成可直接启动的配置和私有凭据，不要求 userid", a
     assert.equal(config.defaultAgent, "codex");
     assert.deepEqual(config.wecom.allowedUsers, []);
     assert.equal(config.agents.codex.writable, false);
+    const saved = JSON.parse(readFileSync(file, "utf8"));
+    assert.equal(saved.idleTimeoutMs, 600_000);
+    assert.equal(saved.hardTimeoutMs, 3_600_000);
     assert.equal(statSync(file).mode & 0o777, 0o600);
     assert.equal(statSync(join(temp.directory, ".env")).mode & 0o777, 0o600);
     assert(prompt.questions.at(-1)?.secret);

@@ -160,6 +160,10 @@ async function main(): Promise<void> {
           connected &&
           (channel === "terminal" || config.wecom.allowedUsers.length > 0),
         ...bridge.snapshot(),
+        timeouts: {
+          idleTimeoutMs: config.idleTimeoutMs,
+          hardTimeoutMs: config.hardTimeoutMs,
+        },
       }));
     if (channel === "terminal") {
       await runTerminal(bridge, logger);

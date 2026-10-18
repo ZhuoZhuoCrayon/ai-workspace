@@ -43,7 +43,8 @@ export class CliAgent implements Agent {
       },
     );
     // 标准错误只消费不转发，避免 CLI 日志泄漏环境和文件内容。
-    child.stderr.resume();
+    const onStderr = (): void => request.onActivity?.();
+    child.stderr.on("data", onStderr);
     child.stdin.on("error", () => {});
     child.stdin.end(request.prompt);
     let cleanup: Promise<void> | undefined;
@@ -96,7 +97,10 @@ export class CliAgent implements Agent {
     if (request.signal.aborted) kill();
     const parser = new AgentProtocol(this.name);
     try {
-      for await (const line of readAgentEvents(child.stdout)) {
+      for await (const line of readAgentEvents(
+        child.stdout,
+        request.onActivity,
+      )) {
         request.signal.throwIfAborted();
         yield* parser.parse(line);
       }
@@ -115,6 +119,8 @@ export class CliAgent implements Agent {
       yield { type: "completed" };
     } finally {
       request.signal.removeEventListener("abort", kill);
+      child.stderr.removeListener("data", onStderr);
+      child.stderr.resume();
       const stopping = stop();
       child.stdout.destroy();
       await Promise.all([closed, stopping]);

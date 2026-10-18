@@ -2,6 +2,8 @@
   "channel": "wecom",
   "workspace": ".",
   "defaultAgent": "codex",
+  "idleTimeoutMs": 600000,
+  "hardTimeoutMs": 3600000,
   "agents": {
     "codex": { "writable": false },
     "cursor": { "writable": false }

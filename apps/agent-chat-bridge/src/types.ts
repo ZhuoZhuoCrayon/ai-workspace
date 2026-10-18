@@ -43,6 +43,7 @@ export interface AgentRequest {
   model?: string;
   images?: string[];
   signal: AbortSignal;
+  onActivity?: () => void;
 }
 
 export type AgentEvent =

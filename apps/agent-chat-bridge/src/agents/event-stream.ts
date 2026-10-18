@@ -75,13 +75,21 @@ function guard(selected: boolean): Transform {
 
 export async function* readAgentEvents(
   source: Readable,
+  onActivity?: () => void,
 ): AsyncGenerator<string> {
   let finished!: () => void;
   const done = new Promise<void>((resolve) => {
     finished = resolve;
   });
-  const stream = pipeline(
+  const stream = streamValues.asStream();
+  pipeline(
     source,
+    new Transform({
+      transform(chunk, _encoding, callback) {
+        onActivity?.();
+        callback(null, chunk);
+      },
+    }),
     parser.asStream({
       jsonStreaming: true,
       packKeys: true,
@@ -92,7 +100,7 @@ export async function* readAgentEvents(
     guard(false),
     filter.asStream({ filter: FIELDS }),
     guard(true),
-    streamValues.asStream(),
+    stream,
     () => finished(),
   );
   try {

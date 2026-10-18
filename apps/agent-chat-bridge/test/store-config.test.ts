@@ -60,6 +60,8 @@ test("配置拒绝旧执行器和错误类型，相对路径按配置目录解�
     );
     assert.equal(cfg.defaultAgent, "codex");
     assert.equal(cfg.agents.cursor.writable, false);
+    assert.equal(cfg.idleTimeoutMs, 600_000);
+    assert.equal(cfg.hardTimeoutMs, 3_600_000);
     for (const invalid of [
       { defaultAgent: "claude" },
       { agents: { claude: {} } },
@@ -68,12 +70,37 @@ test("配置拒绝旧执行器和错误类型，相对路径按配置目录解�
       { agents: { codex: { fullAccess: "yes" } } },
       { agents: { cursor: { fullAccess: true } } },
       { timeoutMs: 0 },
+      { idleTimeoutMs: 0 },
+      { hardTimeoutMs: -1 },
+      { idleTimeoutMs: "600000" },
       { wecom: { allowedUsers: ["*"] } },
       { agents: { codex: { models: ["--bad"] } } },
     ]) {
       writeFileSync(file, JSON.stringify(invalid));
       assert.throws(() => loadConfig(file));
     }
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("旧绝对时限继续生效，显式新配置优先且不丢失空闲默认值", () => {
+  const temp = temporary(),
+    file = join(temp.directory, "config.json");
+  try {
+    writeFileSync(file, JSON.stringify({ timeoutMs: 120_000 }));
+    assert.equal(loadConfig(file).hardTimeoutMs, 120_000);
+    assert.equal(loadConfig(file).idleTimeoutMs, 600_000);
+    writeFileSync(
+      file,
+      JSON.stringify({
+        timeoutMs: 120_000,
+        hardTimeoutMs: 3_600_000,
+        idleTimeoutMs: 900_000,
+      }),
+    );
+    assert.equal(loadConfig(file).hardTimeoutMs, 3_600_000);
+    assert.equal(loadConfig(file).idleTimeoutMs, 900_000);
   } finally {
     temp.cleanup();
   }

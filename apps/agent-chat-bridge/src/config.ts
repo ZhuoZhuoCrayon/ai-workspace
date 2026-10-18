@@ -4,6 +4,11 @@ import { BridgeError, isAgentName } from "./types.js";
 import type { AgentName } from "./types.js";
 import { MODEL_PRESETS } from "./agents/presets.js";
 
+export const DEFAULT_TASK_TIMEOUTS = {
+  idleTimeoutMs: 600_000,
+  hardTimeoutMs: 3_600_000,
+} as const;
+
 export interface AgentConfig {
   command: string;
   model?: string;
@@ -20,7 +25,8 @@ export interface Config {
   defaultAgent: AgentName;
   maxConcurrent: number;
   requestsPerMinute: number;
-  timeoutMs: number;
+  idleTimeoutMs: number;
+  hardTimeoutMs: number;
   healthPort: number;
   persona: string;
   agents: Record<AgentName, AgentConfig>;
@@ -145,6 +151,14 @@ export function loadConfig(file: string): Config {
       throw new BridgeError("personaFile 不得超过 16,000 字节。");
     persona = source.toString("utf8").trim();
   }
+  // 旧 timeoutMs 保留绝对时限语义；显式新字段优先。
+  const legacyTimeout = integer(
+    raw.timeoutMs,
+    DEFAULT_TASK_TIMEOUTS.hardTimeoutMs,
+    1000,
+    86_400_000,
+    "timeoutMs",
+  );
   return {
     channel,
     persona,
@@ -159,7 +173,20 @@ export function loadConfig(file: string): Config {
       100,
       "requestsPerMinute",
     ),
-    timeoutMs: integer(raw.timeoutMs, 600_000, 1000, 86_400_000, "timeoutMs"),
+    idleTimeoutMs: integer(
+      raw.idleTimeoutMs,
+      DEFAULT_TASK_TIMEOUTS.idleTimeoutMs,
+      1000,
+      86_400_000,
+      "idleTimeoutMs",
+    ),
+    hardTimeoutMs: integer(
+      raw.hardTimeoutMs,
+      legacyTimeout,
+      1000,
+      86_400_000,
+      "hardTimeoutMs",
+    ),
     healthPort: integer(raw.healthPort, 0, 0, 65535, "healthPort"),
     agents: { codex: parseAgent("codex"), cursor: parseAgent("cursor") },
     wecom: {
