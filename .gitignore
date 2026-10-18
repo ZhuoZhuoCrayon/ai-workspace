@@ -17,6 +17,7 @@ __pycache__/
 bkmonitor-files/
 .bkmonitor-files/
 dist/
+/outputs/
 # bk-collector 自适应限流验证程序：本地保留，不入库
 knowledge/bkmonitor-datalink/issues/2026-06-10-collector-adaptive-throttling/validation/
 # 自定义指标元信息调研原文（内部文档）：本地保留，不入库
