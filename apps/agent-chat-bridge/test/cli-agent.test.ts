@@ -86,6 +86,33 @@ test("正常终态之后非零退出、缺终态、无效 JSON 和缺可执行�
   }
 });
 
+test("子进程发出超过旧上限的工具结果后，仍交付最终答复", async () => {
+  const temp = temporary();
+  try {
+    const command = executable(
+      temp.directory,
+      `
+console.log(JSON.stringify({type:'thread.started',thread_id:'large-tool'}));
+console.log(JSON.stringify({type:'item.completed',item:{type:'mcp_tool_call',id:'tool-1',result:{content:[{type:'text',text:'工具原文😀'.repeat(500000)}]}}}));
+console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'大型工具调用后正常完成'}}));
+process.stdout.write(JSON.stringify({type:'turn.completed'}));
+`,
+    );
+    const events = await drain(
+      new CliAgent("codex", { command, writable: false }, temp.directory),
+    );
+    assert.equal(events.at(-1)?.type, "completed");
+    assert(
+      events.some(
+        (event) =>
+          event.type === "text" && event.content === "大型工具调用后正常完成",
+      ),
+    );
+  } finally {
+    temp.cleanup();
+  }
+});
+
 test("取消会清理忽略 SIGTERM 的进程组", async () => {
   const temp = temporary(),
     pidFile = join(temp.directory, "pids");

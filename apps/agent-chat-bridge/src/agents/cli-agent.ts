@@ -4,6 +4,7 @@ import { BridgeError } from "../types.js";
 import type { Agent, AgentEvent, AgentName, AgentRequest } from "../types.js";
 import type { AgentConfig } from "../config.js";
 import { AgentProtocol, buildArguments } from "./protocol.js";
+import { readAgentEvents } from "./event-stream.js";
 
 export class CliAgent implements Agent {
   constructor(
@@ -94,24 +95,11 @@ export class CliAgent implements Agent {
     request.signal.addEventListener("abort", kill, { once: true });
     if (request.signal.aborted) kill();
     const parser = new AgentProtocol(this.name);
-    let buffer = "";
-    child.stdout.setEncoding("utf8");
     try {
-      for await (const chunk of child.stdout) {
+      for await (const line of readAgentEvents(child.stdout)) {
         request.signal.throwIfAborted();
-        buffer += chunk;
-        let newline: number;
-        while ((newline = buffer.indexOf("\n")) >= 0) {
-          if (newline > 1_048_576)
-            throw new BridgeError("Agent 单条事件超过长度上限。");
-          const line = buffer.slice(0, newline).trim();
-          buffer = buffer.slice(newline + 1);
-          if (line) yield* parser.parse(line);
-        }
-        if (buffer.length > 1_048_576)
-          throw new BridgeError("Agent 单条事件超过长度上限。");
+        yield* parser.parse(line);
       }
-      if (buffer.trim()) yield* parser.parse(buffer.trim());
       const exit = await closed;
       request.signal.throwIfAborted();
       if (exit.error)
