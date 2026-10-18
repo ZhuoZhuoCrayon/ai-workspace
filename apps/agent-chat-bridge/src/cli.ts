@@ -120,6 +120,11 @@ async function main(): Promise<void> {
         codex: config.agents.codex.models ?? [],
         cursor: config.agents.cursor.models ?? [],
       },
+      defaultModels: Object.fromEntries(
+        Object.entries(config.agents).flatMap(([name, agent]) =>
+          agent.model ? [[name, agent.model]] : [],
+        ),
+      ),
       authorize: (message) =>
         message.channel === "terminal"
           ? channel === "terminal"

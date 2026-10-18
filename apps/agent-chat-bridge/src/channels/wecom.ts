@@ -1,5 +1,7 @@
 import { readWeComInput, downloadAttachment } from "./wecom-input.js";
 import { extractImages } from "./outbound-images.js";
+import { renderProgress } from "./progress.js";
+import { portableLinks } from "./links.js";
 import { stripBotMention, splitMarkdownByBytes } from "./text.js";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
@@ -12,7 +14,13 @@ import type {
 } from "@wecom/aibot-node-sdk";
 import type { PairingGate } from "../pairing.js";
 import type { Bridge } from "../bridge.js";
-import type { IncomingMessage, Logger, Reply } from "../types.js";
+import type {
+  IncomingMessage,
+  Logger,
+  Reply,
+  Progress,
+  ReplyChoice,
+} from "../types.js";
 
 type Sender = Pick<WSClient, "replyStream" | "sendMessage"> &
   Partial<Pick<WSClient, "uploadMedia">>;
@@ -101,6 +109,7 @@ export class DeliveryQueue {
 export class WeComReply implements Reply {
   private readonly streamId = randomUUID();
   private latest = "";
+  private progress: Progress | undefined;
   private lastUpdate = 0;
   private updateTimer: NodeJS.Timeout | undefined;
   private windowTimer: NodeJS.Timeout | undefined;
@@ -119,22 +128,38 @@ export class WeComReply implements Reply {
     private readonly workspace?: string,
   ) {}
 
-  async update(content: string): Promise<void> {
+  async update(content: string, progress?: Progress): Promise<void> {
     if (this.finished || this.proactive) return;
-    this.latest = content;
+    this.progress = progress && {
+      ...progress,
+      content: portableLinks(progress.content),
+    };
+    this.latest = renderProgress(portableLinks(content), this.progress);
     if (!this.windowTimer) {
       this.windowTimer = setTimeout(() => {
         this.clearUpdateTimer();
         void this.enqueue(async () => {
-          await this.stream("任务仍在处理，完成后会推送结果。", true);
+          await this.stream(
+            renderProgress(
+              "任务仍在处理，完成后会推送结果。",
+              this.progress,
+              true,
+            ),
+            true,
+          );
           this.proactive = true;
         });
       }, this.windowMs);
       this.windowTimer.unref();
     }
     if (!this.lastUpdate) {
-      await this.enqueue(() => this.stream(content, false));
-    } else if (!this.updateTimer) {
+      const placeholder = progress?.active && !content;
+      await this.enqueue(() =>
+        this.stream(placeholder ? "<think></think>" : this.latest, false),
+      );
+      if (!placeholder || this.finished || this.proactive) return;
+    }
+    if (!this.updateTimer) {
       this.updateTimer = setTimeout(
         () => {
           this.updateTimer = undefined;
@@ -149,7 +174,7 @@ export class WeComReply implements Reply {
     }
   }
 
-  async finish(content: string): Promise<void> {
+  async finish(content: string, progress?: Progress): Promise<void> {
     if (this.finished) return;
     this.finished = true;
     this.clearUpdateTimer();
@@ -160,8 +185,9 @@ export class WeComReply implements Reply {
         ? extractImages(content, this.workspace)
         : { text: content, images: [] };
     await this.finishText(
-      extracted.text ||
+      portableLinks(extracted.text) ||
         (extracted.images.length ? "图片结果如下。" : "任务完成。"),
+      progress && { ...progress, content: portableLinks(progress.content) },
     );
     for (const image of extracted.images) {
       try {
@@ -187,12 +213,55 @@ export class WeComReply implements Reply {
     }
   }
 
-  private async finishText(content: string): Promise<void> {
-    if (!this.proactive && Buffer.byteLength(content) <= 19_900) {
-      await this.stream(content, true);
+  async select(content: string, choices: ReplyChoice[]): Promise<void> {
+    await this.finish(content);
+    const visible = choices
+      .filter((choice) => Buffer.byteLength(choice.command) <= 200)
+      .slice(0, 6);
+    if (!visible.length) return;
+    try {
+      for (let index = 0; index < visible.length; index += 3) {
+        const group = visible.slice(index, index + 3);
+        await this.queue.send(() =>
+          this.client.sendMessage(this.target, {
+            msgtype: "template_card",
+            template_card: {
+              card_type: "text_notice",
+              main_title: {
+                title: "快捷切换",
+                desc:
+                  visible.length > 3
+                    ? `选项 ${index + 1}～${index + group.length}，点击即可切换`
+                    : "点击选项即可切换",
+              },
+              jump_list: group.map((choice) => ({
+                type: 3,
+                title: [...choice.label].slice(0, 25).join(""),
+                question: choice.command,
+              })),
+              card_action: { type: 0 },
+            },
+          }),
+        );
+      }
+    } catch {
+      this.logger.error("快捷选项发送失败，可使用文字指令切换。");
+    }
+  }
+
+  private async finishText(
+    content: string,
+    progress?: Progress,
+  ): Promise<void> {
+    const streamContent = renderProgress(content, progress, true);
+    if (!this.proactive && Buffer.byteLength(streamContent) <= 19_900) {
+      await this.stream(streamContent, true);
       if (!this.proactive) return;
     } else if (!this.proactive) {
-      await this.stream("任务完成，结果将分段发送。", true);
+      await this.stream(
+        renderProgress("任务完成，结果将分段发送。", progress, true),
+        true,
+      );
       this.proactive = true;
     }
     for (const part of splitMarkdownByBytes(content, 4000)) {
@@ -300,7 +369,7 @@ export function connectWeCom(
           options.attachmentDir ?? ".state/attachments",
           signal,
         );
-        return { ...input, text: stripBotMention(input.text).text };
+        return input;
       })
       .catch(() => logger.error("企业微信消息处理或交付失败。"));
   });

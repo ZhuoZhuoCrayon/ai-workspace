@@ -22,8 +22,19 @@ export interface Attachment {
 }
 
 export interface Reply {
-  update(content: string): Promise<void>;
-  finish(content: string): Promise<void>;
+  update(content: string, progress?: Progress): Promise<void>;
+  finish(content: string, progress?: Progress): Promise<void>;
+  select?(content: string, choices: ReplyChoice[]): Promise<void>;
+}
+
+export interface Progress {
+  content: string;
+  active: boolean;
+}
+
+export interface ReplyChoice {
+  label: string;
+  command: string;
 }
 
 export interface AgentRequest {
@@ -37,6 +48,7 @@ export interface AgentRequest {
 export type AgentEvent =
   | { type: "session"; id: string }
   | { type: "text"; content: string }
+  | ({ type: "progress" } & Progress)
   | { type: "completed" };
 
 export interface Agent {

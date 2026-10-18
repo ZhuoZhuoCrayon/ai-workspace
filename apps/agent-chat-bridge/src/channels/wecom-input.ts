@@ -11,6 +11,7 @@ import { join, resolve } from "node:path";
 import type { BaseMessage, WSClient } from "@wecom/aibot-node-sdk";
 import type { Attachment } from "../types.js";
 import { BridgeError } from "../types.js";
+import { stripBotMention } from "./text.js";
 
 export function imageType(
   buffer: Buffer,
@@ -52,6 +53,7 @@ export async function readWeComInput(
 ): Promise<{ text: string; attachments: Attachment[] }> {
   const references: MediaReference[] = [];
   const segments: string[] = [];
+  let quoteUnavailable = false;
   const collect = (
     part: Record<string, any>,
     quoted: boolean,
@@ -65,8 +67,14 @@ export async function readWeComInput(
         : part.msgtype === "text"
           ? part.text?.content
           : undefined;
-    if (typeof text === "string" && text.trim())
-      segments.push(quoted ? `[引用消息]\n${text}` : text);
+    if (typeof text === "string" && text.trim()) {
+      if (quoted && /^[\[【]?该消息类型暂不能展示[\]】]?$/.test(text.trim()))
+        quoteUnavailable = true;
+      else
+        segments.push(
+          quoted ? `[引用消息]\n${text}` : stripBotMention(text).text,
+        );
+    }
     if (part.msgtype === "mixed") {
       for (const item of part.mixed?.msg_item ?? [])
         collect(item, quoted, depth + 1);
@@ -86,7 +94,10 @@ export async function readWeComInput(
       });
     }
   };
-  if (body.quote) collect(body.quote, true);
+  if (body.quote) {
+    collect(body.quote, true);
+    if (!segments.length && !references.length) quoteUnavailable = true;
+  }
   collect(body, false);
   if (references.length > 5)
     throw new BridgeError("单条消息最多包含 5 个附件。");
@@ -135,6 +146,10 @@ export async function readWeComInput(
     for (const attachment of attachments) unlinkSync(attachment.path);
     throw error;
   }
+  if (quoteUnavailable)
+    segments.unshift(
+      "[引用原文缺失或不完整]\n仅依据本条可见内容回答，不要把旧会话当作引用原文。需要原文时，请用户复制正文或提供源链接。",
+    );
   return {
     text:
       segments.join("\n\n") || (attachments.length ? "请查看附件并回答。" : ""),

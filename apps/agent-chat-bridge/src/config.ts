@@ -2,11 +2,14 @@ import { readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { BridgeError, isAgentName } from "./types.js";
 import type { AgentName } from "./types.js";
+import { MODEL_PRESETS } from "./agents/presets.js";
 
 export interface AgentConfig {
   command: string;
   model?: string;
   writable: boolean;
+  networkAccess?: boolean;
+  fullAccess?: boolean;
   models?: string[];
 }
 
@@ -19,6 +22,7 @@ export interface Config {
   requestsPerMinute: number;
   timeoutMs: number;
   healthPort: number;
+  persona: string;
   agents: Record<AgentName, AgentConfig>;
   wecom: {
     allowedUsers: string[];
@@ -76,6 +80,18 @@ export function loadConfig(file: string): Config {
     const options = object(agents[name] ?? {}, `agents.${name}`);
     if (options.writable !== undefined && typeof options.writable !== "boolean")
       throw new BridgeError("writable 必须是布尔值。");
+    if (
+      options.networkAccess !== undefined &&
+      typeof options.networkAccess !== "boolean"
+    )
+      throw new BridgeError("networkAccess 必须是布尔值。");
+    if (
+      options.fullAccess !== undefined &&
+      typeof options.fullAccess !== "boolean"
+    )
+      throw new BridgeError("fullAccess 必须是布尔值。");
+    if (name !== "codex" && options.fullAccess === true)
+      throw new BridgeError("fullAccess 仅支持 Codex。");
     let command = text(
       options.command,
       name === "codex" ? "codex" : "cursor-agent",
@@ -83,11 +99,11 @@ export function loadConfig(file: string): Config {
     );
     if (command.includes("/") && !isAbsolute(command))
       command = resolve(root, command);
-    const model =
-      options.model === undefined
-        ? undefined
-        : text(options.model, "", "model");
-    const models = options.models ?? [];
+    const suppliedModels = options.models ?? [];
+    const models =
+      Array.isArray(suppliedModels) && suppliedModels.length === 0
+        ? MODEL_PRESETS[name].map((model) => model.id)
+        : suppliedModels;
     if (
       !Array.isArray(models) ||
       models.length > 30 ||
@@ -99,9 +115,12 @@ export function loadConfig(file: string): Config {
       new Set(models).size !== models.length
     )
       throw new BridgeError("models 必须是最多 30 项、不重复的模型 ID 数组。");
+    const model = text(options.model, models[0]!, "model");
     return {
       command,
       writable: options.writable === true,
+      networkAccess: options.networkAccess === true,
+      fullAccess: options.fullAccess === true,
       ...(model ? { model } : {}),
       models,
     };
@@ -118,8 +137,17 @@ export function loadConfig(file: string): Config {
   const channel = raw.channel ?? "wecom";
   if (channel !== "wecom" && channel !== "terminal")
     throw new BridgeError("channel 只能是 wecom 或 terminal。");
+  let persona = "";
+  if (raw.personaFile !== undefined) {
+    const file = resolve(root, text(raw.personaFile, "", "personaFile"));
+    const source = readFileSync(file);
+    if (source.length > 16_000)
+      throw new BridgeError("personaFile 不得超过 16,000 字节。");
+    persona = source.toString("utf8").trim();
+  }
   return {
     channel,
+    persona,
     workspace,
     stateDir: resolve(root, text(raw.stateDir, ".state", "stateDir")),
     defaultAgent,

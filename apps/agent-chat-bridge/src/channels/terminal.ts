@@ -12,8 +12,11 @@ export async function runTerminal(
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
   for await (const text of input) {
     const reply: Reply = {
-      async update(content) {
-        if (process.stdout.isTTY) process.stdout.write(`[进度] ${content}\n`);
+      async update(content, progress) {
+        if (process.stdout.isTTY)
+          process.stdout.write(
+            `[进度] ${progress?.active ? progress.content : content || progress?.content || "处理中"}\n`,
+          );
       },
       async finish(content) {
         process.stdout.write(`${content}\n`);

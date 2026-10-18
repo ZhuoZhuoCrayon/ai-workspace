@@ -1,4 +1,4 @@
-import { BridgeError, isAgentName } from "./types.js";
+import { AGENT_NAMES, BridgeError, isAgentName } from "./types.js";
 import type {
   Agent,
   Attachment,
@@ -7,8 +7,12 @@ import type {
   IncomingMessage,
   Logger,
   Reply,
+  Progress,
+  ReplyChoice,
 } from "./types.js";
 import { conversationKey, SessionStore } from "./store.js";
+import { modelLabel } from "./agents/presets.js";
+import { buildPrompt } from "./prompt.js";
 
 interface BridgeOptions {
   workspace?: string;
@@ -18,6 +22,8 @@ interface BridgeOptions {
   timeoutMs: number;
   authorize(message: IncomingMessage): boolean;
   models?: Partial<Record<AgentName, string[]>>;
+  defaultModels?: Partial<Record<AgentName, string>>;
+  persona?: string;
 }
 
 interface LogicalInput {
@@ -48,7 +54,7 @@ interface RunningTask {
 }
 
 const HELP =
-  "/agent：查看执行器\n/agent codex 或 /agent cursor：切换执行器\n/status：查看会话状态\n/reset（/new）：归档并开启新会话\n/sessions：列出当前执行器的历史\n/resume <序号>：恢复历史会话\n/model [模型 ID|default]：查看或切换模型\n/rerun：重跑上一条问题\n/cancel（/stop）：取消当前任务\n/help：查看帮助";
+  "/agent：选择执行器\n/agent <序号|codex|cursor>：切换执行器\n/status：查看会话状态\n/reset（/new）：归档并开启新会话\n/sessions：列出当前执行器的历史\n/resume <序号>：恢复历史会话\n/model [序号|模型 ID|default]：查看或切换当前执行器的模型\n/rerun：重跑上一条问题\n/cancel（/stop）：取消当前任务\n/help：查看帮助";
 
 export class Bridge {
   private readonly running = new Map<string, RunningTask>();
@@ -209,9 +215,39 @@ export class Bridge {
     text: string,
     reply: Reply,
   ): Promise<void> {
-    const [command, argument, ...rest] = text.split(/\s+/);
+    const [command, input, ...rest] = text.split(/\s+/);
     const running = this.running.get(key);
     const name = conversation.selectedAgent;
+    let argument = input;
+    if (command === "/agent" && argument && /^[1-9]\d*$/.test(argument))
+      argument = AGENT_NAMES[Number(argument) - 1] ?? argument;
+    if (command === "/model" && argument) {
+      const scoped = /^(codex|cursor):(.+)$/.exec(argument);
+      if (scoped) {
+        if (scoped[1] !== name) {
+          await reply.finish(
+            `此选项属于 ${scoped[1]}，请先用 /agent 切换执行器。`,
+          );
+          return;
+        }
+        argument = scoped[2];
+      }
+      if (/^[1-9]\d*$/.test(argument!))
+        argument =
+          this.options.models?.[name]?.[Number(argument) - 1] ?? argument;
+    }
+    if (command === "/agent" && !argument) {
+      const choices = AGENT_NAMES.map((agent) => ({
+        label: `${agent === name ? "当前：" : ""}${agent}`,
+        command: `/agent ${agent}`,
+      }));
+      await this.select(
+        reply,
+        `当前执行器：${name}\n${AGENT_NAMES.map((agent, i) => `${i + 1}. ${agent}${agent === name ? "（当前）" : ""}`).join("\n")}\n\n发送 /agent <序号或名称> 切换，例如 /agent 2。\n切换后使用 /model 选择对应模型，各自的上下文和模型偏好会保留。`,
+        choices,
+      );
+      return;
+    }
     if (command === "/sessions" && !argument) {
       const entries = conversation.history?.[name] ?? [];
       const lines = entries.map(
@@ -224,8 +260,13 @@ export class Bridge {
     }
     if (command === "/model" && !argument) {
       const choices = this.options.models?.[name] ?? [];
-      await reply.finish(
-        `当前模型：${conversation.models?.[name] ?? "部署默认"}\n可选模型：${choices.join("、") || "未配置，请在配置文件中设置 agents.<name>.models"}`,
+      await this.select(
+        reply,
+        `当前执行器：${name}\n当前模型：${modelLabel(name, conversation.models?.[name] ?? this.options.defaultModels?.[name] ?? "CLI 默认")}\n${choices.length ? choices.map((model, i) => `${i + 1}. ${modelLabel(name, model)}${model === (conversation.models?.[name] ?? this.options.defaultModels?.[name]) ? "（当前）" : ""}`).join("\n") : "未发现可选模型，可在配置中设置 agents." + name + ".models。"}\n\n发送 /model <序号或模型 ID> 切换，/model default 恢复默认。`,
+        choices.map((model) => ({
+          label: modelLabel(name, model),
+          command: `/model ${name}:${model}`,
+        })),
       );
       return;
     }
@@ -272,16 +313,13 @@ export class Bridge {
       await reply.finish(
         command === "/resume"
           ? "已恢复选中的历史会话。"
-          : "模型设置对下一条消息生效。",
+          : `已设置 ${name} 模型：${modelLabel(name, conversation.models?.[name] ?? this.options.defaultModels?.[name] ?? "CLI 默认")}，对下一条消息生效。`,
       );
       return;
     }
-    if (
-      (command === "/agent" && !argument) ||
-      (command === "/status" && !argument)
-    ) {
+    if (command === "/status" && !argument) {
       await reply.finish(
-        `当前执行器：${conversation.selectedAgent}\n状态：${running ? "运行中" : "空闲"}\n上下文：${conversation.sessions[conversation.selectedAgent] ? "可恢复" : "新会话"}`,
+        `当前执行器：${conversation.selectedAgent}\n当前模型：${modelLabel(name, conversation.models?.[name] ?? this.options.defaultModels?.[name] ?? "CLI 默认")}\n状态：${running ? "运行中" : "空闲"}\n上下文：${conversation.sessions[conversation.selectedAgent] ? "可恢复" : "新会话"}`,
       );
       return;
     }
@@ -316,7 +354,7 @@ export class Bridge {
       }
       await reply.finish(
         command === "/agent"
-          ? `已切换为 ${conversation.selectedAgent}。`
+          ? `已切换为 ${conversation.selectedAgent}。\n当前模型：${modelLabel(conversation.selectedAgent, conversation.models?.[conversation.selectedAgent] ?? this.options.defaultModels?.[conversation.selectedAgent] ?? "CLI 默认")}\n发送 /model 查看可选模型。`
           : `已清空 ${conversation.selectedAgent} 上下文。`,
       );
       return;
@@ -340,8 +378,13 @@ export class Bridge {
     );
     timer.unref();
     let content = "";
+    let progress: Progress = {
+      content: `${name} 正在思考，可使用 /cancel 取消。`,
+      active: true,
+    };
+    let receivedProgress = false;
     try {
-      await reply.update(`${name} 正在处理，可使用 /cancel 取消。`);
+      await reply.update("", progress);
       controller.signal.throwIfAborted();
       if (prepare) {
         const input = await abortable(
@@ -365,7 +408,7 @@ export class Bridge {
       const sessionId = conversation.sessions[name];
       const model = conversation.models?.[name];
       for await (const event of this.agents[name].run({
-        prompt: `[聊天通道约定]\n只执行用户明确提出的任务。需要用户决定时用文本提问并结束本轮，本通道无法回答交互式工具。长任务先给出阶段性结论。\n\n[用户消息]\n${prompt}${attachments.length ? `\n\n[用户附件，本地路径]\n${attachments.map((attachment) => `${JSON.stringify(attachment.path)}（${attachment.mimeType}）`).join("\n")}` : ""}`,
+        prompt: buildPrompt(prompt, attachments, this.options.persona),
         signal: controller.signal,
         ...(attachments.some((attachment) =>
           attachment.mimeType.startsWith("image/"),
@@ -389,7 +432,13 @@ export class Bridge {
         }
         if (event.type === "text") {
           content = event.content;
-          await reply.update(content);
+          progress = { ...progress, active: false };
+          await reply.update(content, progress);
+        }
+        if (event.type === "progress") {
+          receivedProgress = true;
+          progress = { content: event.content, active: event.active };
+          await reply.update(content, progress);
         }
         if (event.type === "completed") completed = true;
       }
@@ -408,7 +457,20 @@ export class Bridge {
     } finally {
       clearTimeout(timer);
     }
-    await reply.finish(content || "任务完成，Agent 未返回文本。");
+    await reply.finish(content || "任务完成，Agent 未返回文本。", {
+      ...progress,
+      content: receivedProgress ? progress.content : "本次处理已结束。",
+      active: false,
+    });
+  }
+
+  private async select(
+    reply: Reply,
+    content: string,
+    choices: ReplyChoice[],
+  ): Promise<void> {
+    if (reply.select && choices.length) await reply.select(content, choices);
+    else await reply.finish(content);
   }
 
   async close(): Promise<void> {

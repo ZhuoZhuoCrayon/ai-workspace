@@ -26,6 +26,67 @@ const options = {
   authorize: () => true,
 };
 
+test("对话端编号切换执行器，模型目录、偏好与旧卡片按执行器隔离", async () => {
+  const temp = temporary(),
+    store = new SessionStore(temp.directory);
+  const codex = new RecordingAgent("codex"),
+    cursor = new RecordingAgent("cursor");
+  const settings = {
+    ...options,
+    models: { codex: ["cx-a", "cx-b"], cursor: ["cu-a", "cu-b"] },
+  };
+  let bridge = new Bridge({ codex, cursor }, store, settings, logger);
+  const choices: Array<{ label: string; command: string }> = [];
+  const send = async (text: string) => {
+    const output = reply();
+    output.select = async (content, items) => {
+      choices.splice(0, choices.length, ...items);
+      await output.finish(content);
+    };
+    await bridge.handle(message(text), output);
+    return output.finals[0]!;
+  };
+  try {
+    assert.match(await send("/agent"), /1\. codex.*\n2\. cursor/);
+    assert.equal(choices[1]?.command, "/agent cursor");
+    assert.match(await send("/model"), /cx-a/);
+    const oldCard = choices[0]!.command;
+    await send("/model 2");
+    await send("codex task");
+    assert.equal(codex.requests[0]?.model, "cx-b");
+    await send("/agent 2");
+    const models = await send("/model");
+    assert.match(models, /cu-a/);
+    assert(!models.includes("cx-a"));
+    assert.match(await send(oldCard), /属于 codex/);
+    assert.match(await send("/model cx-b"), /不在/);
+    await send("/model 1");
+    await send("cursor task");
+    assert.equal(cursor.requests[0]?.model, "cu-a");
+    await send("/agent 1");
+    await send("continue");
+    assert.equal(codex.requests[1]?.model, "cx-b");
+    assert.equal(codex.requests[1]?.sessionId, "codex-1");
+    await bridge.close();
+    store.close();
+    const resumedStore = new SessionStore(temp.directory);
+    bridge = new Bridge({ codex, cursor }, resumedStore, settings, logger);
+    try {
+      assert.match(await send("/model"), /当前模型：cx-b/);
+      await send("/model default");
+      await send("default task");
+      assert.equal(codex.requests[2]?.model, undefined);
+    } finally {
+      await bridge.close();
+      resumedStore.close();
+    }
+  } finally {
+    await bridge.close();
+    store.close();
+    temp.cleanup();
+  }
+});
+
 test("切换执行器后恢复各自上下文，重启和 reset 可预测", async () => {
   const temp = temporary();
   let store = new SessionStore(temp.directory);
