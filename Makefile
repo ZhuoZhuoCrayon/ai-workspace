@@ -52,6 +52,8 @@ init-pre-commit:
 
 init-skills:
 	@$(call with_node,npx skills experimental_install)
+	@$(MAKE) --no-print-directory skills-update-projects
+	@$(MAKE) --no-print-directory skills-mount
 
 init-gh:
 	@bash scripts/init_gh.sh
@@ -68,32 +70,11 @@ verify-skills:
 skills-update:
 	@$(call with_node,npx skills update -p -y)
 	@$(MAKE) --no-print-directory skills-update-projects
+	@$(MAKE) --no-print-directory skills-mount
 
 skills-update-projects:
-	@set -euo pipefail; \
-		workspace_root="$$(pwd)"; \
-		mkdir -p "$(SKILLS_DIR)"; \
-		expected=""; \
-		while IFS= read -r skill_dir; do \
-			[ -n "$$skill_dir" ] || continue; \
-			skill_name="$${skill_dir##*/}"; \
-			dest="$$workspace_root/$(SKILLS_DIR)/$$skill_name"; \
-			expected="$$expected $$skill_name"; \
-			if [ -e "$$dest" ] && [ ! -L "$$dest" ]; then \
-				echo "Cannot link project skill over directory: $$dest" >&2; \
-				exit 1; \
-			fi; \
-			ln -sfn "$$skill_dir" "$$dest"; \
-			echo "Linked project skill $$skill_name -> $$skill_dir"; \
-		done < <(python3 "$(REGISTRY_SCRIPT)" --root "$$workspace_root" skills); \
-		for link in "$(SKILLS_DIR)"/*; do \
-			[ -L "$$link" ] || continue; \
-			name="$${link##*/}"; \
-			if [ ! -e "$$link" ] || [[ " $$expected " != *" $$name "* ]]; then \
-				rm -f "$$link"; \
-				echo "Removed stale project skill $$name"; \
-			fi; \
-		done
+	@python3 scripts/sync_project_skills.py --root "$$(pwd)" \
+		--skills-dir "$(SKILLS_DIR)" --registry-script "$(REGISTRY_SCRIPT)"
 
 skills-mount:
 	@set -euo pipefail; \
@@ -101,6 +82,7 @@ skills-mount:
 		targets=($(SKILLS_MOUNT_TARGETS)); \
 		blacklist='$(strip $(SKILLS_MOUNT_BLACKLIST))'; \
 		mounted_file="$$(mktemp)"; \
+		trap 'rm -f "$$mounted_file"' EXIT; \
 		for skill_dir in $(SKILLS_DIR)/*; do \
 			[ -d "$$skill_dir" ] && [ ! -L "$$skill_dir" ] || continue; \
 			skill_name="$${skill_dir##*/}"; \
@@ -112,6 +94,10 @@ skills-mount:
 			for target in "$${targets[@]}"; do \
 				mkdir -p "$$target/skills"; \
 				dest="$$target/skills/$$skill_name"; \
+				if [ -e "$$dest" ] && [ ! -L "$$dest" ]; then \
+					echo "Cannot mount skill over directory: $$dest" >&2; \
+					exit 1; \
+				fi; \
 				ln -sfn "../../$(SKILLS_DIR)/$$skill_name" "$$dest"; \
 				echo "Mounted $$skill_name -> $$dest"; \
 			done; \
@@ -125,7 +111,7 @@ skills-mount:
 					*".agents/skills/"*) ;; \
 					*) continue ;; \
 				esac; \
-				if ! grep -qx "$$name" "$$mounted_file"; then \
+				if ! grep -Fxq "$$name" "$$mounted_file"; then \
 					rm -f "$$link"; \
 					echo "Removed stale mount $$link"; \
 				fi; \

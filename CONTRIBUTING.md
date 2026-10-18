@@ -58,13 +58,17 @@ make bootstrap PROJECTS_ROOT=/data/workspace
 
 ## 0x03 更新 Skills
 
-更新工作区内的外部 skills，并重新链接项目 skills：
+更新工作区内的外部 skills，重新链接项目 skills 并清理改名后遗留的项目链接和 IDE 挂载：
 
 ```bash
 make skills-update
 ```
 
 维护者确认差异后提交 `skills-lock.json`。`-p` 只更新安装在工作区内的 skills。
+
+`make init-skills` 同样同步项目链接和 IDE 挂载。只同步本地项目 skills 时执行 `make skills-update-projects`，无需联网更新外部 skills。
+
+同步脚本先校验完整清单，再更新链接。旧名称指向已注册项目技能目录时自动移除，后续取消注册的链接由本机 `.agents/.project-skills.json` 记录识别；普通目录和其他来源的软链接保持不动。
 
 将 `.agents/skills/` 里的目录挂到 IDE 目录：
 
