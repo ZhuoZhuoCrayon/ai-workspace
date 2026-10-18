@@ -68,6 +68,7 @@ npm start
 | `requestsPerMinute` | integer | `10` | 每个平台账号下每个用户的分钟请求上限，范围 `1`～`100` |
 | `timeoutMs` | integer | `600000` | 单任务时限，范围 `1000`～`86400000` 毫秒 |
 | `healthPort` | integer | `0` | `0` 关闭探活，端口范围 `1`～`65535` |
+| `personaFile` | string | 未设置 | 本机表达风格文件，最大 `16,000` 字节，相对配置文件目录解析 |
 
 - *[1] 同一会话始终串行，超出并发上限的请求立即拒绝；任务时限涵盖附件下载与 CLI 执行。*
 
@@ -78,13 +79,41 @@ npm start
 | 字段 | 类型 | 默认值 | 约束 / 用途 |
 | --- | --- | --- | --- |
 | `agents.<name>.command` | string | `codex` / `cursor-agent` | 可执行文件名或路径 |
-| `agents.<name>.model` | string | CLI 账号默认 | 部署默认模型 ID |
-| `agents.<name>.models` | string[] | `[]` | `/model` 可选列表，最多 `30` 项且不重复 |
+| `agents.<name>.model` | string | 可选列表第一项 | 部署默认模型 ID |
+| `agents.<name>.models` | string[] | 各自内置的 `4` 项 | `/model` 可选列表，最多 `30` 项且不重复，空数组使用内置列表 |
 | `agents.<name>.writable` | boolean | `false` | Codex 默认 `read-only`，Cursor 默认 `ask` |
+| `agents.codex.networkAccess` | boolean | `false` | 使用 `workspace-write` 时允许工具联网，例如调用 GitHub API |
+| `agents.codex.fullAccess` | boolean | `false` | 显式启用 Full Access，跳过 Codex 沙箱和审批，优先于 `writable` 与 `networkAccess` |
 
-要启用聊天中的模型切换，将账号可用的模型 ID 填入对应的 `models`。`/model default` 清除当前会话的覆盖值，恢复 `model` 或 CLI 账号默认。
+内置模型如下，第一项为各自默认值：
 
-### c. 企业微信
+| 序号 | Codex | Cursor |
+| --- | --- | --- |
+| `1` | GPT-6.1 Sol High（`gpt-6.1-sol`） | Grok 4.7 Extra High Fast（`grok-4.7-xhigh-fast`） |
+| `2` | GPT-6 Astra High（`gpt-6-astra`） | Claude Opus 5.5 High Fast（`claude-opus-5-5-high-fast`） |
+| `3` | GPT-6 Sol High（`gpt-6-sol`） | GPT-5.6 Sol High Fast（`gpt-5.6-sol-high-fast`） |
+| `4` | GPT-5.6 Sol High（`gpt-5.6-sol`） | Composer 2.5 Fast（`composer-2.5-fast`） |
+
+- *[1] Codex 通过 CLI 参数固定使用 `high` 推理强度和标准服务档位，覆盖本机 Fast 设置；Cursor 的强度和速度包含在模型 ID 中。*
+- *[2] 模型实际可用性取决于 CLI 登录账号的权限。自定义 `models` 可覆盖内置列表，未指定 `model` 时使用自定义列表第一项。*
+
+在聊天中发送 `/agent` 选择执行器，再发送 `/model` 选择对应模型。`/model default` 清除当前会话的覆盖值，恢复该执行器的部署默认。
+
+Codex 需要查询 GitHub 时，在已有配置的 `agents.codex` 中设置 `writable: true` 和 `networkAccess: true`，重启服务后生效。宿主机能访问 GitHub 不代表 Codex 沙箱已允许联网，匿名 API 限频也应与网络故障分别排查。
+
+部署者明确选择 Full Access 时，设置 `agents.codex.fullAccess: true`。服务通过 `--dangerously-bypass-approvals-and-sandbox` 启动 Codex，仍按机器人白名单接收任务。
+
+### c. 表达风格
+
+在配置中设置 `personaFile` 指向自己的 Markdown 文件，编辑后重启服务。Codex 和 Cursor 共用该表达约定，每次请求都会附加，切换执行器不会丢失。
+
+默认表达以结论为先，复杂问题再展开依据和下一步。CLI 的过程旁白、思考摘要和工具状态进入折叠区，正文保留最终答复，避免“我正在看、我已读取”挤占回答开头。
+
+聊天答复按信息关系使用短段、列表、步骤或窄表。编写文档时遵循目标项目规范，聊天版式不覆盖用户要求的文档格式。
+
+引用按证据对象选择团队网页、仓库文件、PR 或官方文档。仓库链接须对应实际所属仓库的已推送内容，嵌套私有仓库使用自己的 remote；未发布内容显示普通路径和状态。企业微信将残留的本地 Markdown 文本链接降级为可读路径，不猜远程地址。
+
+### d. 企业微信
 
 | 字段 | 类型 | 默认值 | 约束 / 用途 |
 | --- | --- | --- | --- |
@@ -133,3 +162,23 @@ curl --fail http://127.0.0.1:8787/metrics
 异常退出提示状态目录被占用时，查看 `stateDir` 下 `bridge.lock` 中的进程号，确认原服务停止后再删除该锁文件并重启。
 
 向导生成的配置与凭据权限为 `0600`，状态目录为 `0700`。`.env`、`*.local.json` 和 `.state/` 均被 Git 忽略，CLI 子进程过滤 `WECOM_` 和 `BRIDGE_` 环境变量。
+
+## 0x05 消息与引用
+
+| 回调内容 | 处理 |
+| --- | --- |
+| 文本、语音转写、`mixed` 图文引用 | 提取正文和附件，保留引用标识 |
+| 占位文字或空引用 | 明确标记原文缺失，保留本次提问与可见附件 |
+
+Markdown 内容块引用与原文补取不在支持范围内。平台仅回传“该消息类型暂不能展示”时，用户需复制正文、转发可读文本或提供源链接。
+
+## 0x06 CLI 事件
+
+CLI 按 JSON 令牌流读取事件，桥接层只组装需要的字段。
+
+| 数据或状态 | 处理 |
+| --- | --- |
+| 会话、进度与答复 | 交给协议解析器 |
+| 工具参数与结果 | 按块消费，不累计完整事件 |
+| 最终答复 | 保留 `100,000` 字符上限 |
+| 无效 JSON、缺失终态、异常退出 | 任务判为失败 |

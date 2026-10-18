@@ -27,7 +27,7 @@ flowchart LR
 | --- | --- | --- |
 | 新聊天平台 | 将平台事件转换为 `IncomingMessage`，交给 `Bridge.handle()` | [channels/](../src/channels/) |
 | 平台回复 | 实现 `Reply.update()` 和 `Reply.finish()`，处理限频、分段和交付失败 | [types.ts](../src/types.ts) |
-| 新执行器 | 实现 `Agent.run()`，产出会话、正文和完成事件，遵守取消信号 | [agents/](../src/agents/) |
+| 新执行器 | 实现 `Agent.run()`，分别产出会话、过程进度、最终正文和完成事件，遵守取消信号 | [agents/](../src/agents/) |
 | 会话存储 | 通过 `SessionStore` 管理上下文与执行器选择 | [store.ts](../src/store.ts) |
 
 - *[1] 耗时附件处理放在消息的可选 `prepare` 回调中，由 Bridge 在授权与任务准入通过后调用。*
@@ -38,3 +38,5 @@ flowchart LR
 CLI 协议依据 [Codex 非交互模式](https://learn.chatgpt.com/docs/non-interactive-mode)、[Cursor 输出协议](https://cursor.com/docs/cli/reference/output-format)和[企业微信官方 SDK](https://github.com/WecomTeam/aibot-node-sdk)。
 
 自动化测试覆盖协议解析、会话隔离、任务取消、首次配对、附件交付和本地 WebSocket 集成。真实账号与平台联调的范围、架构设计和验证证据见[实施方案](../../../knowledge/ai-workspace/issues/2026-10-17-agent-chat-bridge/PLAN.md)。
+
+事件读取使用 [stream-json](https://github.com/uhop/stream-json) 按令牌筛选协议字段，再交给 `AgentProtocol`。事件回归覆盖大于 `1 MiB` 的工具结果、UTF-8 分片、无效 JSON 和超长答复。
