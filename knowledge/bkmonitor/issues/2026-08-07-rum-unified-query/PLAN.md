@@ -740,9 +740,8 @@ def build(spans: Sequence[dict[str, Any]], view_id: str | None = None) -> dict[s
 | 节点 | 父节点 | 判定规则 |
 | --- | --- | --- |
 | View | -- | 按 `attributes.view.id` 去重，取 `min(attributes.view.version)` 的快照 |
-| Action | View | `attributes.view.id` 相等 |
-| Resource | Action、View | 优先挂到 `attributes.view.id`、`attributes.action.id` 均相等的 Action，否则挂到 View |
-| Long Task、Error、Custom、WebSocket | View | `attributes.view.id` 相等，忽略 `attributes.action.id` |
+| Action | View | `attributes.view.id` 相等，不因 `attributes.action.id` 挂到其他 Action |
+| 非 Action 成员 | Action、View | 同一 View 内 `attributes.action.id` 命中 Action 时挂到该 Action，否则挂到 View |
 
 - *[1] View 按 `attributes.view.started_at` 升序，子节点按 `start_time` 升序。*
 - *[2] Vital、Session 不生成节点。*
@@ -1627,7 +1626,7 @@ MAX = 4 h
 | View 加载时序验收（待实现） | [a] 前四段复用同条 TTFB 耗时，连接不拆 TLS，倒推起点保留空隙<br />[b] View 三段按首字节、DOMContentLoaded、Load 和自动 Loading Time 的边界计算并返回到 `phases`<br />[c] `markers` 仅包含 TTFB、FCP、LCP，评级阈值与 `web_vitals` 卡片一致，缺失指标不补造<br />[d] 非首次加载不返回 `loading_timing`，原点不一致、非法数值和倒序边界不组装伪时序，手动 Loading Time 不生成 `phases` 和 `milestones` 中的 `page_stable`，自动计时的微小负耗时按 `0` 处理<br />[e] `total_duration` 等于有效的 `view.loading_time`，缺失或非法时省略，有效零值保留，标记超出总耗时仅扩展横轴<br />[f] `milestones` 依次取 `dom_complete`、`load_event` 和 `loading_time`，不返回别名，缺失字段直接省略 |
 | Hover 协议验收（待实现） | [a] Resource、View、Vital 共用 `title`、`description`、`user_experience`、`source` 结构<br />[b] 可选字段按内容省略<br />[c] 响应不包含 `formula`、`calculation` 或原始字段表达式<br />[d] 指标标记与 Web Vital 卡片共用定义，View 与 Vital 详情共用评级定义 |
 | 异步分析验收（待实现） | [a] 基础详情不等待关联聚合<br />[b] 未加载、失败与统计为零可区分<br />[c] 应用、关联 ID 和时间边界一致，记录去重<br />[d] 区块合并保留基础字段，切换记录后丢弃旧响应 |
-| 会话时间线验收（待实现） | [a] 每个 View ID 只生成一个 View 节点，`records` 与同 `span_id` 的 `record_detail` 一致，包含相同 Hover<br />[b] Resource 只挂到同 View 内 `action.id` 相同的 Action，跨 View 的 Resource 留在自身 View<br />[c] Long Task 和 Error 携带 `action.id` 时仍挂在 View<br />[d] Vital 和 Session 不生成节点，无 `phase=end` 记录时 `end_time` 为 `null`<br />[e] 缺少 View ID 或所属 View 无快照的 Span 不进入时间线<br />[f] 按 `view_id` 查询时只返回一个 View 节点，起止时间取该 View，无 `view.phase=end` 快照时 `end_time` 为 `null` |
+| 会话时间线验收（待实现） | [a] 每个 View ID 只生成一个 View 节点，`records` 与同 `span_id` 的 `record_detail` 一致，包含相同 Hover<br />[b] 同一 View 内，非 Action 成员在 `action.id` 命中 Action 时挂到该 Action，未命中时挂到 View；跨 View 的成员留在自身 View<br />[c] Action 保持 View 的直接子节点<br />[d] Vital 和 Session 不生成节点，无 `phase=end` 记录时 `end_time` 为 `null`<br />[e] 缺少 View ID 或所属 View 无快照的 Span 不进入时间线<br />[f] 按 `view_id` 查询时只返回一个 View 节点，起止时间取该 View，无 `view.phase=end` 快照时 `end_time` 为 `null` |
 | View 结束判定验收（待实现） | [a] `pagehide` 且停留 `0` 返回 `page_closed`，负停留展示为 `0`<br />[b] 无 `phase=end` 且在 `15 min` 内为 `open`，超出为 `unobserved_end`，时间线 `end_time` 仍为 `null`<br />[c] `session_expired` 按 Session 寿命区分 `session_idle` 与 `session_max_lifetime`，缺起止时回退 `session_idle`<br />[d] `page_closed` 不把 Session 标成已结束 |
 | `apm/tests/test_unified_query_base.py` | [a] APM 继承通用基类<br />[b] 3 类 Query 统一接收 Target 列表<br />[c] Proxy 统一构造原始表与预计算层级<br />[d] 列表查询复用 `_query_list()`，Proxy 固定补 `total=0`<br />[e] 查询配置保持列表形态，多 Target 不丢表                                                                                   |
 
@@ -1643,6 +1642,8 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-10-17 00:15` | [a] 按 GTM 重新交付会话时间线 Action 子节点，提交 `5a1ac99857dfb30c50e2c9c4c7f84ed25261a793`<br />[b] 关闭未走 GTM 的 [#12819](https://github.com/TencentBlueKing/bk-monitor/pull/12819)<br />[c] 新 PR [TencentBlueKing/bk-monitor #12820](https://github.com/TencentBlueKing/bk-monitor/pull/12820)，时间线测试 46 项通过，未跑前端点击验收 |
+| `2026-10-16 20:00` | [a] 会话时间线把同一 View 内匹配 `action.id` 的非 Action 成员挂到 Action，Action 仍只作为 View 的直接子节点<br />[b] 交付 [TencentBlueKing/bk-monitor #12819](https://github.com/TencentBlueKing/bk-monitor/pull/12819) |
 | `2026-10-16 16:00` | 设计 View 结束判定：`display.view.close_state` 区分页面关闭、无活动超时、满 `4 h` 和未见结束，关页不等于 Session 结束 |
 | `2026-10-16 11:00` | [a] 复查 Resource 加载时序 PR（[#12798](https://github.com/TencentBlueKing/bk-monitor/pull/12798)）并 Approve<br />[b] `loading_timing` 按 `resource.timing.*` 匹配 A–E 瀑布，缺新时间点时回退旧阶段字段<br />[c] 有重定向时 B/C/D/E 先输出 `redirect`；D/E 的发起前等待画到 `domain_lookup_start`<br />[d] `prepare` hover 是 C/D/E 共用文案，去掉重定向后保留「可能包含」缓存等场景，不按单条色条改写 |
 | `2026-10-15 00:00` | [a] 完成统一 Hover 协议、后台 Builder 和接口文档，排除计算方式与原始字段表达式<br />[b] Resource 只采用 bk-rum 新文档的阶段术语，不修改现有算法<br />[c] Timeline View record 复用 Span Builder 的 Hover<br />[d] Builder 与 Timeline 定向测试 `138` 项通过，交付 [TencentBlueKing/bk-monitor #12784](https://github.com/TencentBlueKing/bk-monitor/pull/12784) |
@@ -1697,6 +1698,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 | 🔄 | `<branch_name>` | 里程碑 8：提供 RUM 分析接口（`statistic`） *[1]* | 待创建 |
 | 🔄 | `feat/rum-hover-protocol/#1010158081139035316` | RUM 详情支持 Hover 解释协议（TAPD `#1010158081139035316`） | [TencentBlueKing/bk-monitor #12784](https://github.com/TencentBlueKing/bk-monitor/pull/12784) |
 | ✅ | `feat/rum_resource_timing/#1010158081139063287` | Resource 加载时序重构（TAPD `#1010158081139063287`） | [TencentBlueKing/bk-monitor #12798](https://github.com/TencentBlueKing/bk-monitor/pull/12798) |
+| 🔄 | `feat/rum-timeline-action-children/#1010158081139124184` | 会话时间线把匹配 Action 的成员挂为子节点 | [TencentBlueKing/bk-monitor #12820](https://github.com/TencentBlueKing/bk-monitor/pull/12820) |
 
 - *[1] RUM 接口里程碑实施期间，随接口落地补充 `rum_web/docs/api/search.md`。*
 - *[2] Mock 数据为每种 Span 类型分配固定 `span_id`；详情请求根据 `record_id` 返回对应类型的 Mock 数据。*
