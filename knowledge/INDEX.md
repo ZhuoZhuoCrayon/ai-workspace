@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-10-19
+> 最后更新：2026-10-20
 
 ## 0x01 项目知识
 
@@ -8,7 +8,7 @@
 |------|------|------|------|
 | ai-workspace | [ai-workspace/](./ai-workspace/INDEX.md) | 6 篇 | AI 工作区 — 知识管理与多项目协作中枢 |
 | bk-cli | [bk-cli/](./bk-cli/INDEX.md) | 0 篇 | 蓝鲸平台 API 命令行工具 |
-| bkmonitor | [bkmonitor/](./bkmonitor/INDEX.md) | 49 篇 | 蓝鲸监控平台（bk-monitor/bkmonitor） |
+| bkmonitor | [bkmonitor/](./bkmonitor/INDEX.md) | 50 篇 | 蓝鲸监控平台（bk-monitor/bkmonitor） |
 | bkm-skills | [bkm-skills/](./bkm-skills/INDEX.md) | 6 篇 | BlueKing Monitor Skills |
 | bk-product-designs | [bk-product-designs/](./bk-product-designs/INDEX.md) | 0 篇 | 蓝鲸监控产品设计协作仓库 |
 | bkmonitor_mcp | [bkmonitor_mcp/](./bkmonitor_mcp/INDEX.md) | 1 篇 | 蓝鲸监控 MCP Server |
@@ -21,8 +21,8 @@
 
 ## 0x02 最近更新
 
+- 2026-10-20：新增 [LLM 消息截断容错展示](./bkmonitor/issues/2026-10-20-llm-message-truncation/README.md)（用截断样例和现成方案对比说明修复方向，待验证）
 - 2026-10-19：更新 [APM 服务数据状态下沉到后台服务发现](./bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md)（复查 PR #12830，确认服务状态采用最近一小时、拓扑缓存五分钟的调整方案，登记待修问题）
 - 2026-10-17：新增 [通用聊天 Agent 桥接组件](./ai-workspace/issues/2026-10-17-agent-chat-bridge/README.md)（完成本地组件、Codex 两轮恢复、自动化测试及组件快照 PreCI）
 - 2026-10-16：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（补充 View 结束判定：页面关闭、`15 min` 无活动和 `4 h` 会话轮转）
 - 2026-10-16：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（Resource `loading_timing` 改为 A–E 瀑布，并复查 PR #12798）
-- 2026-10-15：更新 [APM 服务数据状态下沉到后台服务发现](./bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md)（里程碑 1 补充已通过审查，版本锚点登记分支与 PR #12790）
