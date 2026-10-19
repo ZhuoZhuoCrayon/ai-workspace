@@ -4,7 +4,7 @@ tags: [rum, apm, query, span, view, session, factory, unify-query, semconv]
 issue: ./README.md
 description: 通过统一 Target、查询基类、Level 工厂和语义字段目录收敛 RUM 与 APM 查询
 created: 2026-08-07
-updated: 2026-10-16
+updated: 2026-10-19
 ---
 
 # RUM 分层统一查询 —— 实施方案
@@ -1468,11 +1468,13 @@ flowchart TD
 | 触发请求数  | `statistics` | `attributes.span_type: resource AND attributes.resource.type: (xhr OR fetch)` |
 | 错误数    | `statistics` | `attributes.span_type: error`                                                 |
 | Span 数 | `statistics` | `NOT attributes.span_type: (view OR vital OR session)`                        |
+| 动作数 | `statistics` | `attributes.span_type: action`                                               |
 |        |              |                                                                               |
 
 - *[1] 统一过滤条件：`attributes.view.id: {当前 View ID}`；应用及 Session 与主记录一致。*
 - *[2] 统一聚合方式：`count(attributes.span_type)`。*
 - *[3] 查询时间范围：[end_time - 1d, end_time + 1d]。*
+- *[4] 除 `view`、`session` 外，其他 Span 类型均可通过 `attributes.span_type` 等值过滤，统计当前 View 下对应类型的数量。*
 
 View Span 关联信息获取（后端）：
 
@@ -1642,6 +1644,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-10-19 14:00` | View 关联信息保留 Span 数，新增 `attributes.span_type = action` 的动作数过滤条件，其他非 `view`、`session` 类型沿用等值过滤，接口文档见 [TencentBlueKing/bk-monitor #12826](https://github.com/TencentBlueKing/bk-monitor/pull/12826) |
 | `2026-10-17 00:15` | [a] 按 GTM 重新交付会话时间线 Action 子节点，提交 `5a1ac99857dfb30c50e2c9c4c7f84ed25261a793`<br />[b] 关闭未走 GTM 的 [#12819](https://github.com/TencentBlueKing/bk-monitor/pull/12819)<br />[c] 新 PR [TencentBlueKing/bk-monitor #12820](https://github.com/TencentBlueKing/bk-monitor/pull/12820)，时间线测试 46 项通过，未跑前端点击验收 |
 | `2026-10-16 20:00` | [a] 会话时间线把同一 View 内匹配 `action.id` 的非 Action 成员挂到 Action，Action 仍只作为 View 的直接子节点<br />[b] 交付 [TencentBlueKing/bk-monitor #12819](https://github.com/TencentBlueKing/bk-monitor/pull/12819) |
 | `2026-10-16 16:00` | 设计 View 结束判定：`display.view.close_state` 区分页面关闭、无活动超时、满 `4 h` 和未见结束，关页不等于 Session 结束 |
@@ -1699,6 +1702,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 | 🔄 | `feat/rum-hover-protocol/#1010158081139035316` | RUM 详情支持 Hover 解释协议（TAPD `#1010158081139035316`） | [TencentBlueKing/bk-monitor #12784](https://github.com/TencentBlueKing/bk-monitor/pull/12784) |
 | ✅ | `feat/rum_resource_timing/#1010158081139063287` | Resource 加载时序重构（TAPD `#1010158081139063287`） | [TencentBlueKing/bk-monitor #12798](https://github.com/TencentBlueKing/bk-monitor/pull/12798) |
 | 🔄 | `feat/rum-timeline-action-children/#1010158081139124184` | 会话时间线把匹配 Action 的成员挂为子节点 | [TencentBlueKing/bk-monitor #12820](https://github.com/TencentBlueKing/bk-monitor/pull/12820) |
+| 🔄 | `feat/rum-action-filter-docs/#1010158081139157253` | RUM 接口文档补充动作数过滤条件及其他 Span 类型的统计说明 | [TencentBlueKing/bk-monitor #12826](https://github.com/TencentBlueKing/bk-monitor/pull/12826) |
 
 - *[1] RUM 接口里程碑实施期间，随接口落地补充 `rum_web/docs/api/search.md`。*
 - *[2] Mock 数据为每种 Span 类型分配固定 `span_id`；详情请求根据 `record_id` 返回对应类型的 Mock 数据。*
