@@ -4,7 +4,7 @@ tags: [apm, data-status, discover, heartbeat, topo-node, log, profiling]
 issue: knowledge/bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md
 description: 以服务数据心跳为唯一事实源，四类发现器单写、拓扑接口单读，SaaS 下线状态重算链路
 created: 2026-09-16
-updated: 2026-10-15
+updated: 2026-10-19
 ---
 
 # APM 服务数据状态下沉到后台服务发现 —— 实施方案
@@ -158,7 +158,7 @@ flowchart LR
 
 ### e. 状态映射协议
 
-服务级状态由 SaaS 做纯映射，不再发起任何远程查询：
+服务级状态由 SaaS 读取心跳映射，停止请求侧数据存储探测。日志关联复用索引集元数据缓存；缓存未命中时，仍可调用日志平台索引集列表 API：
 
 ```text
 service_status(service, data_type):
@@ -394,7 +394,7 @@ for field in ("resource.service.name", "resource.server"):
 
 **[Change]** `apm_web.handlers.service_handler.ServiceHandler.list_services`：
 
-- 返回拓扑节点与手动自定义服务，附带映射后的 `data_status`。
+- 返回拓扑节点与手动自定义服务；`include_data_status=True` 时附带映射后的 `data_status`，默认只枚举服务。
 - 应用关闭性能分析时，过滤 `source == ["profiling"]` 的节点。
 - 移除 `query_profile_services_detail` 调用，合并函数列入「旧对象清理」。
 
@@ -405,23 +405,26 @@ for field in ("resource.service.name", "resource.server"):
 ```mermaid
 flowchart LR
     Q["QueryTopoNodeResource"] -->|"nodes + heartbeat"| L["ServiceHandler<br/>.list_services()"]
-    L --> B["ServiceHandler<br/>.build_service_data_status()"]
+    L -->|"include_data_status=True"| B["ServiceHandler<br/>.build_service_data_status()"]
     B -->|"log"| R["ServiceLogHandler<br/>.list_available_related_services()"]
     R --> LSR["LogServiceRelation"]
     R --> K8S["APP_SERVICE_K8S_RELATED_LOG_INDEXES_KEY"]
-    L -->|"services + data_status"| SA["ServiceListAsyncResource<br/>._get_data_status_mapping()"]
+    L -->|"nodes"| SA["ServiceListAsyncResource<br/>._get_data_status_mapping()"]
+    SA -->|"data_type / filter_keys"| B
     L -->|"services + data_status"| SL["ServiceListResource"]
 ```
 
 | 变更点 | 修改内容 |
 | --- | --- |
-| **[Add]** `apm_web.handlers.service_handler.ServiceHandler.build_service_data_status(app, nodes)` | 按「状态映射协议」生成三态，不发起远程查询 |
+| **[Add]** `apm_web.handlers.service_handler.ServiceHandler.build_service_data_status(app, nodes)` | 按「状态映射协议」生成三态，支持按 `data_type` 计算单列，日志状态按需读取关联索引元数据 |
 | **[Add]** `apm_web.handlers.log_handler.ServiceLogHandler.list_available_related_services(app, service_names)` | 按应用批量读取服务级与全局 `LogServiceRelation`、K8S 关联日志缓存，比对索引集元数据缓存，返回存在可用关联索引的服务集合 *[1]* |
-| **[Change]** `apm_web.metric.resources.ServiceListAsyncResource._get_data_status_mapping` | 使用 `list_services` 返回的状态，替换请求侧重算 |
+| **[Change]** `apm_web.metric.resources.ServiceListAsyncResource._get_data_status_mapping` | [a] 从 `list_services` 读取节点后复用统一心跳映射<br />[b] 单列请求只计算对应类型，筛选计数计算全量服务的全部类型 |
 | **[Keep]** `apm_web.metric.resources.ServiceListResource` | 同步状态列及 `StatisticsApplyModule`、`StatisticsHaveData` 的筛选规则不变，输入换为心跳映射结果 |
 
 ```python
-def build_service_data_status(app: Application, nodes: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+def build_service_data_status(
+    app: Application, nodes: list[dict[str, Any]], *, data_type: str | None = None
+) -> dict[str, dict[str, str]]:
     # topo_key -> {telemetry_data_type: DataStatus}，与旧 get_service_data_status_mapping 结构一致，例如：
     # {"order": {"trace": "normal", "metric": "normal", "log": "no_data", "profiling": "disabled"}}
     ...
@@ -507,7 +510,8 @@ def list_available_related_services(app: Application, service_names: list[str]) 
 
 | 阶段或场景 | 处理 |
 | --- | --- |
-| 首次观测到服务前 | 对应数据类型的心跳子键缺失，返回 `NO_DATA` 并打点 |
+| 首次观测到服务前 | 对应数据类型的心跳子键缺失，返回 `NO_DATA` 并记录缺失计数日志 |
+| 同步与异步请求间服务被删除或因关闭性能分析而不再展示 | 异步响应为请求中的缺失服务补齐默认三态，筛选计数只统计重新读取的当前服务全集 |
 | 新旧对照 | 心跳生产上线后，按同一无数据周期对照同一批应用的新旧状态 |
 | 读取切换 | 先切换读取，再单独删除旧对象，切换时保留旧函数 |
 | eBPF 应用 | 不补齐调用链发现，`trace` 状态回退为无数据，指标与日志发现不受影响 |
@@ -542,13 +546,14 @@ uv run pytest apm/tests packages/apm_web/tests
 | 状态时效 | 停止上报后确认服务在「无数据周期 + 发现周期」内翻转为无数据，不长期停留在正常 |
 | 服务全集 | 服务数量、分类、语言、排序与分页结果与切换前一致 |
 | 筛选项 | `have_data` 与 `apply_module` 的计数基于全量展示服务，不随分页变化 |
-| 性能 | 记录 `service_list` 与 `data_status` 的端到端耗时与下游调用数，`data_status` 的远程调用数降为 `0` |
+| 性能 | 记录 `service_list` 与 `data_status` 的端到端耗时与下游调用数，状态计算不再调用 UnifyQuery、ES 聚合和性能分析明细接口，拓扑读取与索引元数据冷缓存查询仍可能产生远程调用 |
 | 后台开销 | 记录四个发现器的单轮耗时与查询数，确认新增查询不突破现有 `10 min` 调度窗口 |
 
 ## 0x07 实施进展
 
 | 时间                 | 结论性进展                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `2026-10-19 17:00` | [a] 服务列表心跳读取 PR（[#12830](https://github.com/TencentBlueKing/bk-monitor/pull/12830)，`eb847954651bc4e1bf01c35919ca538bec094459`）完成代码 review，未发现阻塞问题<br />[b] 状态映射按需执行，单列按类型计算，筛选基于当前服务全集，缺失服务补齐默认状态<br />[c] 索引元数据冷缓存仍可产生远程调用，性能验收按停止存储探测核对<br />[d] 相关 74 项测试在 SQLite 内存表与 LocMemCache 隔离环境通过，未覆盖 MySQL 迁移及实际下游服务，paas3 依据作者截图核对 |
 | `2026-10-15 18:00` | [a] 服务列表 review（[#12764](https://github.com/TencentBlueKing/bk-monitor/pull/12764)）确认全集改为拓扑节点加尚未发现的手动服务，关闭性能分析时去掉 `source == ["profiling"]` 的节点<br />[b] 手动服务写入独立结果列表，不再改到拓扑缓存<br />[c] 服务状态仍沿用原有重算和缓存，心跳映射留在后续慢接口改造 |
 | `2026-10-14 16:00` | [a] `last_data_at` 非空时为已有节点追加对应 `source`<br />[b] 仅推进 `checked_at` 时不补来源<br />[c] 写入不创建节点、不刷新 `updated_at` |
 | `2026-10-12 15:00` | [a] 里程碑 1 PR 完成 review，实现与方案对齐<br />[b] 心跳只记录本轮观测到的服务，写入改为行锁合并，撤回「读取紧贴写入」吸收丢更新的约束<br />[c] 调用链兜底轮跳过入口接口发现，避免下游接口被误判为入口<br />[d] 性能分析服务按普通服务并入拓扑，发现任务保持串行，不改 `delay()` 派发 |
@@ -576,4 +581,5 @@ uv run pytest apm/tests packages/apm_web/tests
 | ✅  | `feat/apm_application_detail_loading_opt/#1010158081137600836` | 里程碑 1：APM 服务心跳统一维护      | [TencentBlueKing/bk-monitor #12629](https://github.com/TencentBlueKing/bk-monitor/pull/12629) |
 | ✅  | `feat/apm_service_heartbeat_backfill_source_field/#1010158081139040371` | 里程碑 1 补充：心跳观测回补 `source` | [TencentBlueKing/bk-monitor #12790](https://github.com/TencentBlueKing/bk-monitor/pull/12790) |
 | ✅  | `feat/apm_service_list_query_topo_node/#1010158081138934112` | 服务列表统一读取拓扑节点 | [TencentBlueKing/bk-monitor #12764](https://github.com/TencentBlueKing/bk-monitor/pull/12764) |
+| 🔄 | `feat/apm_service_list_status_from_heartbeat/#1010158081139048589` | 服务列表状态读取后台心跳 | [TencentBlueKing/bk-monitor #12830](https://github.com/TencentBlueKing/bk-monitor/pull/12830) |
 | 🔄  | `<branch_name>`                                            | 里程碑 2：APM 依赖数据状态相关慢接口优化 | 待创建                                                                                           |
