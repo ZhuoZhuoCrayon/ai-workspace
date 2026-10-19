@@ -3,7 +3,7 @@ title: APM 服务数据状态下沉到后台服务发现
 tags: [apm, data-status, discover, heartbeat, topo-node, log, profiling]
 description: 由各 telemetry 发现器落盘服务级数据心跳，让应用详情读取心跳判定状态，SaaS 下线请求侧状态重算
 created: 2026-09-16
-updated: 2026-09-29
+updated: 2026-10-19
 ---
 
 # APM 服务数据状态下沉到后台服务发现

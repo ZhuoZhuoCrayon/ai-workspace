@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-10-17
+> 最后更新：2026-10-19
 
 ## 0x01 项目知识
 
@@ -21,8 +21,8 @@
 
 ## 0x02 最近更新
 
+- 2026-10-19：更新 [APM 服务数据状态下沉到后台服务发现](./bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md)（复查 PR #12830，确认服务状态采用最近一小时、拓扑缓存五分钟的调整方案，登记待修问题）
 - 2026-10-17：新增 [通用聊天 Agent 桥接组件](./ai-workspace/issues/2026-10-17-agent-chat-bridge/README.md)（完成本地组件、Codex 两轮恢复、自动化测试及组件快照 PreCI）
 - 2026-10-16：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（补充 View 结束判定：页面关闭、`15 min` 无活动和 `4 h` 会话轮转）
 - 2026-10-16：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（Resource `loading_timing` 改为 A–E 瀑布，并复查 PR #12798）
 - 2026-10-15：更新 [APM 服务数据状态下沉到后台服务发现](./bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md)（里程碑 1 补充已通过审查，版本锚点登记分支与 PR #12790）
-- 2026-10-14：更新 [APM 服务数据状态下沉到后台服务发现](./bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md)（心跳观测到有效 `last_data_at` 时补齐 `source`；不创建节点、不刷新 `updated_at`，并登记后续实现锚点）

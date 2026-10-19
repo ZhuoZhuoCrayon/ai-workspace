@@ -153,7 +153,7 @@ flowchart LR
 调用链与指标、日志按 `app_id % 10 == minute % 10` 在同一分钟派发，可能同时写同一行。写入方在事务内按 `id` 顺序锁行后重读合并，并发写入串行执行，不会丢失更新。行锁超时或死锁时，写入方回滚本次写入并保留旧值，由下一轮发现补齐。
 
 - *[1] 写入更新 `heartbeat` 与必要的 `source` 补偿，不改 `updated_at`，节点仍按拓扑更新时间回收。*
-- *[2] 状态判断多留一个发现周期，吸收单轮未观测或写入失败。*
+- *[2] 服务状态采用独立的最近 `60 min` 观测窗口，为发现任务排队和执行延迟留出余量；应用级状态继续使用 `no_data_period`。*
 - *[3] 心跳只由后台发现器更新，页面查询不更新心跳时间。*
 
 ### e. 状态映射协议
@@ -171,10 +171,14 @@ service_status(service, data_type):
     -> NO_DATA
 
 heartbeat_fresh(service, data_type):
-    last_data_at >= now - no_data_period - discover_interval
+    last_data_at >= now - service_data_status_lookback_seconds  # 默认 3600 秒
 ```
 
-日志是唯一的双来源状态。心跳只覆盖 APM 自身管理的日志结果表，关联索引的可用性由 SaaS 读 `LogServiceRelation` 后比对索引集元数据得出，全程不发起 ES 聚合。
+日志是唯一的双来源状态。心跳只覆盖 APM 自身管理的日志结果表，关联索引的可用性由 SaaS 读 `LogServiceRelation` 后比对索引集元数据得出，全程不发起 ES 聚合。索引集元数据缓存未命中时，仍调用日志平台索引集列表 API。
+
+服务状态表达「最近 `1` 小时发现过数据」，与页面选择的时间范围独立。窗口采用独立配置，不再与应用的 `no_data_period` 混用；停止上报后可能接近 `1` 小时才显示无数据。
+
+`api.apm_api.default.QueryTopoNodeResource.backend_cache_type` 单独改为 `CacheType.APM(5 * 60)`，不修改全局 APM 缓存默认值；`ServiceHandler.list_nodes` 保留本地 `60 s` LRU。
 
 应用级状态不由心跳推导，沿用 `Application.set_data_status` 的现有链路。
 
@@ -416,7 +420,7 @@ flowchart LR
 
 | 变更点 | 修改内容 |
 | --- | --- |
-| **[Add]** `apm_web.handlers.service_handler.ServiceHandler.build_service_data_status(app, nodes)` | 按「状态映射协议」生成三态，支持按 `data_type` 计算单列，日志状态按需读取关联索引元数据 |
+| **[Add]** `apm_web.handlers.service_handler.ServiceHandler.build_service_data_status(app, nodes, data_type=None)` | 按「状态映射协议」生成三态，单列按类型计算，日志状态按需读取关联索引元数据，不发起存储探测 |
 | **[Add]** `apm_web.handlers.log_handler.ServiceLogHandler.list_available_related_services(app, service_names)` | 按应用批量读取服务级与全局 `LogServiceRelation`、K8S 关联日志缓存，比对索引集元数据缓存，返回存在可用关联索引的服务集合 *[1]* |
 | **[Change]** `apm_web.metric.resources.ServiceListAsyncResource._get_data_status_mapping` | [a] 从 `list_services` 读取节点后复用统一心跳映射<br />[b] 单列请求只计算对应类型，筛选计数计算全量服务的全部类型 |
 | **[Keep]** `apm_web.metric.resources.ServiceListResource` | 同步状态列及 `StatisticsApplyModule`、`StatisticsHaveData` 的筛选规则不变，输入换为心跳映射结果 |
@@ -512,7 +516,7 @@ def list_available_related_services(app: Application, service_names: list[str]) 
 | --- | --- |
 | 首次观测到服务前 | 对应数据类型的心跳子键缺失，返回 `NO_DATA` 并记录缺失计数日志 |
 | 同步与异步请求间服务被删除或因关闭性能分析而不再展示 | 异步响应为请求中的缺失服务补齐默认三态，筛选计数只统计重新读取的当前服务全集 |
-| 新旧对照 | 心跳生产上线后，按同一无数据周期对照同一批应用的新旧状态 |
+| 新旧对照 | 对照同一批应用的新旧状态，区分旧无数据周期与新独立 `60 min` 观测窗口造成的预期差异 |
 | 读取切换 | 先切换读取，再单独删除旧对象，切换时保留旧函数 |
 | eBPF 应用 | 不补齐调用链发现，`trace` 状态回退为无数据，指标与日志发现不受影响 |
 
@@ -531,7 +535,8 @@ uv run pytest apm/tests packages/apm_web/tests
 | 用例 | 断言重点 |
 | --- | --- |
 | `test_heartbeat_observation_repairs_source` | [a] `last_data_at` 非空时追加来源<br />[b] 空值只推进 `checked_at`<br />[c] 不创建节点、不刷新 `updated_at` |
-| `test_heartbeat_fresh_tolerates_one_cycle` | `last_data_at` 落后一个发现周期时仍判 `NORMAL`，超过「无数据周期 + 发现周期」才判 `NO_DATA` |
+| `test_heartbeat_fresh_uses_service_lookback` | 覆盖 `60 min` 边界及超过边界 `1 s` 的三态映射，确认修改应用无数据周期不影响服务窗口 |
+| `test_service_status_with_discovery_and_cache_delay` | 持续上报时覆盖发现任务排队、拓扑 API `5 min` 缓存和本地 `60 s` LRU 的组合时序 |
 | `test_build_service_data_status_disabled_first` | 数据类型开关关闭时返回 `DISABLED`，不受心跳影响 |
 | `test_build_service_data_status_log_dual_source` | 心跳为空但关联索引无 `NO_DATA` 标签时返回 `NORMAL` |
 | `test_related_index_available_empty_tags` | 索引集标签列表为空时不判为可用 |
@@ -542,8 +547,8 @@ uv run pytest apm/tests packages/apm_web/tests
 
 | 维度 | 口径 |
 | --- | --- |
-| 状态一致性 | 同一应用、同一无数据周期，新旧状态逐服务比对，差异需能归因到已声明的语义变更 |
-| 状态时效 | 停止上报后确认服务在「无数据周期 + 发现周期」内翻转为无数据，不长期停留在正常 |
+| 状态一致性 | 新旧状态逐服务比对，差异需归因到独立 `60 min` 观测窗口或已声明的来源与标签变化 |
+| 状态时效 | 读取到的 `last_data_at` 距当前时间超过 `60 min` 即为无数据；持续上报场景覆盖任务延迟和两层缓存，发现任务阻塞超过观测窗口时，不保证能够区分任务延迟与业务无数据 |
 | 服务全集 | 服务数量、分类、语言、排序与分页结果与切换前一致 |
 | 筛选项 | `have_data` 与 `apply_module` 的计数基于全量展示服务，不随分页变化 |
 | 性能 | 记录 `service_list` 与 `data_status` 的端到端耗时与下游调用数，状态计算不再调用 UnifyQuery、ES 聚合和性能分析明细接口，拓扑读取与索引元数据冷缓存查询仍可能产生远程调用 |
@@ -553,7 +558,7 @@ uv run pytest apm/tests packages/apm_web/tests
 
 | 时间                 | 结论性进展                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `2026-10-19 17:00` | [a] 服务列表心跳读取 PR（[#12830](https://github.com/TencentBlueKing/bk-monitor/pull/12830)，`eb847954651bc4e1bf01c35919ca538bec094459`）完成代码 review，未发现阻塞问题<br />[b] 状态映射按需执行，单列按类型计算，筛选基于当前服务全集，缺失服务补齐默认状态<br />[c] 索引元数据冷缓存仍可产生远程调用，性能验收按停止存储探测核对<br />[d] 相关 74 项测试在 SQLite 内存表与 LocMemCache 隔离环境通过，未覆盖 MySQL 迁移及实际下游服务，paas3 依据作者截图核对 |
+| `2026-10-19 17:00` | [a] 复查 [#12830](https://github.com/TencentBlueKing/bk-monitor/pull/12830)，版本 `eb847954`，已发布 [review](https://github.com/TencentBlueKing/bk-monitor/pull/12830#pullrequestreview-5571671649)，包含 1 个 P1、1 个 P2 行内评论<br />[b] 用户确认服务状态改为独立最近 `60 min` 观测窗口，拓扑 API 缓存缩短至 `5 min`，本地 `60 s` LRU 保留，应用级无数据周期及关联日志判据保持各自口径，PR 尚未实现<br />[c] 实际缓存包装器与状态函数模拟复现持续上报误判无数据，列为 P1；无筛选计数的异步请求仍计算全量服务，列为 P2<br />[d] 上一轮 74 项测试在 SQLite 内存表与 LocMemCache 隔离环境通过，本轮补充函数语义与缓存时序模拟，尚未验证调整后代码及真实环境性能<br />[e] 历史慢请求中移除的状态探测耗时约 `4.26 s`，不能声明所有请求同幅加速或所有远程调用归零 |
 | `2026-10-15 18:00` | [a] 服务列表 review（[#12764](https://github.com/TencentBlueKing/bk-monitor/pull/12764)）确认全集改为拓扑节点加尚未发现的手动服务，关闭性能分析时去掉 `source == ["profiling"]` 的节点<br />[b] 手动服务写入独立结果列表，不再改到拓扑缓存<br />[c] 服务状态仍沿用原有重算和缓存，心跳映射留在后续慢接口改造 |
 | `2026-10-14 16:00` | [a] `last_data_at` 非空时为已有节点追加对应 `source`<br />[b] 仅推进 `checked_at` 时不补来源<br />[c] 写入不创建节点、不刷新 `updated_at` |
 | `2026-10-12 15:00` | [a] 里程碑 1 PR 完成 review，实现与方案对齐<br />[b] 心跳只记录本轮观测到的服务，写入改为行锁合并，撤回「读取紧贴写入」吸收丢更新的约束<br />[c] 调用链兜底轮跳过入口接口发现，避免下游接口被误判为入口<br />[d] 性能分析服务按普通服务并入拓扑，发现任务保持串行，不改 `delay()` 派发 |
