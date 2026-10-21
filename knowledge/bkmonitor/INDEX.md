@@ -8,8 +8,8 @@
 
 | 需求 | 标签 | 状态 | 更新日期 |
 |------|------|------|----------|
+| [APM 服务数据状态下沉到后台服务发现](./issues/2026-09-16-apm-service-data-status-heartbeat/README.md) | `apm` `data-status` `discover` `heartbeat` `topo-node` `log` `profiling` | 服务列表已合入，图表改造待合入 | 2026-10-21 |
 | [LLM 消息截断容错展示](./issues/2026-10-20-llm-message-truncation/README.md) | `apm` `llm` `json` `truncation` `frontend` | 方案待验证 | 2026-10-20 |
-| [APM 服务数据状态下沉到后台服务发现](./issues/2026-09-16-apm-service-data-status-heartbeat/README.md) | `apm` `data-status` `discover` `heartbeat` `topo-node` `log` `profiling` | 实现中 | 2026-10-19 |
 | [RUM 分层统一查询](./issues/2026-08-07-rum-unified-query/README.md) | `rum` `apm` `query` `span` `view` `session` `factory` `unify-query` `semconv` | 实现中 | 2026-10-16 |
 | [指标元信息存储与 SaaS/APM 自定义指标改造](./issues/2026-09-15-custom-metric-metadata/README.md) | `metadata` `custom-metric` `apm` `histogram` `bmw` | 方案完成 | 2026-10-14 |
 | [APM 跨应用 Trace 检索](./issues/2026-07-31-apm-cross-app-trace-search/README.md) | `apm` `trace` `cross-app-search` `index-set` `bklog` `celery` `unify-query` | 待合入 | 2026-08-06 |
