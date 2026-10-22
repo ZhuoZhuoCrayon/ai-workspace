@@ -4,7 +4,7 @@ tags: [apm, data-status, discover, heartbeat, topo-node, log, profiling]
 issue: knowledge/bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md
 description: 以服务数据心跳为唯一事实源，四类发现器单写、拓扑接口单读，SaaS 下线状态重算链路
 created: 2026-09-16
-updated: 2026-10-21
+updated: 2026-10-22
 ---
 
 # APM 服务数据状态下沉到后台服务发现 —— 实施方案
@@ -475,8 +475,8 @@ def list_available_related_services(app: Application, service_names: list[str]) 
 | --- | --- |
 | `apm_web.meta.resources.ApplicationInfoByAppNameResource` | 删除 `have_data()` 覆盖，直接返回库内 `Application.trace_data_status` *[1]* |
 | `apm_web.metric.resources.ApdexQueryResource`、`AlertQueryResource` | 删除 `have_data()` 前置检查，由主查询决定所选时间窗内的数据与空值 *[3]* |
-| `apm_web.service.resources.ServiceInfoResource.get_profiling_info` | `is_profiling_data_normal` 改读 `heartbeat.profiling`，移除 Doris `count(*)` |
-| `apm_web.profile.resources.ListApplicationServicesResource` | `normal` / `no_data` 分类改读 `Application.profiling_data_status`，服务明细仍按需查询 |
+| `apm_web.service.resources.ServiceInfoResource.get_profiling_info` | 复用已获取的拓扑节点，按 Profiling 开关与 `heartbeat.profiling.last_data_at` 的统一映射返回当前状态，移除 Doris `count(*)` |
+| `apm_web.profile.resources.ListApplicationServicesResource` | `normal` / `no_data` 分类改读 `Application.profiling_data_status`，两组均保留历史服务及采样类型，服务明细与 eBPF 查询保留 |
 
 - *[1] 此接口原先按传入时间窗覆盖状态，改造后返回应用当前状态；慢 Trace `8bfa95a9cf8553981b0105f1e89f2064`（`pvpesport.battle`）在原路径耗时约 `12.8 s`，最终报 VM 并发超限。*
 - *[2] `apm_web.metric_handler.RequestCountInstance` 继续用于请求量列和图表，不随 `have_data` 删除。*
@@ -558,6 +558,7 @@ uv run pytest apm/tests packages/apm_web/tests
 
 | 时间                 | 结论性进展                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `2026-10-22 16:00` | [a] 性能分析状态读取 PR（[#12893](https://github.com/TencentBlueKing/bk-monitor/pull/12893)，`130f6cf50625dba738364f90df8f26dd0c8cf8c7`）完成 review，未发现阻塞问题，已 [Approve](https://github.com/TencentBlueKing/bk-monitor/pull/12893#pullrequestreview-5611152045)<br />[b] 服务详情复用拓扑节点的统一心跳映射，应用列表按持久化状态分组并保留历史服务及采样类型，真实采样与图表查询保持<br />[c] 新增 19 项回归测试在 SQLite 内存表与 LocMemCache 隔离环境通过，Ruff 与 diff 检查通过；已核对 PR 验证截图，未独立复跑 paas3、MySQL 集成或压测 |
 | `2026-10-21 10:00` | [a] 应用详情与图表请求侧探测移除 PR（[#12851](https://github.com/TencentBlueKing/bk-monitor/pull/12851)）已合入，合并提交为 `6032fcbbb3a7a54f857ac6328f128c17b823b5d6`<br />[b] 应用详情读取持久化状态，Apdex 与告警按所选时间窗直接查询，空值柱点与历史告警展示符合方案<br />[c] 新增 12 项回归测试在 SQLite 内存表与 LocMemCache 隔离环境通过，Ruff 检查通过；已核对 PR 的 paas3 截图，未独立复跑环境或压测 |
 | `2026-10-20 15:00` | [a] 服务列表心跳读取 PR（[#12830](https://github.com/TencentBlueKing/bk-monitor/pull/12830)，`42d9d93401f0e743ed405a3083b2b66e6fd6e971`）复查通过并 Approve，上轮两条线程已 resolve<br />[b] 服务窗口独立配置，默认一小时；拓扑 API 缓存五分钟、本地缓存六十秒，无筛选计数时只计算请求服务<br />[c] 相关 87 项测试在 SQLite 内存表与 LocMemCache 隔离环境通过，GitHub 标签及 CLA 检查通过，未独立复跑 paas3 或真实存储探测 |
 | `2026-10-19 17:00` | [a] 复查 [#12830](https://github.com/TencentBlueKing/bk-monitor/pull/12830)，版本 `eb847954`，已发布 [review](https://github.com/TencentBlueKing/bk-monitor/pull/12830#pullrequestreview-5571671649)，包含 1 个 P1、1 个 P2 行内评论<br />[b] 用户确认服务状态改为独立最近 `60 min` 观测窗口，拓扑 API 缓存缩短至 `5 min`，本地 `60 s` LRU 保留，应用级无数据周期及关联日志判据保持各自口径，PR 尚未实现<br />[c] 实际缓存包装器与状态函数模拟复现持续上报误判无数据，列为 P1；无筛选计数的异步请求仍计算全量服务，列为 P2<br />[d] 上一轮 74 项测试在 SQLite 内存表与 LocMemCache 隔离环境通过，本轮补充函数语义与缓存时序模拟，尚未验证调整后代码及真实环境性能<br />[e] 历史慢请求中移除的状态探测耗时约 `4.26 s`，不能声明所有请求同幅加速或所有远程调用归零 |
@@ -590,4 +591,5 @@ uv run pytest apm/tests packages/apm_web/tests
 | ✅  | `feat/apm_service_list_query_topo_node/#1010158081138934112` | 服务列表统一读取拓扑节点 | [TencentBlueKing/bk-monitor #12764](https://github.com/TencentBlueKing/bk-monitor/pull/12764) |
 | ✅ | `feat/apm_service_list_status_from_heartbeat/#1010158081139048589` | 服务列表状态读取后台心跳 | [TencentBlueKing/bk-monitor #12830](https://github.com/TencentBlueKing/bk-monitor/pull/12830) |
 | ✅ | `feat/apm_app_detail_charts_remove_data_probe/#1010158081139171253` | 应用详情与图表移除请求侧数据探测 | [TencentBlueKing/bk-monitor #12851](https://github.com/TencentBlueKing/bk-monitor/pull/12851) |
+| ✅ | `feat/apm_profiling_service_heartbeat_app_status_group/#1010158081139232058` | 性能分析服务心跳读取与应用状态分组 | [TencentBlueKing/bk-monitor #12893](https://github.com/TencentBlueKing/bk-monitor/pull/12893) |
 | 🔄  | `<branch_name>`                                            | 里程碑 2：APM 依赖数据状态相关慢接口优化 | 待创建                                                                                           |
