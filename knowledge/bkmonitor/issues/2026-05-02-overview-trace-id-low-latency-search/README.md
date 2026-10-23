@@ -3,7 +3,7 @@ title: 优化首页 TraceID 全局搜索的预计算延迟
 tags: [overview, search, apm, trace, pre-calculate, low-latency]
 description: 双路径并行收集 Trace 命中，流式累计 TopK=3；Trace 绝对 5s deadline 与 Searcher 单项等待对齐，超时保留已有结果并结束
 created: 2026-05-02
-updated: 2026-07-24
+updated: 2026-10-23
 ---
 
 # 优化首页 TraceID 全局搜索的预计算延迟
@@ -41,7 +41,7 @@ updated: 2026-07-24
 ## 0x03 非目标
 
 - 不替换、不重写预计算路径，老数据仍由预计算覆盖。
-- 不引入应用级权限前置过滤（保留现状，由前端跳转时处理）。
+- 不对候选应用全集执行前置鉴权；命中后在后端校验应用查看权限。
 - 不改动预计算任务本身的写入链路与频率。
 - 不扩大候选业务为"用户全部有权限业务"，避免雪崩式 ES 并发。
 - 不引入 `SearchItem.item_timeout` 等单项特判超时体系。

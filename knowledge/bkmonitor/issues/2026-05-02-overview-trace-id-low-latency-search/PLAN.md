@@ -4,7 +4,7 @@ tags: [overview, search, apm, trace, pre-calculate, low-latency, user-visit-reco
 issue: knowledge/bkmonitor/issues/2026-05-02-overview-trace-id-low-latency-search/README.md
 description: 双路径并行收集 Trace 命中，流式累计 TopK=3；Trace 绝对 5s deadline 与 Searcher 单项等待对齐，超时保留已有 0～2 条结果并结束
 created: 2026-05-02
-updated: 2026-07-24
+updated: 2026-10-23
 ---
 
 # 优化首页 TraceID 全局搜索的预计算延迟 —— 实施方案
@@ -29,7 +29,7 @@ updated: 2026-07-24
 | 预计算与直查关系 | 并行收集，按 `application_id` 去重累计 | 预计算覆盖老数据广度，直查覆盖延迟期；里程碑 2 不再“先非空者赢” |
 | 候选业务范围 | 当前业务、默认业务、`UserVisitRecord` 出现的业务三类去重并集 | 兼顾用户主场景，避免拉全量业务造成雪崩 |
 | 访问数据源 | `UserVisitRecord`，废弃 `FUNCTION_ACCESS_RECORD.apm_service` | 后者是服务访问记录而非应用访问，与 Trace 检索语义不匹配 |
-| 应用权限过滤 | 不前置过滤，命中后由前端跳转时处理 | 与现状一致，简化实现，避免无 IAM 的高频损耗 |
+| 应用权限过滤 | 双路径命中在统一出口校验应用查看权限，授权后才进入快照与 TopK | 业务访问权限不能代替应用查看权限；每个唯一命中只鉴权一次 |
 | 候选应用规模 | TopN 默认 `15`，并发查询 | 与现有预计算多 cluster 并发量级一致 |
 | 直查时间窗口 | 近 `7d` | 与预计算路径对齐，便于结果合并语义统一 |
 | Trace 返回上限 | `K=3`，Trace 专用常量，不复用 `page_size` | 多应用命中只需少量候选；编码成本可忽略 |
@@ -55,11 +55,12 @@ flowchart TD
     R --> S["TopN 应用并发<br/>直查原始 Trace 表"]
     P --> M["命中队列<br/>按 application_id 去重"]
     S --> M
-    M -- "累计 1→2→3" --> O["流式 yield 完整快照"]
+    M --> A["VIEW_APM_APPLICATION<br/>应用查看权限校验"]
+    A -- "有权限，累计 1→2→3" --> O["流式 yield 完整快照"]
     M -- "K=3 / 耗尽 / 5s" --> X["trace_stop<br/>停止提交新查询"]
 ```
 
-Path A 与 Path B 并行产出命中，互不依赖；聚合层按 `application_id` 去重后流式推送累计快照。
+Path A 与 Path B 并行产出命中，互不依赖；聚合层按 `application_id` 去重并校验 `VIEW_APM_APPLICATION`，仅流式推送有权限应用的累计快照。
 
 ### b. 候选应用打分
 
@@ -129,6 +130,7 @@ score = APP_WEIGHT_CURRENT + log1p(visit)                                       
 - 预计算路径查询语义与现状一致，可独立回退。
 - 直查 miss 不影响预计算命中返回。
 - 输出 item 的字段集合与现有 `TraceSearchItem` 完全相同；流式仅改变推送次数。
+- 无权限命中不进入 SSE 快照、不计入 `K=3`，也不触发业务名补全；鉴权失败不放行未经校验的命中。
 - 候选业务集合在 `bk_biz_id` 缺省、`DEFAULT_BIZ_ID` 缺省、`UserVisitRecord` 无记录时退化为空集，此时 Path B 直接返回空，不抛错。
 - SSE 协议保持 `start → data* → end`；`event: end` 不携带结束原因（本期不做）。
 
@@ -292,6 +294,7 @@ with ThreadPool() as pool:
 ```python
 deadline = time.monotonic() + TRACE_SEARCH_TIMEOUT  # 5s
 trace_stop = threading.Event()
+checked_app_ids = set()
 
 def _drain_path(path):
     try:
@@ -325,7 +328,10 @@ with ThreadPool(2) as pool:
             if app is None:
                 unfinished_paths -= 1
                 continue
-            if app.application_id in seen:
+            if app.application_id in checked_app_ids:
+                continue
+            checked_app_ids.add(app.application_id)
+            if not filter_data_by_permission(...):  # 当前租户、用户及 APM 应用查看权限
                 continue
 
             seen[app.application_id] = app
@@ -386,6 +392,7 @@ def _iter_hits(candidates, probe, max_workers):
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-10-23 20:00` | 双路径命中统一执行应用级鉴权；业务有权限但应用无权限、TopK 补位、重复命中、异常拒绝及 SSE 输出回归验证通过，相关测试共 `88` 条通过 |
 | `2026-07-24 10:00` | [a] 里程碑 2 收口：`K=3` + Trace 绝对 `5s`<br />[b] `Searcher` 回到 `get(timeout=5)` 汇聚版，不引入 `item_timeout`<br />[c] Trace 内部 `deadline=5` 与外层单项等待对齐 |
 | `2026-05-06 16:00` | PR #10492 review 收口：预计算恢复 `MIN_START_TIME`，访问层基础分 + `log1p`，未访问层保留业务来源与服务数加权 |
 | `2026-05-03 00:00` | 里程碑 1 落地：双轨竞速 + 原始 Trace 直查 + `UserVisitRecord` 候选 |
@@ -406,3 +413,4 @@ def _iter_hits(candidates, probe, max_workers):
 | --- | --- | --- | --- |
 | ✅ | `feat/apm_trace/#1010158081134011153` | 里程碑 1：首页 TraceID 检索支持原始 Trace 低延迟通道 | [TencentBlueKing/bk-monitor #10492](https://github.com/TencentBlueKing/bk-monitor/pull/10492) |
 | 🔄 | `<branch_name>` | 里程碑 2：流式 TopK=3 + Trace 绝对 5s 超时收口 | 待创建 |
+| 🔄 | `fix/codex-trace-search-permissions/#1010158081165689381` | 全局 Trace 搜索过滤无应用查看权限的命中 | [TencentBlueKing/bk-monitor #12922](https://github.com/TencentBlueKing/bk-monitor/pull/12922) |
