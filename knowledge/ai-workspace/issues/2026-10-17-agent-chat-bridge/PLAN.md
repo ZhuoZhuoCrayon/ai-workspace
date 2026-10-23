@@ -40,7 +40,7 @@ updated: 2026-10-23
 | [Cursor 输出协议](https://cursor.com/docs/cli/reference/output-format) 与 [参数](https://cursor.com/docs/cli/reference/parameters) | 默认流格式按完整助手消息输出，终态 `result` 提供汇总文本；无交互运行支持 `--trust` | 终态文本覆盖进度；固定工作目录显式 `--trust`，默认使用只读 `ask` 模式 |
 | [企业微信官方 SDK](https://github.com/WecomTeam/aibot-node-sdk) | 流式回复使用原始请求身份和固定流 ID，主动发送独立于回调 | 平台适配器掌握回复窗口和主动推送切换 |
 
-Codex 默认检查 Git 仓库，组件在固定工作目录上显式使用 `--skip-git-repo-check`，支持普通目录和 Git 项目。CLI 认证由运行服务的系统账号提供，桥接配置不保存 Agent 账号令牌。
+Codex 默认检查 Git 仓库，组件在固定工作目录上显式使用 `--skip-git-repo-check`，支持普通目录和 Git 项目。CLI 认证由独立执行账号提供，桥接配置不保存 Agent 账号令牌。
 
 ## 0x02 架构设计
 
@@ -48,10 +48,14 @@ Codex 默认检查 Git 仓库，组件在固定工作目录上显式使用 `--sk
 
 ```mermaid
 flowchart LR
-    connectWeCom["connectWeCom()"] -->|IncomingMessage| Bridge
+    connectWeCom["connectWeCom()"] -->|"原始身份与管理命令"| AccessControl
+    AccessControl -->|"授权任务"| Bridge
+    AccessControl --> AuditLog
+    Bridge --> AuditLog
     runTerminal["runTerminal()"] -->|IncomingMessage| Bridge
     Bridge --> SessionStore
     Bridge -->|AgentRequest| CliAgent
+    CliAgent -->|"独立 UID/GID 与 HOME"| ExecutionIdentity
     CliAgent --> buildArguments["buildArguments()"]
     CliAgent --> AgentProtocol
     AgentProtocol -->|AgentEvent| Bridge
@@ -83,7 +87,7 @@ Agent 失败通过异步迭代异常返回。控制器把失败原因和已有�
 
 ### b. 会话与控制命令
 
-会话身份只隔离上下文。执行器与模型由状态目录中的一份 `AgentPreference` 决定，全部聊天共用。旧文件没有该偏好时，采用最近更新的执行器，并按时间合并各记录中的模型。
+会话身份只隔离上下文。执行器与模型由管理员修改，状态目录中的一份 `AgentPreference` 决定全部聊天的选择。旧文件没有该偏好时，采用最近更新的执行器，并按时间合并各记录中的模型。
 
 ```text
 key = SHA256([workspace, channel, accountId, conversationId, userId])
@@ -164,7 +168,7 @@ sequenceDiagram
 
 ### d. 配置与本机状态
 
-企业微信首次接入只要求填写机器人凭据，用户身份由私聊配对写入白名单。
+企业微信接入需要受保护的控制配置及独立执行账号，用户身份由私聊配对或管理员邀请写入白名单。
 
 ```mermaid
 flowchart LR
@@ -175,10 +179,12 @@ flowchart LR
         Config -->|"缺失且为交互终端"| Init["initialize()"]
         Init --> Load
     end
-    Load -->|"terminal 或已有白名单"| Handle["Bridge.handle()"]
-    Load -->|"wecom 且白名单为空"| Pair["PairingGate.handle()"]
+    Load --> Boundary["assertExecutionBoundary()"]
+    Boundary -->|"管理面不可读写"| ACL["AccessControl"]
+    ACL -->|"已有授权用户"| Handle["Bridge.handle()"]
+    Boundary -->|"wecom 且白名单为空"| Pair["PairingGate.handle()"]
     Pair -->|"私聊配对码有效"| Save["savePairedUser()"]
-    Save -->|"持久化成功后开放访问"| Handle
+    Save -->|"写入首位管理员"| ACL
 ```
 
 - *[8] `initialize()` 默认选择企业微信、当前目录、Codex 和只读权限，`npm run setup` 可单独运行向导。*
@@ -187,14 +193,23 @@ flowchart LR
 
 | 状态载体 | 保存内容 | 写入与恢复约束 |
 | --- | --- | --- |
-| `bridge.local.json` | 工作目录、执行器权限、平台与白名单 | `0600`，首次原子创建且不覆盖已有文件 |
+| `bridge.local.json` | 工作目录、独立执行身份、平台、白名单与管理员 | `0600`，首次原子创建且不覆盖已有文件 |
 | `.env` | 企业微信 Bot ID 和 Secret | `0600`，保留已有文件，配置写入失败只回滚新建凭据 |
 | `SessionStore` 的会话文件 | 全局执行器与模型，以及按会话保存的 ID 和归档 | `0600`，原子替换，格式损坏时拒绝启动 *[11]* |
-| `stateDir` 与 `bridge.lock` | 状态目录和单实例进程标识 | 目录 `0700`，锁文件 `0600`，同目录只运行一个实例 |
+| `stateDir` 与 `bridge.lock` | 状态目录和单实例进程标识 | 隔离执行时目录 `0710`，其余为 `0700`，锁文件 `0600` |
+| `AuditLog` | 授权、拒绝与任务结果的固定元信息 | 私有目录，文件 `0600`，容量轮转，正文与工具输出不落盘 |
 | 进程内存 | 上一份输入、消息去重与限频窗口 | 重启后清空 |
 
 - *[11] 当前会话不因闲置失效，每个执行器最多保留 `10` 条归档，归档保留期为 `7` 天。*
-- *[12] CLI 子进程会过滤 `WECOM_` 和 `BRIDGE_` 环境变量。*
+- *[12] 独立执行账号仅继承工具运行所需环境，使用自己的 HOME 与登录态。*
+
+### e. 管理与执行边界
+
+`AccessControl` 在模型前校验平台发送者，并原子处理管理员邀请与撤权。`Bridge` 限制全局偏好修改，撤权取消对应运行任务。管理员配置与凭据由本机运维维护，模型输出和引用不能调用管理入口。
+
+`execution.ts` 通过 UID/GID 分开控制进程与任务进程。启动探测检查私有配置、凭据、状态、祖先目录和运行代码的权限，检查失败拒绝启动，不回落到控制账号。部署与回滚契约见[权限与部署](../../../../apps/agent-chat-bridge/docs/security.md)。
+
+共用执行账号仍共用业务目录与工具凭据，业务权限由对应 API 控制。需要隔离业务数据的使用者使用不同执行账号与实例。
 
 ## 0x03 开发方案
 
@@ -205,7 +220,7 @@ flowchart LR
 | 设计问题 | 选择与理由 | 代价或边界 |
 | --- | --- | --- |
 | 平台和执行器会独立变化 | 在 `types.ts` 声明 `IncomingMessage`、`Reply` 和 `Agent`，避免每个平台重复对接两种 CLI | 平台格式转换、发送窗口和 SDK 身份由适配器承担 |
-| 切换执行器可能串用上下文 | 上下文只按会话读写，执行器和模型是全局偏好，同一任务固定开始时的快照 | 当前会话运行期间拒绝修改，其他会话可以修改全局选择 |
+| 切换执行器可能串用上下文 | 上下文按会话读写，管理员设置全局偏好，同一任务固定开始时的快照 | 当前会话运行期间拒绝修改，其他管理员会话可以修改全局选择 |
 | CLI 协议变化不应影响进程清理 | `CliAgent` 管进程，`AgentProtocol` 管事件解析 | 每个任务启动独立进程，连续性依靠明确的会话 ID |
 | 本地快速启动需要可恢复的状态 | 使用原子文件写入和单实例锁，减少外部服务配置 | 同一状态目录只支持单进程，不承担多实例协调 |
 
@@ -335,6 +350,7 @@ flowchart LR
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-10-23` | [a] `0.3.0` 完成管理角色、独立授权入口、执行账号隔离、固定字段审计与安全回归<br />[b] 官方 SDK 本地协议、真实降权和图片路径竞争测试纳入回归，自动化测试 `91/91`、类型、格式、构建与部署文档检查通过<br />[c] 当前聊天服务未切换，升级需要独立执行账号与工具登录态迁移，不将源码交付写成运行生效 |
 | `2026-10-23 18:00` | [a] 执行器与模型改为状态目录中的全局偏好，上下文仍按会话隔离<br />[b] 自动化测试 `78` 项、类型与格式检查、构建、工作区验证及 PreCI 通过<br />[c] 修复直接推送 `main`，原 PR #4 关闭 |
 | `2026-10-17 16:00` | [a] 核对原项目与 MIT 授权，采用平台与执行器协议隔离的重写结构<br />[b] 完成非 Git 目录 Codex 两轮会话恢复和官方企业微信 SDK 本地协议集成<br />[c] 自动化测试 `46/46`、检查、构建、工作区验证和组件快照 PreCI 通过，真实 TTY 向导及凭据隐藏验证通过；架构与代码复查无遗留 P0/P1 或代码交付阻断 |
 
@@ -353,3 +369,4 @@ flowchart LR
 | --- | --- | --- | --- |
 | ✅ | `main` | 通用组件本地交付，真实账号联调边界见交付证据 | 本地交付，未创建 PR |
 | ✅ | `main` | 执行器与模型选择改为全局偏好 | 直接推送 [30036bb](https://github.com/ZhuoZhuoCrayon/ai-workspace/commit/30036bb7c7e4d5c36417e567305b5555fbd3f604) |
+| ✅ | `main` | `0.3.0` 权限管理与执行隔离，`91/91` 回归通过，当前服务未升级 | 直接推送 [7c63cc1](https://github.com/ZhuoZhuoCrayon/ai-workspace/commit/7c63cc1460d439188f807a9c02dcf9353b96301a) |
