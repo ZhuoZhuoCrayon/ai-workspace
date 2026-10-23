@@ -3,7 +3,7 @@ title: bk-collector 指标元信息调研与性能报告
 tags: [collector, metrics, metadata, benchmark, cache]
 description: 对照协议源码和实际缓存实现，量化元信息去重的正确性、内存与发送成本
 created: 2026-09-15
-updated: 2026-09-15
+updated: 2026-10-23
 ---
 
 # bk-collector 指标元信息调研与性能报告
@@ -225,4 +225,4 @@ Bloom 原型通过行为测试、`go test -race ./...` 和 `go vet ./...`，覆�
 
 - `make bloom-store` 写入 `validation/results/bloom_store_behavior.txt`：缓存状态机用例。
 - `make test` 写入 `validation/results/split_tests.txt`：独立实验工程回归结果。
-- [实现验收](./PLAN.md#b-实现验收)：待实施的 Store／Exporter 拆分、Clean、生命周期与 collector 接入。
+- [实现验收](./PLAN.md#0x06-验收与验证)：生产 Store／Exporter、双 Bloom 轮转、防抖、生命周期与 collector 接入的验证记录。

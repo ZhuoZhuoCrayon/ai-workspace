@@ -46,4 +46,4 @@ make test
 
 ## 0x04 实现边界
 
-原型在 BloomStore 中合并存储与发送。通用 Store／Exporter 拆分、开放 Scope 类型、Clean、生命周期、生产适配与监控按 [实现验收](../PLAN.md#b-实现验收)另行验证。
+原型在 BloomStore 中合并存储与发送，保留为选型对照。生产 Store／Exporter 使用双 Bloom、按主键防抖和准入配额，测试与发布依赖见 [实现验收](../PLAN.md#0x06-验收与验证)，原型结果不代表生产模块。

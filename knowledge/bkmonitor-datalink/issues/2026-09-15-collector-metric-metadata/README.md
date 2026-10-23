@@ -3,7 +3,7 @@ title: bk-collector 指标元信息采集与同步
 tags: [collector, metrics, metadata, otlp, remote-write]
 description: 在指标语义丢失前提取元信息，按隔离范围聚合并减少重复同步
 created: 2026-09-15
-updated: 2026-09-15
+updated: 2026-10-23
 ---
 
 # bk-collector 指标元信息采集与同步
@@ -19,28 +19,29 @@ collector 将不同协议转换为数值指标时，会丢失描述、单位和�
 ### b. 目标
 
 - 明确 OTLP、Tars、OTP 和 Prometheus Remote Write 的元信息来源与采集位置。
-- 在 `pkg/utils/metricmeta` 规划 Scope、Store 与 Exporter，提供 Start／Stop、Clean 和使用方注入的 ExportFunc。
-- 用可复现的 Go 实验比较缓存性能、内存和发送量，形成可直接指导实现的方案。
+- 在 `pkg/utils/metricmeta` 实现 Scope、Store 与 Exporter，提供 Start／Stop、Clean 和使用方注入的 ExportFunc。
+- 对持续变化、异常 DataID 和发送失败提供有界防御，并用 Go 测试和真实 HTTP 请求验证。
 
 ## 0x02 实现路线
 
 ### a. 选定方案
 
-待发缓冲（pending）保存本周期最新元信息，去重缓存（sent）用 Bloom 记录已成功发送的版本。默认误判率为 `1e-6`，每 `2 h` 启动强制补报；批次限制和发送间隔控制重启后的发送量。
+待发缓冲（pending）保存每个主键的最新候选，成功版本用双 Bloom 去重，默认总误判率为 `1e-6`。每 `1 h` 轮换一代，版本保留 `1 h～2 h`，通过持续观察重报；防抖、黑名单和全局／DataID 配额限制异常更新。
 
 OTP 描述随 Record 传递，在 exporter 绑定身份并登记；OTLP、Tars、Pushgateway 在各自 converter 提取。原生 Remote Write v1 的独立 Metadata 缺少可靠的实际序列绑定，暂不登记元信息。
 
 | 阅读目的 | 入口 |
 | --- | --- |
-| 看选型与内存代价 | [PLAN：调研与选型](./PLAN.md#0x01-调研与选型) |
-| 看通用结构与调用接口 | [PLAN：架构设计](./PLAN.md#0x02-架构设计)与[发送及生命周期](./PLAN.md#0x04-缓存与补报) |
-| 看 collector 接入位置 | [PLAN：开发方案](./PLAN.md#0x05-开发方案) |
+| 看选型与内存代价 | [PLAN：调研与约束](./PLAN.md#0x01-调研与约束)和[性能结果](./PLAN.md#b-性能结果) |
+| 看通用结构与调用接口 | [PLAN：架构设计](./PLAN.md#0x02-架构设计)和[接入与生命周期](./PLAN.md#a-接入与生命周期) |
+| 看 collector 接入位置 | [PLAN：开发方案](./PLAN.md#0x04-开发方案) |
+| 验收实现与发布依赖 | [PLAN：验收与验证](./PLAN.md#0x06-验收与验证) |
 | 核查协议、源码和实验数据 | [REPORT](./REPORT.md) |
 | 运行 demo 与压测 | [Go 实验工程](./validation/README.md) |
 
 ### b. 约束
 
-当前交付开发方案和缓存原型，utils 模块与生产接入待实施。
+生产模块和 collector 本地适配通过测试；发布依赖 utils 发版、OTP 独立源码同步及实际接收服务联调，见 [发布依赖](./PLAN.md#c-发布依赖)。
 
 - 主键为 `dataid + __scope_type + __scope + __metric`，需求中的 `__scope_name` 统一为 `__scope`。
 - utils 预定义 APM／PLUGIN／DEFAULT，允许使用方扩展类型和范围，collector 的 APM 路径使用最终 service_name 与 scope_name 编码。

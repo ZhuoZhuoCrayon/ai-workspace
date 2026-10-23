@@ -8,7 +8,7 @@
 
 | 需求 | 标签 | 状态 | 更新日期 |
 |------|------|------|----------|
-| [bk-collector 指标元信息采集与同步](./issues/2026-09-15-collector-metric-metadata/README.md) | `collector` `metrics` `metadata` `otlp` `remote-write` | 方案验证 | 2026-09-15 |
+| [bk-collector 指标元信息采集与同步](./issues/2026-09-15-collector-metric-metadata/README.md) | `collector` `metrics` `metadata` `otlp` `remote-write` | 本地实现与验证完成，待发布联调 | 2026-10-23 |
 | [bk-collector 自适应限流](./issues/2026-06-10-collector-adaptive-throttling/README.md) | `collector` `throttling` `load-shedding` `overload-protection` `k8s` | 设计中 | 2026-06-22 |
 | [Taf 服务上报适配环境字段](./issues/2026-03-27-taf-set-env-field-adapter/README.md) | `taf` `tars` `set` `converter` `apm` | 新建 | 2026-03-27 |
 
