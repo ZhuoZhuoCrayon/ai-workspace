@@ -14,6 +14,7 @@ import type {
 import { conversationKey, SessionStore } from "./store.js";
 import { modelLabel } from "./agents/presets.js";
 import { buildPrompt } from "./prompt.js";
+import type { AuditSink } from "./audit.js";
 import { DEFAULT_TASK_TIMEOUTS } from "./config.js";
 
 interface BridgeOptions {
@@ -28,6 +29,8 @@ interface BridgeOptions {
   models?: Partial<Record<AgentName, string[]>>;
   defaultModels?: Partial<Record<AgentName, string>>;
   persona?: string;
+  isAdmin?(message: IncomingMessage): boolean;
+  audit?: AuditSink;
 }
 
 interface LogicalInput {
@@ -53,12 +56,13 @@ async function abortable<T>(
 }
 
 interface RunningTask {
+  userId: string;
   controller: AbortController;
   done: Promise<void>;
 }
 
 const HELP =
-  "/agent：选择执行器\n/agent <序号|codex|cursor>：切换执行器，对所有聊天生效\n/status：查看会话状态\n/reset（/new）：归档并开启新会话\n/sessions：列出当前执行器的历史\n/resume <序号>：恢复历史会话\n/model [序号|模型 ID|default]：查看或切换模型，对所有聊天生效\n/rerun：重跑上一条问题\n/cancel（/stop）：取消当前任务\n/help：查看帮助";
+  "/whoami：查看自己的身份与角色\n/access：管理员查看授权名单\n/allow <userid>：管理员邀请使用者\n/deny <userid>：管理员撤权\n/agent：选择执行器\n/agent <序号|codex|cursor>：切换执行器，对所有聊天生效\n/status：查看会话状态\n/reset（/new）：归档并开启新会话\n/sessions：列出当前执行器的历史\n/resume <序号>：恢复历史会话\n/model [序号|模型 ID|default]：查看或切换模型，对所有聊天生效\n/rerun：重跑上一条问题\n/cancel（/stop）：取消当前任务\n/help：查看帮助";
 
 export class Bridge {
   private readonly running = new Map<string, RunningTask>();
@@ -79,6 +83,13 @@ export class Bridge {
 
   accepts(message: IncomingMessage): boolean {
     return !this.closing && this.options.authorize(message);
+  }
+
+  revokeUser(userId: string): void {
+    for (const task of this.running.values()) {
+      if (task.userId === userId)
+        task.controller.abort(new BridgeError("访问权限已撤销，任务停止。"));
+    }
   }
 
   snapshot(): { accepting: boolean; running: number } {
@@ -111,6 +122,21 @@ export class Bridge {
     let attachments = message.attachments ?? [];
     if ((!text && !prepare) || text.length > 32_000) {
       await reply.finish("请输入 1～32,000 字符的消息。");
+      return;
+    }
+    if (
+      /^\/(?:agent|model)\s+\S/.test(text) &&
+      this.options.isAdmin &&
+      !this.options.isAdmin(message)
+    ) {
+      this.options.audit?.record({
+        action: "preference.denied",
+        message,
+        result: "not_admin",
+      });
+      await reply.finish(
+        "全局执行器和模型仅允许管理员修改。可使用 /agent 或 /model 查看当前配置。",
+      );
       return;
     }
     const key = conversationKey(message, this.options.workspace);
@@ -193,6 +219,11 @@ export class Bridge {
       await reply.finish("任务并发达到上限，请稍后重试。");
       return;
     }
+    this.options.audit?.record({
+      action: "task.started",
+      message,
+      agent: conversation.selectedAgent,
+    });
     const controller = new AbortController();
     // 先占用会话，再执行异步平台回复，避免相邻消息同时启动。
     const done = Promise.resolve().then(() =>
@@ -204,9 +235,10 @@ export class Bridge {
         reply,
         attachments,
         prepare,
+        message,
       ),
     );
-    this.running.set(key, { controller, done });
+    this.running.set(key, { controller, done, userId: message.userId });
     try {
       await done;
     } finally {
@@ -398,6 +430,7 @@ export class Bridge {
     reply: Reply,
     attachments: Attachment[] = [],
     prepare?: PrepareInput,
+    message?: IncomingMessage,
   ): Promise<void> {
     const name = conversation.selectedAgent;
     const idleTimeoutMs =
@@ -459,6 +492,8 @@ export class Bridge {
       controller.signal.throwIfAborted();
       if (!prompt || prompt.length > 32_000)
         throw new BridgeError("请输入 1～32,000 字符的消息。");
+      if (message && !this.options.authorize(message))
+        throw new BridgeError("访问权限已撤销，任务停止。");
       conversation.updatedAt = Date.now();
       this.store.put(key, conversation);
       const prompts = this.lastPrompts.get(key) ?? {};
@@ -487,6 +522,8 @@ export class Bridge {
         ...(sessionId ? { sessionId } : {}),
         ...(model ? { model } : {}),
       })) {
+        if (message && !this.options.authorize(message))
+          controller.abort(new BridgeError("访问权限已撤销，任务停止。"));
         controller.signal.throwIfAborted();
         onActivity();
         if (event.type === "session") {
@@ -508,16 +545,30 @@ export class Bridge {
       }
       controller.signal.throwIfAborted();
       if (!completed) throw new BridgeError("Agent 未确认任务完成。");
+      this.options.audit?.record({
+        action: "task.completed",
+        ...(message ? { message } : {}),
+        agent: name,
+      });
     } catch (error) {
+      try {
+        this.options.audit?.record({
+          action: controller.signal.aborted ? "task.cancelled" : "task.failed",
+          ...(message ? { message } : {}),
+          agent: name,
+        });
+      } catch {
+        this.logger.error("任务审计写入失败。");
+      }
       const failure = controller.signal.aborted
         ? controller.signal.reason
         : error;
-      const message =
+      const failureText =
         failure instanceof BridgeError
           ? failure.message
           : "任务执行失败，请检查本机配置和状态目录。";
-      this.logger.error(`${name}: ${message}`);
-      content = `${content ? `${content}\n\n` : ""}${message}`;
+      this.logger.error(`${name}: ${failureText}`);
+      content = `${content ? `${content}\n\n` : ""}${failureText}`;
     } finally {
       clearTimers();
       controller.signal.removeEventListener("abort", clearTimers);

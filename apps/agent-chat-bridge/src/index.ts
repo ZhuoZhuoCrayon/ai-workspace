@@ -9,3 +9,7 @@ export {
   DeliveryQueue,
 } from "./channels/wecom.js";
 export * from "./types.js";
+export { AccessControl } from "./access.js";
+export { AuditLog } from "./audit.js";
+export type { AuditSink, AuditEvent } from "./audit.js";
+export type { ExecutionIdentity } from "./execution.js";

@@ -118,7 +118,7 @@ npm start
 
 Codex 需要查询 GitHub 时，在已有配置的 `agents.codex` 中设置 `writable: true` 和 `networkAccess: true`，重启服务后生效。宿主机能访问 GitHub 不代表 Codex 沙箱已允许联网，匿名 API 限频也应与网络故障分别排查。
 
-部署者明确选择 Full Access 时，设置 `agents.codex.fullAccess: true`。服务通过 `--dangerously-bypass-approvals-and-sandbox` 启动 Codex，仍按机器人白名单接收任务。
+部署者明确选择 Full Access 时，设置 `agents.codex.fullAccess: true`。服务通过 `--dangerously-bypass-approvals-and-sandbox` 启动 Codex，仍按机器人白名单接收任务，企业微信模式必须通过独立执行账号运行。
 
 ### c. 表达风格
 
@@ -134,11 +134,14 @@ Codex 需要查询 GitHub 时，在已有配置的 `agents.codex` 中设置 `wri
 
 | 字段 | 类型 | 默认值 | 约束 / 用途 |
 | --- | --- | --- | --- |
-| `wecom.allowedUsers` | string[] | `[]` | 首次配对写入，也可手工维护明确的用户 ID，拒绝 `*` |
+| `wecom.allowedUsers` | string[] | `[]` | 明确用户 ID，管理员通过 `/allow` 和 `/deny` 管理，拒绝 `*` |
+| `wecom.adminUsers` | string[] | `[]` | 白名单的子集，首次正确配对建立或由本机运维配置 |
 | `wecom.updateIntervalMs` | integer | `1500` | 流式更新合并间隔，范围 `1000`～`60000` 毫秒 |
 | `wecom.streamWindowMs` | integer | `300000` | 进度消息窗口，范围 `5000`～`300000` 毫秒 |
 
 凭据使用 `WECOM_BOT_ID` 和 `WECOM_BOT_SECRET`。显式环境变量优先于配置文件同目录的 `.env`，凭据不写入 JSON。
+
+企业微信模式还需要 `execution.uid`、`execution.gid` 和 `execution.home`，控制配置与执行账号的权限约束见[权限与部署](./security.md)。已有名单缺少管理员时拒绝启动。
 
 ## 0x03 后台运行与探活
 

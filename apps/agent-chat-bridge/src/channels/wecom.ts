@@ -1,3 +1,7 @@
+import { mkdirSync, chmodSync, chownSync } from "node:fs";
+import { validUserId } from "../access.js";
+import type { AccessControl } from "../access.js";
+import type { AuditSink } from "../audit.js";
 import { readWeComInput, downloadAttachment } from "./wecom-input.js";
 import { extractImages } from "./outbound-images.js";
 import { renderProgress } from "./progress.js";
@@ -54,7 +58,7 @@ export function normalizeWeCom(
     typeof body.msgid !== "string" ||
     !body.msgid ||
     typeof body.from?.userid !== "string" ||
-    !body.from.userid ||
+    !validUserId(body.from.userid) ||
     !frame.headers?.req_id
   )
     return;
@@ -314,12 +318,34 @@ export function connectWeCom(
     deliveryQueue?: DeliveryQueue;
     workspace?: string;
     pairing?: PairingGate;
+    access?: AccessControl;
+    audit?: AuditSink;
+    attachmentGid?: number;
   },
 ): Promise<void> {
   const queue = options.deliveryQueue ?? new DeliveryQueue();
+  const recent = new Map<string, number>();
+  const rates = new Map<string, number[]>();
   client.on("message", (frame) => {
     const message = normalizeWeCom(frame, botId);
     if (!message) return;
+    const now = Date.now();
+    for (const [key, time] of recent)
+      if (now - time > 86_400_000) recent.delete(key);
+    if (recent.has(message.messageId)) return;
+    recent.set(message.messageId, now);
+    if (recent.size > 10_000) recent.delete(recent.keys().next().value!);
+    for (const [key, times] of rates)
+      if (now - times[times.length - 1]! >= 60_000) rates.delete(key);
+    const timestamps = (rates.get(message.userId) ?? []).filter(
+      (time) => now - time < 60_000,
+    );
+    if (
+      timestamps.length >= 60 ||
+      (!rates.has(message.userId) && rates.size >= 10_000)
+    )
+      return;
+    rates.set(message.userId, [...timestamps, now]);
     const target =
       frame.body!.chattype === "group" ? frame.body!.chatid! : message.userId;
     const reply = new WeComReply(
@@ -348,11 +374,59 @@ export function connectWeCom(
           .catch(() => logger.error("配对提示未能交付。"));
       return;
     }
-    if (!bridge.accepts(message)) return;
+    try {
+      options.audit?.record({ action: "message.received", message });
+      if (
+        options.access &&
+        frame.body!.msgtype === "text" &&
+        !frame.body!.quote
+      ) {
+        const response = options.access.command(message);
+        if (response !== undefined) {
+          if (
+            /^\/deny\s+\S+\s*$/.test(message.text) &&
+            options.access.admin(message)
+          ) {
+            const target = message.text.trim().split(/\s+/)[1]!;
+            if (!options.access.allowed({ ...message, userId: target }))
+              bridge.revokeUser(target);
+          }
+          void reply
+            .finish(response)
+            .catch(() => logger.error("权限指令结果未能交付。"));
+          return;
+        }
+      }
+      if (!bridge.accepts(message)) {
+        options.audit?.record({
+          action: "message.denied",
+          message,
+          result: "not_authorized",
+        });
+        if (options.access)
+          void reply
+            .finish(
+              `未获授权。你的 userid：${message.userId}。请管理员发送 /allow <userid>。`,
+            )
+            .catch(() => logger.error("拒绝提示未能交付。"));
+        return;
+      }
+    } catch {
+      logger.error("安全校验或审计失败，操作结果需要核对。");
+      void reply
+        .finish(
+          "安全校验或审计失败。权限操作请由管理员用 /access 核对结果，普通任务不会继续。",
+        )
+        .catch(() => {});
+      return;
+    }
     if (frame.body!.msgtype === "text" && !frame.body!.quote) {
-      void bridge
-        .handle(message, reply)
-        .catch(() => logger.error("企业微信消息未能交付。"));
+      void bridge.handle(message, reply).catch(() => {
+        logger.error("企业微信消息处理或审计失败。");
+        return reply
+          .finish("消息处理或审计失败，请联系管理员。")
+          .catch(() => {});
+      });
       return;
     }
     void bridge
@@ -363,12 +437,30 @@ export function connectWeCom(
           )
         )
           throw new Error("不支持的消息类型");
+        if (options.attachmentDir && options.attachmentGid !== undefined) {
+          mkdirSync(options.attachmentDir, { recursive: true, mode: 0o750 });
+          chownSync(
+            options.attachmentDir,
+            process.getuid!(),
+            options.attachmentGid,
+          );
+          chmodSync(options.attachmentDir, 0o750);
+        }
         const input = await readWeComInput(
           { downloadFile: (url, key) => downloadAttachment(url, key, signal) },
           frame.body!,
           options.attachmentDir ?? ".state/attachments",
           signal,
         );
+        if (options.attachmentGid !== undefined)
+          for (const attachment of input.attachments ?? []) {
+            chownSync(
+              attachment.path,
+              process.getuid!(),
+              options.attachmentGid,
+            );
+            chmodSync(attachment.path, 0o640);
+          }
         return input;
       })
       .catch(() => logger.error("企业微信消息处理或交付失败。"));

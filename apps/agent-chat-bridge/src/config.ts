@@ -2,6 +2,9 @@ import { readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { BridgeError, isAgentName } from "./types.js";
 import type { AgentName } from "./types.js";
+import { executionIdentity } from "./execution.js";
+import type { ExecutionIdentity } from "./execution.js";
+import { userIds } from "./access.js";
 import { MODEL_PRESETS } from "./agents/presets.js";
 
 export const DEFAULT_TASK_TIMEOUTS = {
@@ -30,8 +33,10 @@ export interface Config {
   healthPort: number;
   persona: string;
   agents: Record<AgentName, AgentConfig>;
+  execution?: ExecutionIdentity;
   wecom: {
     allowedUsers: string[];
+    adminUsers: string[];
     updateIntervalMs: number;
     streamWindowMs: number;
   };
@@ -132,14 +137,11 @@ export function loadConfig(file: string): Config {
     };
   };
   const wecom = object(raw.wecom ?? {}, "wecom");
-  const allowedUsers = wecom.allowedUsers ?? [];
-  if (
-    !Array.isArray(allowedUsers) ||
-    !allowedUsers.every(
-      (id) => typeof id === "string" && id.trim() && id !== "*",
-    )
-  )
-    throw new BridgeError("allowedUsers 必须是明确的用户 ID 数组。");
+  const allowedUsers = userIds(wecom.allowedUsers ?? []);
+  const adminUsers = userIds(wecom.adminUsers ?? []);
+  if (!adminUsers.every((id) => allowedUsers.includes(id)))
+    throw new BridgeError("管理员必须在白名单内。");
+  const execution = executionIdentity(raw.execution);
   const channel = raw.channel ?? "wecom";
   if (channel !== "wecom" && channel !== "terminal")
     throw new BridgeError("channel 只能是 wecom 或 terminal。");
@@ -161,6 +163,7 @@ export function loadConfig(file: string): Config {
   );
   return {
     channel,
+    ...(execution ? { execution } : {}),
     persona,
     workspace,
     stateDir: resolve(root, text(raw.stateDir, ".state", "stateDir")),
@@ -191,6 +194,7 @@ export function loadConfig(file: string): Config {
     agents: { codex: parseAgent("codex"), cursor: parseAgent("cursor") },
     wecom: {
       allowedUsers,
+      adminUsers,
       updateIntervalMs: integer(
         wecom.updateIntervalMs,
         1500,

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage, Reply } from "../src/types.js";
@@ -6,7 +6,9 @@ import { randomUUID } from "node:crypto";
 
 export const logger = { info() {}, error() {} };
 export function temporary() {
-  const directory = mkdtempSync(join(tmpdir(), "agent-chat-bridge-"));
+  const directory = realpathSync(
+    mkdtempSync(join(tmpdir(), "agent-chat-bridge-")),
+  );
   return {
     directory,
     cleanup: () => rmSync(directory, { recursive: true, force: true }),

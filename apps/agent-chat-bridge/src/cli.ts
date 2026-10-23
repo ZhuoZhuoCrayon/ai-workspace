@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 import { WSClient } from "@wecom/aibot-node-sdk";
+import { AccessControl } from "./access.js";
+import { AuditLog } from "./audit.js";
+import { assertExecutionBoundary, executionOptions } from "./execution.js";
 import { loadConfig } from "./config.js";
 import { Bridge } from "./bridge.js";
 import { CliAgent } from "./agents/cli-agent.js";
@@ -9,7 +12,7 @@ import { runTerminal } from "./channels/terminal.js";
 import { BridgeError } from "./types.js";
 import { startHealthServer } from "./health.js";
 import type { Server } from "node:http";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, chmodSync, chownSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { parseEnv } from "node:util";
 import { initialize, savePairedUser } from "./setup.js";
@@ -66,6 +69,24 @@ async function main(): Promise<void> {
     throw new BridgeError(
       "缺少机器人凭据，请运行 npm run setup 或设置 WECOM_BOT_ID / WECOM_BOT_SECRET。",
     );
+  if (channel === "wecom" && !config.execution)
+    throw new BridgeError(
+      "共享机器人必须配置独立 execution 账号，拒绝以管理账号执行。",
+    );
+  if (
+    channel === "wecom" &&
+    config.wecom.allowedUsers.length &&
+    !config.wecom.adminUsers.length
+  )
+    throw new BridgeError(
+      "已有白名单必须在本机明确配置 adminUsers，不自动推断管理员。",
+    );
+  if (config.execution)
+    assertExecutionBoundary(config.execution, [
+      configFile,
+      envFile,
+      config.stateDir,
+    ]);
   try {
     const env = Object.fromEntries(
       Object.entries(process.env).filter(
@@ -75,7 +96,8 @@ async function main(): Promise<void> {
     execFileSync(config.agents[config.defaultAgent].command, ["--version"], {
       timeout: 5000,
       stdio: "ignore",
-      env,
+      ...executionOptions(config.execution),
+      ...(!config.execution ? { env } : {}),
     });
   } catch {
     const install =
@@ -97,6 +119,7 @@ async function main(): Promise<void> {
       saveUser: (userId) => {
         savePairedUser(configFile, userId);
         config.wecom.allowedUsers.push(userId);
+        config.wecom.adminUsers.push(userId);
       },
     });
     console.error(
@@ -107,11 +130,37 @@ async function main(): Promise<void> {
     info: (message: string) => console.error(message),
     error: (message: string) => console.error(message),
   };
+  const audit = new AuditLog(
+    join(config.stateDir, "audit", "events.jsonl"),
+    undefined,
+    config.workspace,
+  );
+  audit.record({
+    action: "service.starting",
+    result: config.execution ? "isolated" : "read_only",
+  });
   const store = new SessionStore(config.stateDir);
+  if (config.execution) {
+    chownSync(config.stateDir, process.getuid!(), config.execution.gid);
+    chmodSync(config.stateDir, 0o710);
+  }
+  const access = new AccessControl(configFile, audit, (userId) =>
+    bridge.revokeUser(userId),
+  );
   const bridge = new Bridge(
     {
-      codex: new CliAgent("codex", config.agents.codex, config.workspace),
-      cursor: new CliAgent("cursor", config.agents.cursor, config.workspace),
+      codex: new CliAgent(
+        "codex",
+        config.agents.codex,
+        config.workspace,
+        config.execution,
+      ),
+      cursor: new CliAgent(
+        "cursor",
+        config.agents.cursor,
+        config.workspace,
+        config.execution,
+      ),
     },
     store,
     {
@@ -125,12 +174,15 @@ async function main(): Promise<void> {
           agent.model ? [[name, agent.model]] : [],
         ),
       ),
+      audit,
+      isAdmin: (message) =>
+        message.channel === "terminal" || access.admin(message),
       authorize: (message) =>
         message.channel === "terminal"
           ? channel === "terminal"
           : message.channel === "wecom" &&
             message.accountId === botId &&
-            config.wecom.allowedUsers.includes(message.userId),
+            access.allowed(message),
     },
     logger,
   );
@@ -156,9 +208,7 @@ async function main(): Promise<void> {
   try {
     if (config.healthPort)
       health = await startHealthServer(config.healthPort, () => ({
-        connected:
-          connected &&
-          (channel === "terminal" || config.wecom.allowedUsers.length > 0),
+        connected: connected && (channel === "terminal" || access.ready()),
         ...bridge.snapshot(),
         timeouts: {
           idleTimeoutMs: config.idleTimeoutMs,
@@ -198,6 +248,9 @@ async function main(): Promise<void> {
         },
         {
           ...config.wecom,
+          access,
+          audit,
+          ...(config.execution ? { attachmentGid: config.execution.gid } : {}),
           attachmentDir: `${config.stateDir}/attachments`,
           workspace: config.workspace,
           ...(pairing ? { pairing } : {}),

@@ -1,6 +1,6 @@
 {
   "name": "agent-chat-bridge",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "private": true,
   "description": "将聊天平台接到 Codex 和 Cursor 的通用桥接组件",
   "type": "module",
