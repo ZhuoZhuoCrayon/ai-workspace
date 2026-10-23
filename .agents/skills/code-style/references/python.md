@@ -36,6 +36,7 @@
 - 2.7 列表推导式
 - 2.8 函数
 - 2.9 变量
+- 2.10 交互式脚本交付
 
 ## 0x02 1.13 类型提示
 
@@ -53,6 +54,31 @@ query_list: list[dict[str, Any]] = super().to_unify_query_config()
 field_name: str | None = query.get("field_name")
 ```
 
-## 0x03 当前范围
+## 0x03 2.10 交互式脚本交付
+
+用户要求在 Python / Django shell 中执行脚本时，默认在 `python` 代码块中直接提供完整代码，便于复制、修改和逐段执行。
+
+- 不将整段脚本包在 `exec("""...""")`、`exec('''...''')` 或转义字符串中，除非用户明确要求这种形式。
+- 代码块内不包含 `>>>`、`...` 等交互提示符，执行环境说明放在代码块外。
+
+Good Case：
+
+```python
+cluster_ids: list[str] = ["cluster-a", "cluster-b"]
+for cluster_id in cluster_ids:
+    print(cluster_id)
+```
+
+Bad Case：
+
+```python
+exec("""
+cluster_ids: list[str] = ["cluster-a", "cluster-b"]
+for cluster_id in cluster_ids:
+    print(cluster_id)
+""")
+```
+
+## 0x04 当前范围
 
 - 其余条目仅作为目录骨架，后续有明确规则内容时再补充。

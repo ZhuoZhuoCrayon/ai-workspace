@@ -3,6 +3,7 @@ name: code-style
 description: >
   统一通用代码风格与实现约束：按目标项目规范（AGENTS.md / CONTRIBUTING.md）与语言参考约束命名、格式、复杂度与错误处理。
   编写、修改、评审任意语言源码或迁移代码规则时使用，交付代码前据此确保改动符合项目与工作区风格。
+  提供 Python / Django shell 脚本或交互式代码片段时同样适用。
 ---
 
 # Code Style
