@@ -1,9 +1,9 @@
 ---
 title: 通用聊天 Agent 桥接组件
 tags: [agent, bridge, codex, cursor]
-description: 在聊天平台中调用本地 Codex 和 Cursor，并按会话切换执行器
+description: 在聊天平台中调用本地 Codex 和 Cursor，全局切换执行器与模型，并按会话保留上下文
 created: 2026-10-17
-updated: 2026-10-17
+updated: 2026-10-23
 ---
 
 # 通用聊天 Agent 桥接组件
@@ -16,7 +16,7 @@ updated: 2026-10-17
 
 ### b. 目标
 
-- 提供 Codex 和 Cursor 执行器，通过 `/agent` 按会话切换并恢复各自上下文。
+- 提供 Codex 和 Cursor 执行器，通过 `/agent` 全局切换并按会话恢复各自上下文。
 - 保留企业微信多轮消息、附件、进度与限频能力，通过 `npm start` 向导和私聊配对完成初次接通。
 - 使用通用名称和平台接口，通过 PreCI 后放入公开工作区，无法剥离的内容留在私有域。
 

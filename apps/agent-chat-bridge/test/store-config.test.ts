@@ -106,6 +106,70 @@ test("旧绝对时限继续生效，显式新配置优先且不丢失空闲默�
   }
 });
 
+test("旧会话合并为全局执行器与模型，显式偏好优先于会话记录", () => {
+  const temp = temporary();
+  const older = conversationKey(message("old", { conversationId: "dm" }));
+  const newer = conversationKey(message("new", { conversationId: "group" }));
+  let store = new SessionStore(temp.directory);
+  try {
+    store.put(older, {
+      selectedAgent: "cursor",
+      sessions: { cursor: "cursor-session" },
+      models: { cursor: "model-a" },
+      updatedAt: 1,
+    });
+    store.put(newer, {
+      selectedAgent: "codex",
+      sessions: {},
+      models: { codex: "model-b", cursor: "model-c" },
+      updatedAt: 2,
+    });
+    store.close();
+    store = new SessionStore(temp.directory);
+    assert.equal(store.getPreference()?.selectedAgent, "codex");
+    assert.equal(store.getPreference()?.models.cursor, "model-c");
+    assert.equal(store.getPreference()?.models.codex, "model-b");
+    assert.equal(store.get(older)?.selectedAgent, "cursor");
+    store.put(
+      older,
+      {
+        selectedAgent: "codex",
+        sessions: { cursor: "cursor-session" },
+        updatedAt: 3,
+      },
+      {
+        selectedAgent: "cursor",
+        models: { cursor: "kept" },
+        updatedAt: 4,
+      },
+    );
+    store.put(newer, {
+      selectedAgent: "codex",
+      sessions: {},
+      models: { codex: "later" },
+      updatedAt: 5,
+    });
+    store.close();
+    store = new SessionStore(temp.directory);
+    assert.equal(store.getPreference()?.selectedAgent, "cursor");
+    assert.equal(store.getPreference()?.models.cursor, "kept");
+    assert.equal(store.getPreference()?.models.codex, undefined);
+    store.close();
+    writeFileSync(
+      join(temp.directory, "sessions.json"),
+      JSON.stringify({
+        version: 1,
+        sessions: [],
+        preference: { selectedAgent: "claude", models: {}, updatedAt: 1 },
+      }),
+    );
+    assert.throws(() => new SessionStore(temp.directory), /模型偏好/);
+  } finally {
+    store.close();
+    temp.cleanup();
+  }
+});
+
 test("workspace 参与会话身份，切换工作目录不复用会话", () => {
   const input = message("hello");
   assert.notEqual(

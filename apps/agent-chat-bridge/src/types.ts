@@ -64,6 +64,12 @@ export interface Conversation {
   updatedAt: number;
 }
 
+export interface AgentPreference {
+  selectedAgent: AgentName;
+  models: Partial<Record<AgentName, string>>;
+  updatedAt: number;
+}
+
 export interface SessionEntry {
   id: string;
   title: string;

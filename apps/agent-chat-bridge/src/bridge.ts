@@ -3,6 +3,7 @@ import type {
   Agent,
   Attachment,
   AgentName,
+  AgentPreference,
   Conversation,
   IncomingMessage,
   Logger,
@@ -57,7 +58,7 @@ interface RunningTask {
 }
 
 const HELP =
-  "/agent：选择执行器\n/agent <序号|codex|cursor>：切换执行器\n/status：查看会话状态\n/reset（/new）：归档并开启新会话\n/sessions：列出当前执行器的历史\n/resume <序号>：恢复历史会话\n/model [序号|模型 ID|default]：查看或切换当前执行器的模型\n/rerun：重跑上一条问题\n/cancel（/stop）：取消当前任务\n/help：查看帮助";
+  "/agent：选择执行器\n/agent <序号|codex|cursor>：切换执行器，对所有聊天生效\n/status：查看会话状态\n/reset（/new）：归档并开启新会话\n/sessions：列出当前执行器的历史\n/resume <序号>：恢复历史会话\n/model [序号|模型 ID|default]：查看或切换模型，对所有聊天生效\n/rerun：重跑上一条问题\n/cancel（/stop）：取消当前任务\n/help：查看帮助";
 
 export class Bridge {
   private readonly running = new Map<string, RunningTask>();
@@ -131,6 +132,7 @@ export class Bridge {
       sessions: {},
       updatedAt: now,
     };
+    this.applyPreference(conversation);
     if (!attachments.length && ["/cancel", "/stop"].includes(text)) {
       await this.command(key, conversation, text, reply);
       return;
@@ -246,7 +248,7 @@ export class Bridge {
       }));
       await this.select(
         reply,
-        `当前执行器：${name}\n${AGENT_NAMES.map((agent, i) => `${i + 1}. ${agent}${agent === name ? "（当前）" : ""}`).join("\n")}\n\n发送 /agent <序号或名称> 切换，例如 /agent 2。\n切换后使用 /model 选择对应模型，各自的上下文和模型偏好会保留。`,
+        `当前执行器：${name}\n${AGENT_NAMES.map((agent, i) => `${i + 1}. ${agent}${agent === name ? "（当前）" : ""}`).join("\n")}\n\n发送 /agent <序号或名称> 切换，例如 /agent 2。\n切换后使用 /model 选择对应模型。执行器和模型对所有聊天生效，各聊天保留各自的上下文。`,
         choices,
       );
       return;
@@ -265,7 +267,7 @@ export class Bridge {
       const choices = this.options.models?.[name] ?? [];
       await this.select(
         reply,
-        `当前执行器：${name}\n当前模型：${modelLabel(name, conversation.models?.[name] ?? this.options.defaultModels?.[name] ?? "CLI 默认")}\n${choices.length ? choices.map((model, i) => `${i + 1}. ${modelLabel(name, model)}${model === (conversation.models?.[name] ?? this.options.defaultModels?.[name]) ? "（当前）" : ""}`).join("\n") : "未发现可选模型，可在配置中设置 agents." + name + ".models。"}\n\n发送 /model <序号或模型 ID> 切换，/model default 恢复默认。`,
+        `当前执行器：${name}\n当前模型：${modelLabel(name, conversation.models?.[name] ?? this.options.defaultModels?.[name] ?? "CLI 默认")}\n${choices.length ? choices.map((model, i) => `${i + 1}. ${modelLabel(name, model)}${model === (conversation.models?.[name] ?? this.options.defaultModels?.[name]) ? "（当前）" : ""}`).join("\n") : "未发现可选模型，可在配置中设置 agents." + name + ".models。"}\n\n发送 /model <序号或模型 ID> 切换，/model default 恢复默认。选择对所有聊天生效。`,
         choices.map((model) => ({
           label: modelLabel(name, model),
           command: `/model ${name}:${model}`,
@@ -308,7 +310,11 @@ export class Bridge {
       }
       conversation.updatedAt = Date.now();
       try {
-        this.store.put(key, conversation);
+        this.store.put(
+          key,
+          conversation,
+          command === "/model" ? this.preferenceFrom(conversation) : undefined,
+        );
       } catch {
         await reply.finish("会话保存失败，请检查状态目录。");
         return;
@@ -316,7 +322,7 @@ export class Bridge {
       await reply.finish(
         command === "/resume"
           ? "已恢复选中的历史会话。"
-          : `已设置 ${name} 模型：${modelLabel(name, conversation.models?.[name] ?? this.options.defaultModels?.[name] ?? "CLI 默认")}，对下一条消息生效。`,
+          : `已设置 ${name} 模型：${modelLabel(name, conversation.models?.[name] ?? this.options.defaultModels?.[name] ?? "CLI 默认")}，对所有聊天的下一条消息生效。`,
       );
       return;
     }
@@ -350,19 +356,38 @@ export class Bridge {
       else this.archive(key, conversation);
       conversation.updatedAt = Date.now();
       try {
-        this.store.put(key, conversation);
+        this.store.put(
+          key,
+          conversation,
+          command === "/agent" ? this.preferenceFrom(conversation) : undefined,
+        );
       } catch {
         await reply.finish("会话保存失败，请检查状态目录。");
         return;
       }
       await reply.finish(
         command === "/agent"
-          ? `已切换为 ${conversation.selectedAgent}。\n当前模型：${modelLabel(conversation.selectedAgent, conversation.models?.[conversation.selectedAgent] ?? this.options.defaultModels?.[conversation.selectedAgent] ?? "CLI 默认")}\n发送 /model 查看可选模型。`
+          ? `已切换为 ${conversation.selectedAgent}，对所有聊天生效。\n当前模型：${modelLabel(conversation.selectedAgent, conversation.models?.[conversation.selectedAgent] ?? this.options.defaultModels?.[conversation.selectedAgent] ?? "CLI 默认")}\n发送 /model 查看可选模型。`
           : `已清空 ${conversation.selectedAgent} 上下文。`,
       );
       return;
     }
     await reply.finish(`命令无效。\n${HELP}`);
+  }
+
+  private applyPreference(conversation: Conversation): void {
+    const preference = this.store.getPreference();
+    if (!preference) return;
+    conversation.selectedAgent = preference.selectedAgent;
+    conversation.models = preference.models;
+  }
+
+  private preferenceFrom(conversation: Conversation): AgentPreference {
+    return {
+      selectedAgent: conversation.selectedAgent,
+      models: structuredClone(conversation.models ?? {}),
+      updatedAt: Date.now(),
+    };
   }
 
   private async execute(

@@ -28,7 +28,7 @@ flowchart LR
 | 新聊天平台 | 将平台事件转换为 `IncomingMessage`，交给 `Bridge.handle()` | [channels/](../src/channels/) |
 | 平台回复 | 实现 `Reply.update()` 和 `Reply.finish()`，处理限频、分段和交付失败 | [types.ts](../src/types.ts) |
 | 新执行器 | 实现 `Agent.run()`，分别产出会话、过程进度、最终正文和完成事件，遵守取消信号 | [agents/](../src/agents/) |
-| 会话存储 | 通过 `SessionStore` 管理上下文与执行器选择 | [store.ts](../src/store.ts) |
+| 会话存储 | 通过 `SessionStore` 管理分会话上下文，以及全局执行器与模型选择 | [store.ts](../src/store.ts) |
 
 - *[1] 耗时附件处理放在消息的可选 `prepare` 回调中，由 Bridge 在授权与任务准入通过后调用。*
 - *[2] 平台适配器不持有执行器会话，平台消息和 CLI 协议分别维护。*

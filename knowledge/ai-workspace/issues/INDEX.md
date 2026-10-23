@@ -2,7 +2,7 @@
 
 | 文件 | 标签 | 摘要 | 更新日期 |
 |------|------|------|---------|
-| [通用聊天 Agent 桥接组件](./2026-10-17-agent-chat-bridge/README.md) | `agent` `bridge` `codex` `cursor` | 在聊天平台中调用本地 Codex 和 Cursor，并按会话切换执行器 | 2026-10-17 |
+| [通用聊天 Agent 桥接组件](./2026-10-17-agent-chat-bridge/README.md) | `agent` `bridge` `codex` `cursor` | 在聊天平台中调用本地 Codex 和 Cursor，全局切换执行器与模型，并按会话保留上下文 | 2026-10-23 |
 | [工作区跨主机一键初始化](./2026-10-11-workspace-portable-bootstrap/README.md) | `ai-workspace` `bootstrap` `skills` `registry` `portability` | 让 ai-workspace 在 macOS 或 Linux 主机克隆后，执行一次 make bootstrap 即可拉取项目仓库和私有仓库并挂载 skills | 2026-10-11 |
 | [Skills-First 架构演进](./2026-04-06-skills-first-architecture/README.md) | `ai-workspace` `skills` `architecture` `open-source` | 将工作区规范体系从 AGENTS.md 中心化模式演进为 Skills-First 分布式模式，并面向开源社区输出方法论 | 2026-05-30 |
 | [AI 工作区知识资产可视化页面](./2026-04-04-knowledge-visualization-site/README.md) | `ai-workspace` `docs` `visualization` `github-pages` `search` | 通过 GitHub Pages 为 AI 工作区提供知识资产可视化与检索页面 | 2026-04-04 |

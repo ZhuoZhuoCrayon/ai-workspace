@@ -47,7 +47,7 @@ MCP、Codex 和 BKM CLI 的配置不在这一步里。`private/` 克隆完成后
 
 ## 0x04 应用
 
-[Agent Chat Bridge](apps/agent-chat-bridge/README.md) 把企业微信或终端接到 Codex 和 Cursor，通过 `/agent` 按会话切换执行器。
+[Agent Chat Bridge](apps/agent-chat-bridge/README.md) 把企业微信或终端接到 Codex 和 Cursor。执行器和模型对所有聊天生效，上下文按聊天保留。
 
 ## 0x05 License
 

@@ -2,7 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Bridge } from "../src/bridge.js";
 import { SessionStore } from "../src/store.js";
-import type { Agent, AgentEvent, AgentRequest } from "../src/types.js";
+import type {
+  Agent,
+  AgentEvent,
+  AgentRequest,
+  IncomingMessage,
+} from "../src/types.js";
 import { logger, message, reply, temporary } from "./helpers.js";
 
 class RecordingAgent implements Agent {
@@ -79,6 +84,75 @@ test("对话端编号切换执行器，模型目录、偏好与旧卡片按执�
     } finally {
       await bridge.close();
       resumedStore.close();
+    }
+  } finally {
+    await bridge.close();
+    store.close();
+    temp.cleanup();
+  }
+});
+
+test("执行器和模型对所有聊天生效，上下文仍按聊天隔离", async () => {
+  const temp = temporary(),
+    store = new SessionStore(temp.directory);
+  const codex = new RecordingAgent("codex"),
+    cursor = new RecordingAgent("cursor");
+  const settings = {
+    ...options,
+    models: { codex: ["cx-a", "cx-b"], cursor: ["cu-a"] },
+  };
+  let bridge = new Bridge({ codex, cursor }, store, settings, logger);
+  const send = async (
+    text: string,
+    overrides: Partial<IncomingMessage> = {},
+  ) => {
+    const output = reply();
+    await bridge.handle(message(text, overrides), output);
+    return output.finals[0]!;
+  };
+  const other = { conversationId: "group", userId: "another" };
+  try {
+    await send("/model 2");
+    await send("codex in room");
+    assert.equal(codex.requests[0]?.model, "cx-b");
+    assert.match(await send("/status", other), /当前执行器：codex/);
+    assert.match(await send("/model", other), /当前模型：cx-b/);
+    await send("codex in group", other);
+    assert.equal(codex.requests[1]?.model, "cx-b");
+    assert.equal(codex.requests[1]?.sessionId, undefined);
+    await send("/agent cursor", other);
+    await send("cursor in room");
+    await send("cursor in group", other);
+    assert.equal(cursor.requests[0]?.sessionId, undefined);
+    assert.equal(cursor.requests[1]?.sessionId, undefined);
+    await send("cursor again", other);
+    assert.equal(cursor.requests[2]?.sessionId, "cursor-2");
+    await send("cursor again room");
+    assert.equal(cursor.requests[3]?.sessionId, "cursor-1");
+    await send("/agent codex");
+    await send("back group", other);
+    await send("back room");
+    assert.equal(codex.requests[2]?.sessionId, "codex-2");
+    assert.equal(codex.requests[3]?.sessionId, "codex-1");
+    assert.equal(codex.requests[3]?.model, "cx-b");
+    await send("/agent cursor");
+    await send("/model 1");
+    await bridge.close();
+    store.close();
+    const resumed = new SessionStore(temp.directory);
+    bridge = new Bridge({ codex, cursor }, resumed, settings, logger);
+    try {
+      assert.match(
+        await send("/status", { conversationId: "fresh", userId: "third" }),
+        /当前执行器：cursor/,
+      );
+      assert.match(
+        await send("/model", { conversationId: "elsewhere", userId: "fourth" }),
+        /当前模型：cu-a/,
+      );
+    } finally {
+      await bridge.close();
+      resumed.close();
     }
   } finally {
     await bridge.close();
