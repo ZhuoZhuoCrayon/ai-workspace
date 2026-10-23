@@ -8,6 +8,7 @@
 
 | 需求 | 标签 | 状态 | 更新日期 |
 |------|------|------|----------|
+| [APM 日志存储支持切换 ES 集群](./issues/2026-10-23-apm-log-storage-cluster-switch/README.md) | `apm` `log` `storage` `frontend` | 方案完成，待开发 | 2026-10-23 |
 | [APM 服务数据状态下沉到后台服务发现](./issues/2026-09-16-apm-service-data-status-heartbeat/README.md) | `apm` `data-status` `discover` `heartbeat` `topo-node` `log` `profiling` | 服务列表、应用信息与图表改造已合入，性能分析改造及旧对象清理待完成 | 2026-10-21 |
 | [LLM 消息截断容错展示](./issues/2026-10-20-llm-message-truncation/README.md) | `apm` `llm` `json` `truncation` `frontend` | 方案待验证 | 2026-10-20 |
 | [RUM 分层统一查询](./issues/2026-08-07-rum-unified-query/README.md) | `rum` `apm` `query` `span` `view` `session` `factory` `unify-query` `semconv` | 实现中 | 2026-10-16 |
@@ -24,7 +25,7 @@
 | [APM 预计算适配共享数据源](./issues/2026-05-14-apm-precalc-shared-multi-app/README.md) | `apm` `pre-calculate` `shared-datasource` `multi-app` `bmw` | 实现中 | 2026-05-22 |
 | [APM 支持跨应用共享数据源](./issues/2026-03-03-apm-shared-datasource/README.md) | `apm` `datasource` `es` `shared-storage` `migration` | 设计中 | 2026-07-23 |
 | [APM Span 内置指标支持声明式引用](./issues/2026-05-07-apm-span-builtin-metric-declarative-reference/README.md) | `apm` `span` `metric-group` `trace` `unify-query` `declarative` | 新建 | 2026-05-07 |
-| [优化首页 TraceID 全局搜索的预计算延迟](./issues/2026-05-02-overview-trace-id-low-latency-search/README.md) | `overview` `search` `apm` `trace` `pre-calculate` `low-latency` | 里程碑 2 设计中 | 2026-07-24 |
+| [优化首页 TraceID 全局搜索的预计算延迟](./issues/2026-05-02-overview-trace-id-low-latency-search/README.md) | `overview` `search` `apm` `trace` `pre-calculate` `low-latency` | 里程碑 2 设计中 | 2026-10-23 |
 | [优化 APM 接口统计偶现查询报错](./issues/2026-04-21-apm-endpoint-stat-hot-window-divide-by-zero/README.md) | `apm` `endpoint-stat` `hot-window` `aggregation` `bucket-inconsistency` | 设计中 | 2026-04-21 |
 | [优化告警详情主机日志关联准确性](./issues/2026-04-15-alert-detail-host-collector-log-relation/README.md) | `alert` `log` `host-target` `collector` `log-relation` `accuracy` | 里程碑 2 待合入 | 2026-07-27 |
 | [APM 返回码重定义规则清空不生效](./issues/2026-04-10-apm-code-redefine-clear-not-effective/README.md) | `apm` `code-redefine` `code-relabel` `config-refresh` | 设计中 | 2026-05-24 |
@@ -39,7 +40,7 @@
 
 | 分类 | 路径 | 数量 | 说明 |
 |------|------|------|------|
-| 主题文章 | [articles/](./articles/INDEX.md) | 3 篇 | 领域知识整理与主题归档 |
+| 主题文章 | [articles/](./articles/INDEX.md) | 4 篇 | 领域知识整理与主题归档 |
 
 ### c. Troubleshooting
 
