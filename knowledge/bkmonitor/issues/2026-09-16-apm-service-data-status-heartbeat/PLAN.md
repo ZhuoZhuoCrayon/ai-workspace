@@ -2,7 +2,7 @@
 title: APM 服务数据状态下沉到后台服务发现 —— 实施方案
 tags: [apm, data-status, discover, heartbeat, topo-node, log, profiling]
 issue: knowledge/bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md
-description: 以服务数据心跳为唯一事实源，四类发现器单写、拓扑接口单读，SaaS 下线状态重算链路
+description: 后台维护服务数据心跳与关联日志状态快照，SaaS 只读映射服务状态
 created: 2026-09-16
 updated: 2026-10-26
 ---
@@ -158,7 +158,7 @@ flowchart LR
 
 ### e. 状态映射协议
 
-服务级状态由 SaaS 读取心跳映射，停止请求侧数据存储探测。日志关联复用索引集元数据缓存；缓存未命中时，仍可调用日志平台索引集列表 API：
+服务级状态由 SaaS 读取心跳与后台关联日志状态快照映射，页面请求不查询日志平台索引集列表：
 
 ```text
 service_status(service, data_type):
@@ -174,7 +174,7 @@ heartbeat_fresh(service, data_type):
     last_data_at >= now - APM_SERVICE_DATA_STATUS_LOOKBACK_SECONDS
 ```
 
-日志是唯一的双来源状态。心跳只覆盖 APM 自身管理的日志结果表，关联索引的可用性由 SaaS 读 `LogServiceRelation` 后比对索引集元数据得出，全程不发起 ES 聚合。索引集元数据缓存未命中时，仍调用日志平台索引集列表 API。
+日志状态合并上报心跳与关联索引可用性，任一满足即为 `NORMAL`。关联范围包括服务级手动关联、应用级全局关联和 K8s 自动关联，关联关系与心跳分别维护，索引集标签不写入 `heartbeat.log.last_data_at`。
 
 服务观测窗口由 `APM_SERVICE_DATA_STATUS_LOOKBACK_SECONDS` 配置，默认 `3600 s`，表达「最近一小时发现过数据」，独立于页面时间范围和应用 `no_data_period`。真正停止上报后的无数据判定也会相应延后，后台延迟超过一小时仍可能误判。
 
@@ -411,6 +411,7 @@ flowchart LR
     B -->|"log"| R["ServiceLogHandler<br/>.list_available_related_services()"]
     R --> LSR["LogServiceRelation"]
     R --> K8S["APP_SERVICE_K8S_RELATED_LOG_INDEXES_KEY"]
+    R --> SNAP["APM_RELATED_LOG_INDEX_STATUS_KEY"]
     L -->|"nodes"| SA["ServiceListAsyncResource<br/>._get_data_status_mapping()"]
     SA -->|"data_type / filter_keys"| B
     L -->|"services + data_status"| SL["ServiceListResource"]
@@ -418,8 +419,8 @@ flowchart LR
 
 | 变更点 | 修改内容 |
 | --- | --- |
-| **[Add]** `apm_web.handlers.service_handler.ServiceHandler.build_service_data_status(app, nodes, data_type=None)` | 按独立服务观测窗口生成三态，支持按 `data_type` 计算单列，日志状态按需读取关联索引元数据 |
-| **[Add]** `apm_web.handlers.log_handler.ServiceLogHandler.list_available_related_services(app, service_names)` | 按应用批量读取服务级与全局 `LogServiceRelation`、K8S 关联日志缓存，比对索引集元数据缓存，返回存在可用关联索引的服务集合 *[1]* |
+| **[Add]** `apm_web.handlers.service_handler.ServiceHandler.build_service_data_status(app, nodes, data_type=None)` | 按独立服务观测窗口生成三态，支持按 `data_type` 计算单列，日志状态按需读取后台关联索引状态快照 |
+| **[Add]** `apm_web.handlers.log_handler.ServiceLogHandler.list_available_related_services(app, service_names)` | 按应用批量读取服务级与全局 `LogServiceRelation`、K8S 关联日志缓存，比对后台索引集状态快照，返回存在可用关联索引的服务集合 *[1]* |
 | **[Change]** `apm_web.metric.resources.ServiceListAsyncResource._get_data_status_mapping` | [a] 从 `list_services` 读取节点后复用统一心跳映射<br />[b] 无筛选计数时只计算请求服务，单列只计算对应类型<br />[c] 需要筛选计数时计算当前服务全集的全部类型 |
 | **[Keep]** `apm_web.metric.resources.ServiceListResource` | 同步状态列及 `StatisticsApplyModule`、`StatisticsHaveData` 的筛选规则不变，输入换为心跳映射结果 |
 
@@ -445,7 +446,7 @@ def list_available_related_services(app: Application, service_names: list[str]) 
 | APM 自身日志结果表                                                       | ES 聚合改为后台心跳      |
 
 - *[1] 索引集 `tags` 含下方「无数据」内置标签即判为不可用；逐个检查该服务的全部关联索引集，`tags` 为空的索引集不判为可用。*
-- *[2] 缓存结构为 `service_name -> [{"index_set_id", "bk_biz_id", "updated_at"}]`，由 `cache_application_k8s_related_indexes` 周期写入，按 `bk_biz_id` 查询索引集标签。*
+- *[2] 缓存结构为 `service_name -> [{"index_set_id", "bk_biz_id", "updated_at"}]`，由 `cache_application_k8s_related_indexes` 周期写入，状态读取见里程碑 3。*
 
 ```json
 [
@@ -519,6 +520,58 @@ def list_available_related_services(app: Application, service_names: list[str]) 
 | 读取切换 | 先切换读取，再单独删除旧对象，切换时保留旧函数 |
 | eBPF 应用 | 不补齐调用链发现，`trace` 状态回退为无数据，指标与日志发现不受影响 |
 
+### g. 关联日志状态后台刷新
+
+每 `5 min` 刷新非 AI 应用所关联业务的全部日志索引状态，页面只读缓存。
+
+| 变更点                                            | 职责                                                         |
+| ---------------------------------------------- | ---------------------------------------------------------- |
+| **[Add]** `apm_web/tasks.py`                   | 新增 `refresh_related_log_index_status`，按下方伪代码过滤应用、汇总关联并刷新缓存 |
+| **[Add]** `config/celery/config.py`            | 注册任务，每 `5 min` 执行                                          |
+| **[Add]** `apm_web/constants.py`               | 在 `ApmCacheKey` 定义 `APM_RELATED_LOG_INDEX_STATUS_KEY`          |
+| **[Change]** `apm_web/handlers/log_handler.py` | `list_available_related_services` 按当前关联关系读取缓存，供日志状态和筛选计数共用 |
+
+**前置过滤与刷新**
+
+```python
+apps = Application.objects.filter(is_enabled=True).exclude(app_name__startswith="bkapp_ai0us0")
+targets = {(app.bk_tenant_id, biz_id) for app in apps for biz_id in related_biz_ids(app)}
+
+for tenant_id, biz_id in targets:
+    with tenant_context(tenant_id):
+        try:
+            indexes = get_biz_index_sets_with_cache(bk_biz_id=biz_id)
+        except Exception:
+            continue  # 保留旧缓存，不续期
+        statuses = [{"index_set_id": i["index_set_id"], "available": index_available(i)} for i in indexes]
+        write_cache(tenant_id, biz_id, {"checked_at": now(), "indexes": statuses}, ttl=cache_ttl)
+```
+
+- *[1] `related_biz_ids(app)` 汇总服务级、应用级手动关联与 K8s 关联的业务 ID，无关联返回空集合。*
+- *[2] `get_biz_index_sets_with_cache` 返回普通索引集列表，转换并缓存该业务全部索引的状态，不按关联索引 ID 过滤。*
+
+**缓存结构**
+
+```json
+{
+  "checked_at": 1800000000,
+  "indexes": [
+    {
+      "index_set_id": 101,
+      "available": true
+    },
+    {
+      "index_set_id": 102,
+      "available": false
+    }
+  ]
+}
+```
+
+- *[1] `ApmCacheKey.APM_RELATED_LOG_INDEX_STATUS_KEY` = `apm:related_log_index_status:{bk_tenant_id}:{bk_biz_id}`。*
+- *[2] KEY 按租户和关联日志所属业务隔离，`checked_at` 记录本轮缓存刷新完成的 Unix 秒时间戳。*
+- *[3] 缓存有效期默认 `15 min`（可配置），缺失或过期时仅按上报心跳判定日志状态。*
+
 ## 0x06 验收与验证
 
 ### a. 测试门禁
@@ -542,6 +595,8 @@ uv run pytest apm/tests packages/apm_web/tests
 | `test_related_index_available_empty_tags` | 索引集标签列表为空时不判为可用 |
 | `test_list_services_excludes_profiling_only_when_disabled` | 关闭性能分析后过滤仅由性能分析发现的节点 |
 | `test_service_list_async_no_remote_query` | 状态列不再发起 UnifyQuery、`es_query_dsl` 与性能分析接口调用 |
+| `test_related_log_status_refresh` | [a] 排除 AI、停用和无关联应用，缓存目标业务全部索引状态<br />[b] 三类关联业务取并集，同租户业务每轮调用一次缓存查询函数，跨租户隔离<br />[c] 失败保留旧缓存且不续期，正常空结果清除旧状态 |
+| `test_related_log_status_snapshot_only` | 冷缓存与过期快照均不回源，关联删除立即生效，心跳可独立判正常，日志列与全量筛选计数一致 |
 
 ### c. 回归口径
 
@@ -551,7 +606,7 @@ uv run pytest apm/tests packages/apm_web/tests
 | 状态时效 | 以 `last_data_at` 和服务观测窗口判定状态，验证一小时边界、发现排队与两级缓存组合，说明更长延迟仍可能误判 |
 | 服务全集 | 服务数量、分类、语言、排序与分页结果与切换前一致 |
 | 筛选项 | `have_data` 与 `apply_module` 的计数基于全量展示服务，不随分页变化 |
-| 性能 | 记录 `service_list` 与 `data_status` 的端到端耗时与下游调用数，状态计算不再调用 UnifyQuery、ES 聚合和性能分析明细接口，拓扑读取与索引元数据冷缓存查询仍可能产生远程调用 |
+| 性能 | 记录 `service_list` 与 `data_status` 的端到端耗时与下游调用数，状态计算不再调用 UnifyQuery、ES 聚合和性能分析明细接口，关联日志冷缓存也不调用日志平台，拓扑读取仍可能产生远程调用 |
 | 后台开销 | 记录四个发现器的单轮耗时与查询数，确认新增查询不突破现有 `10 min` 调度窗口 |
 
 ## 0x07 实施进展
@@ -560,6 +615,7 @@ uv run pytest apm/tests packages/apm_web/tests
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `2026-10-26 11:00` | [a] 旧状态查询与缓存清理 [PR #12920](https://github.com/TencentBlueKing/bk-monitor/pull/12920) 已合入，合并提交为 `969ef23c0a549a43be827aa288c3bb68ffde10fe`<br />[b] 性能分析状态读取 [PR #12893](https://github.com/TencentBlueKing/bk-monitor/pull/12893) 已于 `2026-10-22` 合入，合并提交为 `9a2b831afc758a05d809c252347c10d2a4ffe395`<br />[c] 本期后台心跳生产、服务全集与状态读取、应用详情与图表探测移除、性能分析状态改造及旧对象清理均已合入；真实存储集成与端到端性能未在本次 review 中独立验证 |
 | `2026-10-26 11:00` | [a] 旧状态查询与缓存清理 PR（[#12920](https://github.com/TencentBlueKing/bk-monitor/pull/12920)，`547f8afc7fca7d9e8134b45d2d78f334d4ae252d`）完成 review，未发现阻塞问题，删除入口、状态模板与缓存键均无残余引用<br />[b] 应用级数据量判定、真实指标、图表及 Profiling 明细查询保留，测试桩改为拦截底层查询<br />[c] 相关 118 项回归测试在 SQLite 内存表与 LocMemCache 隔离环境通过，Ruff 与 diff 检查通过；未独立复跑 paas3、MySQL 或真实存储集成验证 |
+| `2026-10-24 00:00` | 新增里程碑 3，方案待开发：关联发现与状态刷新独立调度，页面移除索引集冷缓存回源，保留上报心跳和三类关联来源 |
 | `2026-10-22 16:00` | [a] 性能分析状态读取 PR（[#12893](https://github.com/TencentBlueKing/bk-monitor/pull/12893)，`130f6cf50625dba738364f90df8f26dd0c8cf8c7`）完成 review，未发现阻塞问题，已 [Approve](https://github.com/TencentBlueKing/bk-monitor/pull/12893#pullrequestreview-5611152045)<br />[b] 服务详情复用拓扑节点的统一心跳映射，应用列表按持久化状态分组并保留历史服务及采样类型，真实采样与图表查询保持<br />[c] 新增 19 项回归测试在 SQLite 内存表与 LocMemCache 隔离环境通过，Ruff 与 diff 检查通过；已核对 PR 验证截图，未独立复跑 paas3、MySQL 集成或压测 |
 | `2026-10-21 10:00` | [a] 应用详情与图表请求侧探测移除 PR（[#12851](https://github.com/TencentBlueKing/bk-monitor/pull/12851)）已合入，合并提交为 `6032fcbbb3a7a54f857ac6328f128c17b823b5d6`<br />[b] 应用详情读取持久化状态，Apdex 与告警按所选时间窗直接查询，空值柱点与历史告警展示符合方案<br />[c] 新增 12 项回归测试在 SQLite 内存表与 LocMemCache 隔离环境通过，Ruff 检查通过；已核对 PR 的 paas3 截图，未独立复跑环境或压测 |
 | `2026-10-20 15:00` | [a] 服务列表心跳读取 PR（[#12830](https://github.com/TencentBlueKing/bk-monitor/pull/12830)，`42d9d93401f0e743ed405a3083b2b66e6fd6e971`）复查通过并 Approve，上轮两条线程已 resolve<br />[b] 服务窗口独立配置，默认一小时；拓扑 API 缓存五分钟、本地缓存六十秒，无筛选计数时只计算请求服务<br />[c] 相关 87 项测试在 SQLite 内存表与 LocMemCache 隔离环境通过，GitHub 标签及 CLA 检查通过，未独立复跑 paas3 或真实存储探测 |
@@ -595,3 +651,4 @@ uv run pytest apm/tests packages/apm_web/tests
 | ✅ | `feat/apm_app_detail_charts_remove_data_probe/#1010158081139171253` | 应用详情与图表移除请求侧数据探测 | [TencentBlueKing/bk-monitor #12851](https://github.com/TencentBlueKing/bk-monitor/pull/12851) |
 | ✅ | `feat/apm_profiling_service_heartbeat_app_status_group/#1010158081139232058` | 性能分析服务心跳读取与应用状态分组 | [TencentBlueKing/bk-monitor #12893](https://github.com/TencentBlueKing/bk-monitor/pull/12893) |
 | ✅ | `feat/apm_service_status_remove_legacy_query_cache/#1010158081139342361` | 旧服务状态查询、缓存与模板清理 | [TencentBlueKing/bk-monitor #12920](https://github.com/TencentBlueKing/bk-monitor/pull/12920) |
+| 🔄 | `<branch_name>` | 里程碑 3：关联日志状态后台刷新 | 待创建 |
