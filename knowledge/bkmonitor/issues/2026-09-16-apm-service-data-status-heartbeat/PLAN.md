@@ -4,7 +4,7 @@ tags: [apm, data-status, discover, heartbeat, topo-node, log, profiling]
 issue: knowledge/bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md
 description: 以服务数据心跳为唯一事实源，四类发现器单写、拓扑接口单读，SaaS 下线状态重算链路
 created: 2026-09-16
-updated: 2026-10-22
+updated: 2026-10-26
 ---
 
 # APM 服务数据状态下沉到后台服务发现 —— 实施方案
@@ -558,6 +558,8 @@ uv run pytest apm/tests packages/apm_web/tests
 
 | 时间                 | 结论性进展                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `2026-10-26 11:00` | [a] 旧状态查询与缓存清理 [PR #12920](https://github.com/TencentBlueKing/bk-monitor/pull/12920) 已合入，合并提交为 `969ef23c0a549a43be827aa288c3bb68ffde10fe`<br />[b] 性能分析状态读取 [PR #12893](https://github.com/TencentBlueKing/bk-monitor/pull/12893) 已于 `2026-10-22` 合入，合并提交为 `9a2b831afc758a05d809c252347c10d2a4ffe395`<br />[c] 本期后台心跳生产、服务全集与状态读取、应用详情与图表探测移除、性能分析状态改造及旧对象清理均已合入；真实存储集成与端到端性能未在本次 review 中独立验证 |
+| `2026-10-26 11:00` | [a] 旧状态查询与缓存清理 PR（[#12920](https://github.com/TencentBlueKing/bk-monitor/pull/12920)，`547f8afc7fca7d9e8134b45d2d78f334d4ae252d`）完成 review，未发现阻塞问题，删除入口、状态模板与缓存键均无残余引用<br />[b] 应用级数据量判定、真实指标、图表及 Profiling 明细查询保留，测试桩改为拦截底层查询<br />[c] 相关 118 项回归测试在 SQLite 内存表与 LocMemCache 隔离环境通过，Ruff 与 diff 检查通过；未独立复跑 paas3、MySQL 或真实存储集成验证 |
 | `2026-10-22 16:00` | [a] 性能分析状态读取 PR（[#12893](https://github.com/TencentBlueKing/bk-monitor/pull/12893)，`130f6cf50625dba738364f90df8f26dd0c8cf8c7`）完成 review，未发现阻塞问题，已 [Approve](https://github.com/TencentBlueKing/bk-monitor/pull/12893#pullrequestreview-5611152045)<br />[b] 服务详情复用拓扑节点的统一心跳映射，应用列表按持久化状态分组并保留历史服务及采样类型，真实采样与图表查询保持<br />[c] 新增 19 项回归测试在 SQLite 内存表与 LocMemCache 隔离环境通过，Ruff 与 diff 检查通过；已核对 PR 验证截图，未独立复跑 paas3、MySQL 集成或压测 |
 | `2026-10-21 10:00` | [a] 应用详情与图表请求侧探测移除 PR（[#12851](https://github.com/TencentBlueKing/bk-monitor/pull/12851)）已合入，合并提交为 `6032fcbbb3a7a54f857ac6328f128c17b823b5d6`<br />[b] 应用详情读取持久化状态，Apdex 与告警按所选时间窗直接查询，空值柱点与历史告警展示符合方案<br />[c] 新增 12 项回归测试在 SQLite 内存表与 LocMemCache 隔离环境通过，Ruff 检查通过；已核对 PR 的 paas3 截图，未独立复跑环境或压测 |
 | `2026-10-20 15:00` | [a] 服务列表心跳读取 PR（[#12830](https://github.com/TencentBlueKing/bk-monitor/pull/12830)，`42d9d93401f0e743ed405a3083b2b66e6fd6e971`）复查通过并 Approve，上轮两条线程已 resolve<br />[b] 服务窗口独立配置，默认一小时；拓扑 API 缓存五分钟、本地缓存六十秒，无筛选计数时只计算请求服务<br />[c] 相关 87 项测试在 SQLite 内存表与 LocMemCache 隔离环境通过，GitHub 标签及 CLA 检查通过，未独立复跑 paas3 或真实存储探测 |
@@ -592,4 +594,4 @@ uv run pytest apm/tests packages/apm_web/tests
 | ✅ | `feat/apm_service_list_status_from_heartbeat/#1010158081139048589` | 服务列表状态读取后台心跳 | [TencentBlueKing/bk-monitor #12830](https://github.com/TencentBlueKing/bk-monitor/pull/12830) |
 | ✅ | `feat/apm_app_detail_charts_remove_data_probe/#1010158081139171253` | 应用详情与图表移除请求侧数据探测 | [TencentBlueKing/bk-monitor #12851](https://github.com/TencentBlueKing/bk-monitor/pull/12851) |
 | ✅ | `feat/apm_profiling_service_heartbeat_app_status_group/#1010158081139232058` | 性能分析服务心跳读取与应用状态分组 | [TencentBlueKing/bk-monitor #12893](https://github.com/TencentBlueKing/bk-monitor/pull/12893) |
-| 🔄  | `<branch_name>`                                            | 里程碑 2：APM 依赖数据状态相关慢接口优化 | 待创建                                                                                           |
+| ✅ | `feat/apm_service_status_remove_legacy_query_cache/#1010158081139342361` | 旧服务状态查询、缓存与模板清理 | [TencentBlueKing/bk-monitor #12920](https://github.com/TencentBlueKing/bk-monitor/pull/12920) |

@@ -3,7 +3,7 @@ title: APM 服务数据状态下沉到后台服务发现
 tags: [apm, data-status, discover, heartbeat, topo-node, log, profiling]
 description: 由各 telemetry 发现器落盘服务级数据心跳，让应用详情读取心跳判定状态，SaaS 下线请求侧状态重算
 created: 2026-09-16
-updated: 2026-10-21
+updated: 2026-10-26
 ---
 
 # APM 服务数据状态下沉到后台服务发现
@@ -61,7 +61,7 @@ APM 应用详情的四类数据状态（指标、日志、调用链、性能分�
 
 - 后台心跳生产、服务全集与服务列表状态读取已合入，服务列表改造见 [PR #12830](https://github.com/TencentBlueKing/bk-monitor/pull/12830)。
 - 应用信息、Apdex 与告警图移除 `have_data()` 探测已合入，见 [PR #12851](https://github.com/TencentBlueKing/bk-monitor/pull/12851)。
-- 剩余功能为服务详情的性能分析心跳读取、性能分析应用的数据状态分类及旧对象清理，具体范围见 [实施方案](./PLAN.md)。
+- 性能分析服务心跳读取与应用状态分组、旧服务状态查询与缓存清理均已合入，见 [PR #12893](https://github.com/TencentBlueKing/bk-monitor/pull/12893) 和 [PR #12920](https://github.com/TencentBlueKing/bk-monitor/pull/12920)。本期代码改造完成，验证结果与边界见 [实施方案](./PLAN.md)。
 
 ## 0x03 参考
 
