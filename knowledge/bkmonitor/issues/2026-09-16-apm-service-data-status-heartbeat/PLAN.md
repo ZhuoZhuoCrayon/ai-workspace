@@ -4,7 +4,7 @@ tags: [apm, data-status, discover, heartbeat, topo-node, log, profiling]
 issue: knowledge/bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md
 description: 后台维护服务数据心跳与关联日志状态快照，SaaS 只读映射服务状态
 created: 2026-09-16
-updated: 2026-10-26
+updated: 2026-10-27
 ---
 
 # APM 服务数据状态下沉到后台服务发现 —— 实施方案
@@ -254,14 +254,17 @@ def touch_heartbeat(
 
 ### b. 调用链心跳
 
-调用链心跳放在 `TopoHandler.discover()`：常规轮次结束后追加一个兜底轮，每个服务取最后一个 Span，既补发现常规轮次漏掉的稀疏服务，也作为 `trace` 心跳的数据来源。`NodeDiscover` 不改动。
+`TopoHandler.discover()` 在常规轮次后做一次按服务折叠的补扫，按 `kind DESC, end_time DESC` 选择 Span。`INTERNAL=1` 排在其余有效类型之后，同一 kind 内取最新记录；`trace` 心跳直接使用所选 Span 的数据时间。
 
 | 变更点                                                                       | 修改内容                                                      |
 | ------------------------------------------------------------------------- | --------------------------------------------------------- |
 | **[Add]** `bkmonitor.data_source.utils.query.BaseQuery._query_group_list` | 签名同 `_query_list`，增加 `group_field`，每组返回排序后的第一条完整记录 *[1]*  |
-| **[Add]** `apm.core.handlers.query.span_query.SpanQuery.query_group_list` | 按 `end_time desc` 排序、按服务名分组，返回每个服务最后上报的 Span              |
+| **[Change]** `apm.core.handlers.query.span_query.SpanQuery.query_group_list` | 支持可选 `sort`，默认按 `end_time DESC` 排序，保留完整 Span 与应用隔离条件 |
 | **[Add]** `apm.core.discover.base.DiscoverBase.DISCOVERY_REQUIRES_TRACE_CONTEXT` | 标记依赖完整 Trace 上下文的发现器，默认 `False`，`RootEndpointDiscover` 置为 `True`，兜底轮跳过这类发现器 *[4]* |
-| **[Change]** `apm.core.discover.base.TopoHandler.discover`                | 抽出拓扑发现任务为 `_discover_spans`，常规轮与兜底轮共用；兜底轮结束后写入 `trace` 心跳 |
+| **[Change]** `apm.core.discover.base.TopoHandler.discover` | 常规轮与兜底轮共用 `_discover_spans`，汇总发现器返回结果 |
+| **[Add]** `apm.constants.ApmCacheType.TRACE_DISCOVERY_CHECK`、`ApmCacheConfig` | 统一配置检查位置的 key 模板和 `1 h` 过期时间，模板固定包含 `_TRACE` 后缀 |
+| **[Keep]** `apm.core.handlers.apm_cache_handler.ApmCacheHandler.get_cache_key` | 复用原有签名与格式化逻辑，不增加参数，实际 Redis key 格式保持兼容 |
+| **[Change]** `apm.task.tasks.topo_discover_cron`、`handler` | 先筛选到期应用再申请锁，以消息头传递投递时间，用 `task_id` 串联投递、开始和结束日志 |
 
 ```python
 # TopoHandler.discover()，位于 discover finished 日志之前
@@ -269,24 +272,30 @@ for round_index, trace_ids in enumerate(self.list_trace_ids(index_name)):
     ...
     self._discover_spans(all_spans, topo_params_template)
 
-# 兜底轮 [2]
+# 兜底轮
+end_time = query_started_at
+start_time = max(last_successful_query_end, end_time - 3600)
 last_spans: list[dict[str, Any]] = span_query.query_group_list(
     start_time, end_time, group_field=OtlpKey.get_resource_key(ResourceAttributes.SERVICE_NAME),
-    offset=0, limit=SpanQuery.QUERY_MAX_LIMIT,
+    offset=0, limit=SpanQuery.QUERY_MAX_LIMIT, sort=["kind desc", "end_time desc"],
 )
-self._discover_spans(last_spans, topo_params_template, is_fallback=True)  # [3]
+discovered = self._discover_spans(last_spans, topo_params_template, is_fallback=True)
 
-TopoNode.touch_heartbeat(
+heartbeat_written = TopoNode.touch_heartbeat(
     self.bk_biz_id, self.app_name, TelemetryDataType.TRACE.value,
     last_data_at_mapping={get_service_name(s): s[OtlpKey.END_TIME] // 1_000_000 for s in last_spans},
     checked_at=int(time.time()),
 )
+if discovered and heartbeat_written:
+    save_successful_query_end(end_time)
 ```
 
 - *[1] 与 `apm_web.llm.query.LLMQuery.query_group_list` 同一机制，后者额外调用 `.values(group_field)` 只取分组值，这里返回整条 Span。*
-- *[2] 窗口与常规轮一致（`now-10m`），`limit` 取 `QUERY_MAX_LIMIT`（`10000`），覆盖单应用服务数。*
+- *[2] 常规轮保持最近 `10 min`；兜底从上次成功查询右边界继续，最长回看 `1 h`，冷启动、缓存过期或时钟回拨时回看 `1 h`。保存查询右边界而非任务完成时间，避免跳过执行期间到达的数据。*
 - *[3] 兜底 Span 走同一套拓扑发现任务，稀疏服务的节点在写心跳前建出。常规轮已经写入，各发现器重读已有对象后再按存在性决定创建或更新，不会重复创建。*
 - *[4] 兜底 Span 是按服务折叠后的独立 Span，没有父子关系，入口接口发现处理它会把下游接口误判为入口。*
+- *[5] 接受不同非 INTERNAL 类型之间的优先级差异，所选 Span 不保证是服务内时间最新的记录，不追加查询或聚合。查询异常、发现器明确返回失败、心跳写入失败时保留检查位置；`NodeDiscover` 沿用既有内部批次异常处理，折叠保留 `10,000` 条上限，不做截断检测。*
+- *[6] 应用级补扫位置与服务级 `heartbeat.trace.checked_at` 分别表达成功查询边界和观测完成时间，不能互相替代。日志自带时间表示任务投递、开始和结束时刻，字段保留 `dispatch_delay_s`、`queue_delay_s`、`duration_s`、窗口、数量及兜底耗时，状态只在结束日志记录；逐发现器成功日志与批次调参日志删除，不保留 DEBUG。共享查询层只删除 `QueryHelper` 重复查询体日志，`query.py` 的 `UNIFY_QUERY` 日志原样保留；缓存无增删改时静默，有变化时合并摘要，清理前记录过期／超量原因及最多十个 ID，超量使用 WARNING，Redis 刷新失败保留 key、数量、TTL 与异常堆栈。*
 
 ### c. 指标心跳
 
@@ -613,6 +622,7 @@ uv run pytest apm/tests packages/apm_web/tests
 
 | 时间                 | 结论性进展                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `2026-10-27 16:00` | [a] Trace 按应用和数据源记录检查边界，最长补扫一小时，单次折叠按 `kind DESC, end_time DESC` 排序，接受有损选择<br />[b] 检查位置使用固定 Trace 缓存模板，缓存生成入口无改动，撤回 NodeDiscover 批次异常扩展并移除截断分支<br />[c] 调度先筛选再加锁，日志保留生命周期、三段延迟与有界摘要，删除重复时间戳、批次调参和过滤计数，不保留 DEBUG<br />[d] 只删 QueryHelper 重复查询体，保留 UNIFY_QUERY，缓存无变化静默，保留增删改摘要、清理原因与十个 ID 样本及写入失败上下文<br />[e] [PR #12958](https://github.com/TencentBlueKing/bk-monitor/pull/12958) 的相关回归 `144` 项通过（含缓存诊断与共享查询层回归），排除的 `7` 项已在未修改基线复现失败或数据库环境问题<br />[f] 未验证真实存储集成和生产负载，本机 PreCI 不可用 |
 | `2026-10-26 11:00` | [a] 旧状态查询与缓存清理 [PR #12920](https://github.com/TencentBlueKing/bk-monitor/pull/12920) 已合入，合并提交为 `969ef23c0a549a43be827aa288c3bb68ffde10fe`<br />[b] 性能分析状态读取 [PR #12893](https://github.com/TencentBlueKing/bk-monitor/pull/12893) 已于 `2026-10-22` 合入，合并提交为 `9a2b831afc758a05d809c252347c10d2a4ffe395`<br />[c] 本期后台心跳生产、服务全集与状态读取、应用详情与图表探测移除、性能分析状态改造及旧对象清理均已合入；真实存储集成与端到端性能未在本次 review 中独立验证 |
 | `2026-10-26 11:00` | [a] 旧状态查询与缓存清理 PR（[#12920](https://github.com/TencentBlueKing/bk-monitor/pull/12920)，`547f8afc7fca7d9e8134b45d2d78f334d4ae252d`）完成 review，未发现阻塞问题，删除入口、状态模板与缓存键均无残余引用<br />[b] 应用级数据量判定、真实指标、图表及 Profiling 明细查询保留，测试桩改为拦截底层查询<br />[c] 相关 118 项回归测试在 SQLite 内存表与 LocMemCache 隔离环境通过，Ruff 与 diff 检查通过；未独立复跑 paas3、MySQL 或真实存储集成验证 |
 | `2026-10-24 00:00` | 新增里程碑 3，方案待开发：关联发现与状态刷新独立调度，页面移除索引集冷缓存回源，保留上报心跳和三类关联来源 |
@@ -652,3 +662,4 @@ uv run pytest apm/tests packages/apm_web/tests
 | ✅ | `feat/apm_profiling_service_heartbeat_app_status_group/#1010158081139232058` | 性能分析服务心跳读取与应用状态分组 | [TencentBlueKing/bk-monitor #12893](https://github.com/TencentBlueKing/bk-monitor/pull/12893) |
 | ✅ | `feat/apm_service_status_remove_legacy_query_cache/#1010158081139342361` | 旧服务状态查询、缓存与模板清理 | [TencentBlueKing/bk-monitor #12920](https://github.com/TencentBlueKing/bk-monitor/pull/12920) |
 | 🔄 | `<branch_name>` | 里程碑 3：关联日志状态后台刷新 | 待创建 |
+| 🔄 | `fix/codex-trace-discovery-catchup/#1010158081165814054` | Trace 服务发现延迟补扫与任务日志 | [TencentBlueKing/bk-monitor #12958](https://github.com/TencentBlueKing/bk-monitor/pull/12958) |
