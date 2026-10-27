@@ -1,0 +1,36 @@
+# Defaults; use install.sh --config PATH to override individual keys.
+# Tables merge recursively. Scalars and arrays replace the default at the same key.
+# Policy changes apply to the next command invocation; new CLIs require installation.
+
+[commands.gh]
+# Scan titles, bodies and attached comments; remove an action to exclude it.
+pr = ["create", "new", "edit", "review", "comment", "close", "reopen"]
+issue = ["create", "new", "edit", "comment", "close", "reopen"]
+# Scan REST write payloads and GraphQL fields, including nested review comments.
+api = true
+
+[scan.network]
+# Match domains and subdomains, case-insensitively. An empty list disables this check.
+blocked_domains = []
+# Block every valid IPv4/IPv6 address except these networks.
+block_ips = true
+allowed_ip_networks = [
+  "0.0.0.0/32", "::/128",                         # Unspecified
+  "127.0.0.0/8", "::1/128",                       # Loopback
+  "192.0.2.0/24", "198.51.100.0/24",              # Documentation
+  "203.0.113.0/24", "2001:db8::/32",              # Documentation
+]
+
+[scan.secrets]
+# Use the pinned Betterleaks built-in rules for tokens, passwords and private keys.
+# Detection is offline. Missing engines, timeouts and invalid reports block publication.
+enabled = true
+
+[scan.secrets.patterns]
+# Extra RE2 patterns extend the built-ins. Keys become English rule IDs in errors.
+# URI userinfo, including Redis-style empty usernames and URL-encoded passwords.
+connection-password = '''(?i)\b[a-z][a-z0-9+.-]*://[^\s/@:]*:([^\s/@]+)@'''
+# ODBC/SQL Server DSNs with an explicit server, host, database or driver prefix.
+dsn-password = '''(?i)\b(?:server|data source|database|host|driver)[ \t]*=[^\r\n]{0,300}?\b(?:pwd|password)[ \t]*=[ \t]*["']?([^;\r\n"']{3,})'''
+# Require a Chinese password label, an explicit separator and at least 3 value characters.
+chinese-password = '''(?:密码|口令)(?:\*\*)?[ \t]*(?:(?:设置为|设为|是|为)[ \t]*[:：]?[ \t]*|[:：=][ \t]*)[`"'“‘]?([^\s`"'“”‘’，,。；;！？<>]{3,})'''

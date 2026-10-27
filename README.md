@@ -49,6 +49,8 @@ MCP、Codex 和 BKM CLI 的配置不在这一步里。`private/` 克隆完成后
 
 [Agent Chat Bridge](apps/agent-chat-bridge/README.md) 把企业微信或终端接到 Codex 和 Cursor。执行器和模型对所有聊天生效，上下文按聊天保留。
 
+[CLI Guard](apps/cli-guard/README.md) 在 CLI 命令执行前检查域名、IP 和凭据，命中敏感信息即拦截。
+
 ## 0x05 License
 
 本项目采用 [MIT License](./LICENSE)。
