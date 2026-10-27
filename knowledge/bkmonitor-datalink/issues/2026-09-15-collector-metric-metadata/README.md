@@ -3,7 +3,7 @@ title: bk-collector 指标元信息采集与同步
 tags: [collector, metrics, metadata, otlp, remote-write]
 description: 在指标语义丢失前提取元信息，按隔离范围聚合并减少重复同步
 created: 2026-09-15
-updated: 2026-10-23
+updated: 2026-10-24
 ---
 
 # bk-collector 指标元信息采集与同步
@@ -20,7 +20,7 @@ collector 将不同协议转换为数值指标时，会丢失描述、单位和�
 
 - 明确 OTLP、Tars、OTP 和 Prometheus Remote Write 的元信息来源与采集位置。
 - 在 `pkg/utils/metricmeta` 实现 Scope、Store 与 Exporter，提供 Start／Stop、Clean 和使用方注入的 ExportFunc。
-- 对持续变化、异常 DataID 和发送失败提供有界防御，并用 Go 测试和真实 HTTP 请求验证。
+- 对持续变化、异常 DataID 和发送失败提供有界防御，并验证默认 `/metrics` info 指标及可选 HTTP 出口。
 
 ## 0x02 实现路线
 
@@ -35,17 +35,17 @@ OTP 描述随 Record 传递，在 exporter 绑定身份并登记；OTLP、Tars�
 | 看选型与内存代价 | [PLAN：调研与约束](./PLAN.md#0x01-调研与约束)和[性能结果](./PLAN.md#b-性能结果) |
 | 看通用结构与调用接口 | [PLAN：架构设计](./PLAN.md#0x02-架构设计)和[接入与生命周期](./PLAN.md#a-接入与生命周期) |
 | 看 collector 接入位置 | [PLAN：开发方案](./PLAN.md#0x04-开发方案) |
-| 验收实现与发布依赖 | [PLAN：验收与验证](./PLAN.md#0x06-验收与验证) |
+| 核查实现与验收 | [PLAN：验收与验证](./PLAN.md#0x06-验收与验证) |
 | 核查协议、源码和实验数据 | [REPORT](./REPORT.md) |
 | 运行 demo 与压测 | [Go 实验工程](./validation/README.md) |
 
 ### b. 约束
 
-生产模块和 collector 本地适配通过测试；发布依赖 utils 发版、OTP 独立源码同步及实际接收服务联调，见 [发布依赖](./PLAN.md#c-发布依赖)。
+默认 info 出口复用监控采集链路，验收结果见 [基准压测](./PLAN.md#0x07-基准压测)。OTP 接收器与 collector 的描述传递接口配套交付。
 
 - 主键为 `dataid + __scope_type + __scope + __metric`，需求中的 `__scope_name` 统一为 `__scope`。
 - utils 预定义 APM／PLUGIN／DEFAULT，允许使用方扩展类型和范围，collector 的 APM 路径使用最终 service_name 与 scope_name 编码。
-- ExportFunc 的发送目标由使用方决定。
+- ExportFunc 的发送目标由使用方决定，collector 默认发布有界、短期保留的元信息 info 指标。
 - 持续观测的未变更元信息也必须周期重发，内存缓存不提供进程重启后的补发保证。
 - 允许极低概率遗漏，一次性指标可能无法补回，历史值回退可能等待强制补报。
 
