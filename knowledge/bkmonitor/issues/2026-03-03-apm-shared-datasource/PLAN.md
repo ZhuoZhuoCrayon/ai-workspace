@@ -668,13 +668,15 @@ for bk_biz_id, app_name in apps:
 - `PrecalculateStorage` 统一解析原始 RT 对应的预计算表，查询层不直接接触哈希环。构造目标时保留历史与当前的最大保留期，TraceID 查询先重置时间范围再选表。
 - 历史跨表检索以应用已启用 UQ 为前提，沿用现有灰度开关；排序、折叠与分页由 UQ 执行，ES 直查跨表合并不在保障范围。
 
+无历史的应用与显式指定预计算表的关联查询沿用单表路径，不做历史选表及延窗计算。现有预计算写入路由仍按 `is_shared` 判断，每个 `QueryProxy` 复用预计算存储实例；无效存储直接返回 `FakeQuery`，不提前读取应用元数据。
+
 应用元数据缓存维持 5 分钟，接受切换后的短暂查询延迟。30 分钟是约定的路由容错窗口，超过该窗口的补报或时间偏差不保证被时间裁剪命中；本次不扩展所有业务直查入口、不回填此前未记录的切换历史。
 
 ## 0x03 实施进展
 
 | 时间 | 结论性进展 |
 | --- | --- |
-| `2026-10-28 22:00` | [a] 历史选表收口到数据源模型，查询对象仅接收普通目标，恢复查询类原实现<br />[b] 批量命令支持指定多个共享池，保留独占备份并支持失败重试<br />[c] 53 项相关测试通过，真实存储联调未执行，提交 `1110af1398c30d9d67f8f974ff140281d7eefe88` 已推送，[PR #13012](https://github.com/TencentBlueKing/bk-monitor/pull/13012) 待评审 |
+| `2026-10-28 22:30` | [a] 历史选表收口到模型，批量命令支持指定多个共享池与幂等重试<br />[b] 纯独占保留原路由，跳过历史计算，修复预计算存储重复读取和无效存储回退顺序<br />[c] 64 项回归测试与 4 项主干对照通过，独占 SQL 次数与 UQ 参数不变<br />[d] 真实存储联调未执行，提交 `bb39298bd9e672ca5fbbf93d15035741c254635f` 已推送，[PR #13012](https://github.com/TencentBlueKing/bk-monitor/pull/13012) 待评审 |
 | `2026-05-14 18:00` | [1] 将 BMW 预计算适配共享数据源拆分到独立 issue [2026-05-14-apm-precalc-shared-multi-app](../2026-05-14-apm-precalc-shared-multi-app/README.md)<br />[2] 旧 `0x02.i 预计算 Trace 视图隔离`「Span 优先 + `BaseInfo` 兜底 + 应用隔离键」方案推倒，连同 `2026-05-13 12:00` 进展条目一并移除<br />[3] 新方案改为「单任务多应用窗口」：`KafkaNotifier` 与 `DistributiveWindow` 之间插入 `Dispatcher`，按 Span 顶层 `(bk_biz_id, app_name)` 命中 Consul `apps[]` 路由到对应 `appBundle`<br />[4] 本 PLAN 的 `0x01.e` 数据链路段移除「预计算」子段，留链接指向新 issue<br />[1] 已核对 master `pkg/bk-monitor-worker/internal/apm/pre_calculate/**` 与 `pkg/collector/exporter/converter/traces.go` 共 `25` 个事实点<br />[2] 本次仅更新方案文档与索引，未改代码 |
 | `2026-05-14 16:00` | [1] 复查 PR #10583 head `7174bb1`，确认检索隔离主路径仍由 `TraceQueryGuard` 收口<br />[2] 旧 `query_es` 直查入口和统计接口残留配置已清理，未发现新的检索隔离阻塞问题<br />[3] `APMAppTarget` 不再允许空应用上下文，预计算路径改为 `target=None + table_id` 旁路<br />[1] 已核对 `TraceQueryGuard`、`BaseQuery._get_q`、`TraceDataSource.get_q`、DB 场景、异常类型图、Trace ID 搜索和拓扑发现 DSL 路径<br />[2] 已自动 resolve `3` 个旧未解决 review 线程<br />[3] 本轮未发布新增 PR 评论，未运行自动测试 |
 | `2026-05-13 00:00` | [1] 收口 PR #10583 检索隔离最终口径：共享 Trace 原始表只通过 `TraceQueryGuard` 追加应用隔离，旧 `query_apm_es` 直查入口删除<br />[2] `TraceDatasourceTarget` 工厂方法统一命名为 `build()`，本期按单 target 收敛，不改造统一查询层多 table 协议<br />[3] `build_dsl()` 合并规则固定为原查询进入 `bool.must`、隔离条件进入 `bool.filter`<br />[1] 已复查 PR head `b70572d`，旧 review 线程已全部 resolved<br />[2] 已发布 `1` 个新增 P1：统计接口删除不完整，需同步清理 SDK / docs / apigw 残留配置 |
