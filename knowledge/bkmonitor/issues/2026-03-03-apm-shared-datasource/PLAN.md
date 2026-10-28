@@ -4,7 +4,7 @@ tags: [apm, datasource, es, shared-storage, architecture, migration]
 issue: knowledge/bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md
 description: APM 跨应用共享数据源的实现方案与开发方案
 created: 2026-03-03
-updated: 2026-10-28
+updated: 2026-10-29
 ---
 
 # APM 跨应用共享数据源 —— 实施方案
@@ -320,7 +320,7 @@ SHARED_DS_REGISTRY = {
 | --- | --- | --- | --- |
 | `CreateApplicationResource` | 不传 `shared_datasource_types` | `SharedDatasourceRuleFactory.list_shared_datasource_types(...)` | [1] 计算本次创建需要共享的数据源类型。<br />[2] 创建阶段仅生成初始目标状态，不产生迁移语义。 |
 | `ApplyDatasourceResource` | 不传 `shared_datasource_types` | 查询各数据源配置的 `is_shared` 状态后构造 | [1] 以数据库当前状态作为本次 apply 的目标状态。<br />[2] 当前状态与目标状态一致，不触发迁入 / 迁出。 |
-| `ApplyDatasourceResource` | 传入 `shared_datasource_types` | 请求体 `shared_datasource_types` | [1] 请求值作为本次 apply 的目标状态。<br />[2] `["trace"] -> []` 表示 Trace 从共享迁出。<br />[3] `[] -> ["trace"]` 表示 Trace 从独占迁入共享。<br />[4] 同模式默认不迁移；显式指定不同的 `shared_datasource_id` 时允许共享迁共享。 |
+| `ApplyDatasourceResource` | 传入 `shared_datasource_types` | 请求体 `shared_datasource_types` | [1] 请求值作为本次 apply 的目标状态。<br />[2] `["trace"] -> []` 表示 Trace 从共享迁出。<br />[3] `[] -> ["trace"]` 表示 Trace 从独占迁入共享。<br />[4] 同模式不迁移；指定共享池的批量迁移由管理命令处理。 |
 
 ```mermaid
 flowchart TD
@@ -446,7 +446,7 @@ if obj.result_table_id != "" and obj.is_shared != is_shared:
 - `CreateApplicationResource` 未显式传 `shared_datasource_types` 时，通过工厂解析默认共享类型。
 - `ApplyDatasourceResource` 未显式传 `shared_datasource_types` 时，从数据库当前 `is_shared` 反推共享类型，表示本次更新不触发迁入 / 迁出。
 - `ApplyDatasourceResource` 显式传入 `shared_datasource_types` 时，以请求列表作为目标状态，空列表也是有效输入。
-- 规则命中不自动迁移存量独占应用，存量迁入共享池必须通过 `ApplyDatasourceResource` 显式传参触发。
+- 规则命中不自动迁移存量独占应用，存量迁入共享池通过 `ApplyDatasourceResource` 显式传参或批量迁移命令触发。
 
 ### d. TraceDataSource 查询适配
 
@@ -634,8 +634,22 @@ python manage.py migrate_apm_trace_datasource \
 | `--shared-datasource-ids` | 否 | 仅用于 `shared`：限定目标共享池 ID，按预计用量分配，已在指定池内的应用保留原池。 |
 | `--dry-run` | 否 | 校验整批目标池和容量，输出各应用的目标池及预计动作，不占用配额。 |
 
-- *[1] 命令调用 `bkmonitor.apm.resources.ApplyDatasourceResource`，目标状态转换遵循 `0x02.b` 的入参表。*
-- *[2] 命令按 `--apps` 查询 `ApmApplication`，通过 `ApplicationHelper.get_default_storage_config(bk_biz_id, app_name)` 补齐存储配置；指定池 ID 经 `trace_datasource_option.shared_datasource_id` 传入原有 apply 流程。**
+- *[1] 未指定池 ID 时，命令通过 `ApplicationHelper.get_default_storage_config()` 补齐配置，沿用 `ApplyDatasourceResource` 的迁入／迁出流程。*
+- *[2] 指定池 ID 时，仅迁移已有且启用 Trace 的应用；循环内更新绑定和历史，循环后统一刷新 K8s 配置。*
+
+批量模式复用基础方法，不进入应用完整 apply 流程：
+
+```text
+plan_shared_targets：校验现有链路、目标池与整批容量
+  → 每个应用独立事务
+      acquire → backup_exclusive_link_info（独占来源）
+      → release_for_migration → set_from_shared → save
+  → refresh_k8s（成功应用及已在目标池内的应用，一次调用）
+```
+
+- *[1] 单应用失败回滚绑定、历史和池计数，记录错误后继续其他应用；处理完后汇总失败并返回非零退出码。*
+- *[2] 停用 Trace 的应用先报错，防止重复释放已归还的池占用；批量模式不创建池、不注册 RT、不修改其他数据源类型。*
+- *[3] `refresh_k8s` 沿用既有部署和日志语义，返回不代表所有集群已生效；旧 Agent 配置刷新仍由既有定时任务处理。*
 
 #### SaaS APM 元数据同步
 
@@ -660,7 +674,7 @@ for bk_biz_id, app_name in apps:
 
 `TraceDataSource.history_link_info` 按切换顺序记录迁出表 `table_id`、秒级切换时间 `switched_at` 和当时的 `retention`。当前表继续使用现有字段，A → B → A 只追加 A/T1、B/T2 两条记录；同模式重试不追加。
 
-迁移入口保留 `apply_datasource` 原有事务和分配流程。Trace 通过 `release_for_migration` 保留旧 RT 与索引集，共享迁出仅释放池占用；回到独占时复用备份并通过现有创建／更新流程启用目标 RT。数据库异常回滚覆盖应用绑定、历史记录和池计数，外部 API 仍遵循现有重试语义。
+常规迁入／迁出保留 `apply_datasource` 原有事务和分配流程；批量指定池模式按迁移命令的基础方法流程执行。Trace 通过 `release_for_migration` 保留旧 RT 与索引集，共享迁出仅释放池占用；回到独占时复用备份并通过现有创建／更新流程启用目标 RT。数据库异常回滚覆盖应用绑定、历史记录和池计数，外部 API 仍遵循现有重试语义。
 
 历史路由在构造查询对象前解析：
 
@@ -676,7 +690,7 @@ for bk_biz_id, app_name in apps:
 
 | 时间 | 结论性进展 |
 | --- | --- |
-| `2026-10-28 22:30` | [a] 历史选表收口到模型，批量命令支持指定多个共享池与幂等重试<br />[b] 纯独占保留原路由，跳过历史计算，修复预计算存储重复读取和无效存储回退顺序<br />[c] 64 项回归测试与 4 项主干对照通过，独占 SQL 次数与 UQ 参数不变<br />[d] 真实存储联调未执行，提交 `bb39298bd9e672ca5fbbf93d15035741c254635f` 已推送，[PR #13012](https://github.com/TencentBlueKing/bk-monitor/pull/13012) 待评审 |
+| `2026-10-29 08:00` | [a] 批量指定池迁移复用基础方法，每应用独立事务，循环后一次刷新 K8s 配置<br />[b] 通用 API 和池分配器恢复原接口，Trace 历史选表与纯独占查询兼容性保留<br />[c] 71 项回归及 4 项主干对照通过，真实存储、MySQL 锁及批量内存负载未联调<br />[d] 提交 `1631ae4b8a8b15bb75264c4438a36e954bc9240f` 已推送，[PR #13012](https://github.com/TencentBlueKing/bk-monitor/pull/13012) 待评审 |
 | `2026-05-14 18:00` | [1] 将 BMW 预计算适配共享数据源拆分到独立 issue [2026-05-14-apm-precalc-shared-multi-app](../2026-05-14-apm-precalc-shared-multi-app/README.md)<br />[2] 旧 `0x02.i 预计算 Trace 视图隔离`「Span 优先 + `BaseInfo` 兜底 + 应用隔离键」方案推倒，连同 `2026-05-13 12:00` 进展条目一并移除<br />[3] 新方案改为「单任务多应用窗口」：`KafkaNotifier` 与 `DistributiveWindow` 之间插入 `Dispatcher`，按 Span 顶层 `(bk_biz_id, app_name)` 命中 Consul `apps[]` 路由到对应 `appBundle`<br />[4] 本 PLAN 的 `0x01.e` 数据链路段移除「预计算」子段，留链接指向新 issue<br />[1] 已核对 master `pkg/bk-monitor-worker/internal/apm/pre_calculate/**` 与 `pkg/collector/exporter/converter/traces.go` 共 `25` 个事实点<br />[2] 本次仅更新方案文档与索引，未改代码 |
 | `2026-05-14 16:00` | [1] 复查 PR #10583 head `7174bb1`，确认检索隔离主路径仍由 `TraceQueryGuard` 收口<br />[2] 旧 `query_es` 直查入口和统计接口残留配置已清理，未发现新的检索隔离阻塞问题<br />[3] `APMAppTarget` 不再允许空应用上下文，预计算路径改为 `target=None + table_id` 旁路<br />[1] 已核对 `TraceQueryGuard`、`BaseQuery._get_q`、`TraceDataSource.get_q`、DB 场景、异常类型图、Trace ID 搜索和拓扑发现 DSL 路径<br />[2] 已自动 resolve `3` 个旧未解决 review 线程<br />[3] 本轮未发布新增 PR 评论，未运行自动测试 |
 | `2026-05-13 00:00` | [1] 收口 PR #10583 检索隔离最终口径：共享 Trace 原始表只通过 `TraceQueryGuard` 追加应用隔离，旧 `query_apm_es` 直查入口删除<br />[2] `TraceDatasourceTarget` 工厂方法统一命名为 `build()`，本期按单 target 收敛，不改造统一查询层多 table 协议<br />[3] `build_dsl()` 合并规则固定为原查询进入 `bool.must`、隔离条件进入 `bool.filter`<br />[1] 已复查 PR head `b70572d`，旧 review 线程已全部 resolved<br />[2] 已发布 `1` 个新增 P1：统计接口删除不完整，需同步清理 SDK / docs / apigw 残留配置 |
@@ -773,7 +787,7 @@ SaaS 通过 `trace_result_table_id` 的 `apm_global.shared_trace_` 前缀识别�
 
 ### b. 后台执行迁移
 
-指定应用可以混合来自独占和共享数据源。迁入指定的一组共享池时，先在后台运行预览：
+指定应用可以混合来自独占和共享数据源，要求 Trace 已启用且链路已创建。迁入指定的一组共享池时，先在后台运行预览：
 
 ```bash
 python manage.py migrate_apm_trace_datasource \
@@ -814,8 +828,9 @@ if not DRY_RUN:
 
 - *[1] 直接调用处理入口可保留负数业务 ID，同时整批预览分配，避免逐应用预览总是选中同一空闲池。*
 - *[2] `TARGET="shared"` 且 `SHARED_DATASOURCE_IDS=[]` 沿用自动分配；迁出独占使用 `TARGET="exclusive"` 且目标池列表为空。*
-- *[3] 每个应用独立事务，执行失败会停止本批，已成功应用不会回滚；修正原因后可重跑，已在目标池内的应用不追加历史、不重复占位，并重试配置刷新。*
-- *[4] 数据库回滚不撤销外部接口副作用；实际执行后仍需按下一节同步 SaaS 元数据。*
+- *[3] 指定池模式中，每个应用独立事务，失败后继续其他应用，最后统一刷新成功应用的 K8s 配置；整批结束后有失败则报错，逐应用结果从标准输出和错误输出查看。*
+- *[4] 重跑时已在目标池内的应用不追加历史、不重复占位，仍加入批量配置刷新；刷新过程需结合既有部署日志确认。*
+- *[5] 未指定池时沿用常规迁入／迁出，执行失败会停止本批；实际迁移后按下一节同步 SaaS 元数据。*
 
 ### c. SaaS 同步 APM 元数据
 
