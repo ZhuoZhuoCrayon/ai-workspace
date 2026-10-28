@@ -4,7 +4,7 @@ tags: [apm, datasource, es, shared-storage, architecture, migration]
 issue: knowledge/bkmonitor/issues/2026-03-03-apm-shared-datasource/README.md
 description: APM 跨应用共享数据源的实现方案与开发方案
 created: 2026-03-03
-updated: 2026-07-23
+updated: 2026-10-28
 ---
 
 # APM 跨应用共享数据源 —— 实施方案
@@ -299,7 +299,7 @@ SHARED_DS_REGISTRY = {
 | **[Method]** `is_shared`                     | 是否共享，通过 `shared_datasource_id` 判断。                 |
 | **[Method]** `start / stop`                  | 共享模式下不执行结果表启停，但每次应用启停需调整共享池占用计数。<br />应用层需保证 `start_trace()` / `stop_trace()` 幂等，避免重复占用或重复释放。<br />独占模式保持原有启停行为。 |
 
-- *[1] `index_set_id`、`index_set_name` 不备份：`delete_index_set` 成功后，同名 indexset 可重建。*
+- *[1] Trace 同时备份 `index_set_id`、`index_set_name`，迁移时保留索引集，回切复用；旧备份缺少索引集时仍按原流程创建。*
 
 **共享模式下创建参数结论**：
 
@@ -320,7 +320,7 @@ SHARED_DS_REGISTRY = {
 | --- | --- | --- | --- |
 | `CreateApplicationResource` | 不传 `shared_datasource_types` | `SharedDatasourceRuleFactory.list_shared_datasource_types(...)` | [1] 计算本次创建需要共享的数据源类型。<br />[2] 创建阶段仅生成初始目标状态，不产生迁移语义。 |
 | `ApplyDatasourceResource` | 不传 `shared_datasource_types` | 查询各数据源配置的 `is_shared` 状态后构造 | [1] 以数据库当前状态作为本次 apply 的目标状态。<br />[2] 当前状态与目标状态一致，不触发迁入 / 迁出。 |
-| `ApplyDatasourceResource` | 传入 `shared_datasource_types` | 请求体 `shared_datasource_types` | [1] 请求值作为本次 apply 的目标状态。<br />[2] `["trace"] -> []` 表示 Trace 从共享迁出。<br />[3] `[] -> ["trace"]` 表示 Trace 从独占迁入共享。<br />[4] `[] -> []` 或 `["trace"] -> ["trace"]` 表示状态未变化，不触发迁移。 |
+| `ApplyDatasourceResource` | 传入 `shared_datasource_types` | 请求体 `shared_datasource_types` | [1] 请求值作为本次 apply 的目标状态。<br />[2] `["trace"] -> []` 表示 Trace 从共享迁出。<br />[3] `[] -> ["trace"]` 表示 Trace 从独占迁入共享。<br />[4] 同模式默认不迁移；显式指定不同的 `shared_datasource_id` 时允许共享迁共享。 |
 
 ```mermaid
 flowchart TD
@@ -333,9 +333,9 @@ flowchart TD
 
     E --> F["ApmDataSourceConfigBase.apply_datasource"]
     F --> M{"模式变化？"}
-    M -->|是| N["stop()"]
+    M -->|是| N["release_for_migration()"]
     N --> O["reset_link_info()"]
-    O --> P["recover_link_info(options.is_shared)"]
+    O --> P["迁出独占时 recover_link_info()"]
     P --> B2{"options.is_shared？"}
     M -->|否| B2
 
@@ -376,20 +376,21 @@ is_shared = options.get("is_shared", False)
 if obj.result_table_id != "" and obj.is_shared != is_shared:
     if is_shared:
         obj.backup_exclusive_link_info()
-    obj.stop(bk_biz_id, app_name)
+    obj.release_for_migration()
     obj.reset_link_info()
     # 迁入：保留 reset 前写入的 backup_link_info；迁出：从 backup_link_info 恢复链路信息。
-    obj.recover_link_info(is_shared)
+    if not is_shared and obj.backup_link_info:
+        obj.recover_link_info()
 ```
 
 | 状态变化 | 语义 | 前置动作 | 后续动作 |
 | --- | --- | --- | --- |
-| `True → False` | 迁出：共享改独占 | [a] `stop()`：释放共享池占用。<br />[b] `reset_link_info()`：清空当前共享链路。<br />[c] `recover_link_info(False)`：从 `backup_link_info` 恢复独占链路字段 *[3]*。 | `is_shared=False`，进入 `_apply_exclusive_datasource` 复用独占流程 *[1]*。 |
-| `False → True` | 迁入：独占改共享 | [a] `backup_exclusive_link_info()`：备份原独占链路。<br />[b] `stop()`：停用原独占 RT，并删除 indexset *[2]*。<br />[c] `reset_link_info()`：清空活动链路字段。<br />[d] `recover_link_info(True)`：保留 `backup_link_info`，不恢复活动链路字段 *[3]*。 | `is_shared=True`，进入 `_apply_shared_datasource` *[1]*。 |
+| `True → False` | 迁出：共享改独占 | [a] `release_for_migration()`：记录切换历史并释放共享池占用，保留旧 RT。<br />[b] `reset_link_info()`：清空当前共享链路。<br />[c] `recover_link_info()`：从 `backup_link_info` 恢复独占链路字段 *[3]*。 | `is_shared=False`，进入 `_apply_exclusive_datasource` 复用独占流程 *[1]*。 |
+| `False → True` | 迁入：独占改共享 | [a] `backup_exclusive_link_info()`：备份原独占链路。<br />[b] `release_for_migration()`：记录切换历史，保留原独占 RT 和索引集 *[2]*。<br />[c] `reset_link_info()`：清空活动链路字段。<br />[d] 保留 `backup_link_info`，不恢复活动链路字段 *[3]*。 | `is_shared=True`，进入 `_apply_shared_datasource` *[1]*。 |
 | 未变化 | 保持现状 | 不执行迁移清理 | 仍按目标状态进入原有共享或独占分支，支持同模式存储配置更新 *[4]*。 |
 
 - *[1] `API` 失败回滚：`create_data_id` 或 `create_or_update_result_table` 抛异常时，删除草稿（`reserved.delete()`）并向上传播。*
-- *[2] `Trace` 索引集边界：共享 Trace 的 `stop()` 不删除日志索引集，独占 Trace 保留现有删除逻辑。*
+- *[2] 迁移和显式停用分开：Trace 迁移保留旧 RT、索引集；显式 `stop()` 仍保留既有启停语义。其他数据类型的迁移默认沿用 `stop()`。*
 - *[3] `DataID` 边界：本期迁入 / 迁出不启停 metadata `DataSource`，只备份和恢复 `bk_data_id` 字段。*
 - *[4] `start_trace` 幂等边界：应用层需在已启用 Trace 时直接返回，避免共享模式重复 `acquire()`。*
 
@@ -503,7 +504,7 @@ flowchart LR
 
 Trace 原始表查询隔离只对 `apm_global.shared` 前缀结果表生效。
 
-独占表、预计算表和历史表不追加 `bk_biz_id` / `app_name` 过滤，避免现网未补字段的数据查询报错。
+原始表按表类型决定隔离条件：历史共享表仍追加 `bk_biz_id` / `app_name`，独占表不强加存量数据可能缺失的字段。预计算表沿用自身的 `biz_id` / `app_name` 隔离条件。
 
 改造原则：
 
@@ -630,10 +631,11 @@ python manage.py migrate_apm_trace_datasource \
 | --- | --- | --- |
 | `--target` | 是 | `shared` 表示迁入共享，`exclusive` 表示迁出独占 *[1]*。 |
 | `--apps` | 是 | 接收多个应用，格式为 `<bk_biz_id>:<app_name>` *[2]*。 |
-| `--dry-run` | 否 | 输出当前状态、目标状态、是否有备份和预计动作。 |
+| `--shared-datasource-ids` | 否 | 仅用于 `shared`：限定目标共享池 ID，按预计用量分配，已在指定池内的应用保留原池。 |
+| `--dry-run` | 否 | 校验整批目标池和容量，输出各应用的目标池及预计动作，不占用配额。 |
 
 - *[1] 命令调用 `bkmonitor.apm.resources.ApplyDatasourceResource`，目标状态转换遵循 `0x02.b` 的入参表。*
-- *[2] 命令按 `--apps` 查询 `Application`，并通过 `ApplicationHelper.get_default_storage_config(bk_biz_id, app_name)` 补齐 `trace_datasource_option`。*
+- *[2] 命令按 `--apps` 查询 `ApmApplication`，通过 `ApplicationHelper.get_default_storage_config(bk_biz_id, app_name)` 补齐存储配置；指定池 ID 经 `trace_datasource_option.shared_datasource_id` 传入原有 apply 流程。**
 
 #### SaaS APM 元数据同步
 
@@ -654,19 +656,34 @@ for bk_biz_id, app_name in apps:
     app.sync_datasource()
 ```
 
+### j. Trace 切换后历史检索
+
+`TraceDataSource.history_link_info` 按切换顺序记录迁出表 `table_id`、秒级切换时间 `switched_at` 和当时的 `retention`。当前表继续使用现有字段，A → B → A 只追加 A/T1、B/T2 两条记录；同模式重试不追加。
+
+迁移入口保留 `apply_datasource` 原有事务和分配流程。Trace 通过 `release_for_migration` 保留旧 RT 与索引集，共享迁出仅释放池占用；回到独占时复用备份并通过现有创建／更新流程启用目标 RT。数据库异常回滚覆盖应用绑定、历史记录和池计数，外部 API 仍遵循现有重试语义。
+
+历史路由在构造查询对象前解析：
+
+- `TraceDataSource.get_query_table_ids()` 按时间区间和延窗选表，先筛选再去重；`QueryProxy` 在每次请求构造查询对象前展开普通 `data_sources`，Target 和查询类不携带历史状态。
+- `PrecalculateStorage` 统一解析原始 RT 对应的预计算表，查询层不直接接触哈希环。构造目标时保留历史与当前的最大保留期，TraceID 查询先重置时间范围再选表。
+- 历史跨表检索以应用已启用 UQ 为前提，沿用现有灰度开关；排序、折叠与分页由 UQ 执行，ES 直查跨表合并不在保障范围。
+
+应用元数据缓存维持 5 分钟，接受切换后的短暂查询延迟。30 分钟是约定的路由容错窗口，超过该窗口的补报或时间偏差不保证被时间裁剪命中；本次不扩展所有业务直查入口、不回填此前未记录的切换历史。
+
 ## 0x03 实施进展
 
-| 时间 | 对应设计片段 | 结论调整概要 | 改动 / 验证 |
-|:--|:--|:--|:--|
-| `2026-05-14 18:00`（最新） | `0x01.e` | [1] 将 BMW 预计算适配共享数据源拆分到独立 issue [2026-05-14-apm-precalc-shared-multi-app](../2026-05-14-apm-precalc-shared-multi-app/README.md)<br />[2] 旧 `0x02.i 预计算 Trace 视图隔离`「Span 优先 + `BaseInfo` 兜底 + 应用隔离键」方案推倒，连同 `2026-05-13 12:00` 进展条目一并移除<br />[3] 新方案改为「单任务多应用窗口」：`KafkaNotifier` 与 `DistributiveWindow` 之间插入 `Dispatcher`，按 Span 顶层 `(bk_biz_id, app_name)` 命中 Consul `apps[]` 路由到对应 `appBundle`<br />[4] 本 PLAN 的 `0x01.e` 数据链路段移除「预计算」子段，留链接指向新 issue | [1] 已核对 master `pkg/bk-monitor-worker/internal/apm/pre_calculate/**` 与 `pkg/collector/exporter/converter/traces.go` 共 `25` 个事实点<br />[2] 本次仅更新方案文档与索引，未改代码 |
-| `2026-05-14 16:00` | `0x02.g` | [1] 复查 PR #10583 head `7174bb1`，确认检索隔离主路径仍由 `TraceQueryGuard` 收口<br />[2] 旧 `query_es` 直查入口和统计接口残留配置已清理，未发现新的检索隔离阻塞问题<br />[3] `APMAppTarget` 不再允许空应用上下文，预计算路径改为 `target=None + table_id` 旁路 | [1] 已核对 `TraceQueryGuard`、`BaseQuery._get_q`、`TraceDataSource.get_q`、DB 场景、异常类型图、Trace ID 搜索和拓扑发现 DSL 路径<br />[2] 已自动 resolve `3` 个旧未解决 review 线程<br />[3] 本轮未发布新增 PR 评论，未运行自动测试 |
-| `2026-05-13 00:00` | `0x02.g` | [1] 收口 PR #10583 检索隔离最终口径：共享 Trace 原始表只通过 `TraceQueryGuard` 追加应用隔离，旧 `query_apm_es` 直查入口删除<br />[2] `TraceDatasourceTarget` 工厂方法统一命名为 `build()`，本期按单 target 收敛，不改造统一查询层多 table 协议<br />[3] `build_dsl()` 合并规则固定为原查询进入 `bool.must`、隔离条件进入 `bool.filter` | [1] 已复查 PR head `b70572d`，旧 review 线程已全部 resolved<br />[2] 已发布 `1` 个新增 P1：统计接口删除不完整，需同步清理 SDK / docs / apigw 残留配置 |
-| `2026-04-30 20:00` | `0x02.a` `0x02.b` `0x02.e` | [1] 收口 PR #10415 最终 review 结论：共享 Trace 的 `start` / `stop` 每次启停调整共享池计数，`start_trace` 需补充与 `stop_trace` 对称的幂等保护<br />[2] `apply_datasource` 按可重入口径处理，不再作为阻塞问题<br />[3] `shared_datasource_types` 接受非 Trace 类型视为扩展预留，不要求本 PR 调整 | [1] 已更新 `usage_count` 主干语义与应用生命周期边界<br />[2] 已将 review 结论收敛为 1 个 P1：`start_trace` 幂等保护<br />[3] 已 Approve PR #10415 |
-| `2026-04-30 00:00` | `0x02.g` | [1] 将「查询路径审计」调整为「查询改造」，明确 shared Trace 查询隔离只在 `TraceQueryGuard` 收口<br />[2] 补充 `APMAppTarget` / `TraceDatasourceTarget` 目标模型，保留 `table_id -> APM 应用` 一一绑定<br />[3] 明确 `UnifyQueryCompiler.as_sql` 仅负责多 table 解包，不承载 APM shared 前缀判断 | [1] 已更新查询改造方案主干与审计命令<br />[2] 本次仅更新方案文档，未改代码 |
-| `2026-04-27 20:00` | `0x02.a` `0x02.b` `0x02.e` | [1] PR review 收口共享池计数边界：补充 `acquire()` 与 `release()` 成对语义，并要求二者复用 `_change_usage_count(delta)`<br />[2] 明确共享 Trace 启停不操作 `switch_result_table()`，删除释放共享池占用但不删除共享日志索引集<br />[3] 补充以 `ApplyDatasourceResource.shared_datasource_types` 为入口的显式迁入 / 迁出方案：不传表示保持数据库现状，传入列表表示目标共享状态<br />[4] 撤回查询隔离默认开启阻塞意见，查询隔离作为后续 PR 的已知拆分事项继续保留在方案约束中 | [1] 已复查 PR #10415 最新 head `a104714`<br />[2] 仍需开发修复删除共享应用未释放 `usage_count`、`release()` 负数保护，以及 apply 更新路径迁入 / 迁出状态判断<br />[3] 本次仅更新方案文档与 review 结论，不修改 PR 代码 |
-| `2026-04-23 17:00` | `0x01.e` `0x02.b` `0x02.c` `0x02.e` `0x02.h` | [1] PR review 收口更新路径共享判定、启停边界与 DataID 运维边界<br />[2] 将 `SharedDatasourceRuleFactory` 抽成 `is_shared` 独立决策机制，并按协议文档补充 JSON 示例与字段表<br />[3] 明确查询隔离保留为共享 Trace 正式开放前必须补齐的后续 PR | [1] 已更新方案主干约束、共享判定机制小节与协议字段说明<br />[2] 已复查 PR #10415 最新 head `80e070f`<br />[3] 待开发修复 `ApplyDatasourceResource`、共享启停、`OperateApmDataIdResource` 与 migration LF |
-| `2026-04-16 15:00` | `0x01.b` `0x01.d` `0x02.a` `0x02.b` | [1] 合并同日重复文案迭代，只保留最终有效方案结论<br />[2] 明确 `bk_biz_id_alias` 固定传字符串 `bk_biz_id`，用于查询阶段业务隔离<br />[3] 保留共享模型接口约定与 DataID / 结果表创建口径分层 | [1] 已更新关键决策、命名规则、共享模型与方法级参数约束<br />[2] 已统一 `SharedTraceDataSource` 接口说明和单句续行表达<br />[3] 本次仅更新方案文档，未改代码 |
-| `2026-04-16 10:00` | `0x01.b` `0x01.d` `0x02.a` `0x02.b` | [1] 合并同小时方案结论与文档结构迭代<br />[2] 共享模式下 DataID 与结果表创建口径拆分<br />[3] `create_data_id` 使用特权业务 ID，`create_or_update_result_table` 使用 `GLOBAL_CONFIG_BK_BIZ_ID=0` 并透传 `bk_biz_id_alias` | [1] 已更新关键决策、命名规则与方法级参数约束<br />[2] 已拆分共享模型、表格后说明与迁移备注<br />[3] 本次仅更新方案文档，未改代码 |
+| 时间 | 结论性进展 |
+| --- | --- |
+| `2026-10-28 22:00` | [a] 历史选表收口到数据源模型，查询对象仅接收普通目标，恢复查询类原实现<br />[b] 批量命令支持指定多个共享池，保留独占备份并支持失败重试<br />[c] 53 项相关测试通过，真实存储联调未执行，提交 `1110af1398c30d9d67f8f974ff140281d7eefe88` 已推送，[PR #13012](https://github.com/TencentBlueKing/bk-monitor/pull/13012) 待评审 |
+| `2026-05-14 18:00` | [1] 将 BMW 预计算适配共享数据源拆分到独立 issue [2026-05-14-apm-precalc-shared-multi-app](../2026-05-14-apm-precalc-shared-multi-app/README.md)<br />[2] 旧 `0x02.i 预计算 Trace 视图隔离`「Span 优先 + `BaseInfo` 兜底 + 应用隔离键」方案推倒，连同 `2026-05-13 12:00` 进展条目一并移除<br />[3] 新方案改为「单任务多应用窗口」：`KafkaNotifier` 与 `DistributiveWindow` 之间插入 `Dispatcher`，按 Span 顶层 `(bk_biz_id, app_name)` 命中 Consul `apps[]` 路由到对应 `appBundle`<br />[4] 本 PLAN 的 `0x01.e` 数据链路段移除「预计算」子段，留链接指向新 issue<br />[1] 已核对 master `pkg/bk-monitor-worker/internal/apm/pre_calculate/**` 与 `pkg/collector/exporter/converter/traces.go` 共 `25` 个事实点<br />[2] 本次仅更新方案文档与索引，未改代码 |
+| `2026-05-14 16:00` | [1] 复查 PR #10583 head `7174bb1`，确认检索隔离主路径仍由 `TraceQueryGuard` 收口<br />[2] 旧 `query_es` 直查入口和统计接口残留配置已清理，未发现新的检索隔离阻塞问题<br />[3] `APMAppTarget` 不再允许空应用上下文，预计算路径改为 `target=None + table_id` 旁路<br />[1] 已核对 `TraceQueryGuard`、`BaseQuery._get_q`、`TraceDataSource.get_q`、DB 场景、异常类型图、Trace ID 搜索和拓扑发现 DSL 路径<br />[2] 已自动 resolve `3` 个旧未解决 review 线程<br />[3] 本轮未发布新增 PR 评论，未运行自动测试 |
+| `2026-05-13 00:00` | [1] 收口 PR #10583 检索隔离最终口径：共享 Trace 原始表只通过 `TraceQueryGuard` 追加应用隔离，旧 `query_apm_es` 直查入口删除<br />[2] `TraceDatasourceTarget` 工厂方法统一命名为 `build()`，本期按单 target 收敛，不改造统一查询层多 table 协议<br />[3] `build_dsl()` 合并规则固定为原查询进入 `bool.must`、隔离条件进入 `bool.filter`<br />[1] 已复查 PR head `b70572d`，旧 review 线程已全部 resolved<br />[2] 已发布 `1` 个新增 P1：统计接口删除不完整，需同步清理 SDK / docs / apigw 残留配置 |
+| `2026-04-30 20:00` | [1] 收口 PR #10415 最终 review 结论：共享 Trace 的 `start` / `stop` 每次启停调整共享池计数，`start_trace` 需补充与 `stop_trace` 对称的幂等保护<br />[2] `apply_datasource` 按可重入口径处理，不再作为阻塞问题<br />[3] `shared_datasource_types` 接受非 Trace 类型视为扩展预留，不要求本 PR 调整<br />[1] 已更新 `usage_count` 主干语义与应用生命周期边界<br />[2] 已将 review 结论收敛为 1 个 P1：`start_trace` 幂等保护<br />[3] 已 Approve PR #10415 |
+| `2026-04-30 00:00` | [1] 将「查询路径审计」调整为「查询改造」，明确 shared Trace 查询隔离只在 `TraceQueryGuard` 收口<br />[2] 补充 `APMAppTarget` / `TraceDatasourceTarget` 目标模型，保留 `table_id -> APM 应用` 一一绑定<br />[3] 明确 `UnifyQueryCompiler.as_sql` 仅负责多 table 解包，不承载 APM shared 前缀判断<br />[1] 已更新查询改造方案主干与审计命令<br />[2] 本次仅更新方案文档，未改代码 |
+| `2026-04-27 20:00` | [1] PR review 收口共享池计数边界：补充 `acquire()` 与 `release()` 成对语义，并要求二者复用 `_change_usage_count(delta)`<br />[2] 明确共享 Trace 启停不操作 `switch_result_table()`，删除释放共享池占用但不删除共享日志索引集<br />[3] 补充以 `ApplyDatasourceResource.shared_datasource_types` 为入口的显式迁入 / 迁出方案：不传表示保持数据库现状，传入列表表示目标共享状态<br />[4] 撤回查询隔离默认开启阻塞意见，查询隔离作为后续 PR 的已知拆分事项继续保留在方案约束中<br />[1] 已复查 PR #10415 最新 head `a104714`<br />[2] 仍需开发修复删除共享应用未释放 `usage_count`、`release()` 负数保护，以及 apply 更新路径迁入 / 迁出状态判断<br />[3] 本次仅更新方案文档与 review 结论，不修改 PR 代码 |
+| `2026-04-23 17:00` | [1] PR review 收口更新路径共享判定、启停边界与 DataID 运维边界<br />[2] 将 `SharedDatasourceRuleFactory` 抽成 `is_shared` 独立决策机制，并按协议文档补充 JSON 示例与字段表<br />[3] 明确查询隔离保留为共享 Trace 正式开放前必须补齐的后续 PR<br />[1] 已更新方案主干约束、共享判定机制小节与协议字段说明<br />[2] 已复查 PR #10415 最新 head `80e070f`<br />[3] 待开发修复 `ApplyDatasourceResource`、共享启停、`OperateApmDataIdResource` 与 migration LF |
+| `2026-04-16 15:00` | [1] 合并同日重复文案迭代，只保留最终有效方案结论<br />[2] 明确 `bk_biz_id_alias` 固定传字符串 `bk_biz_id`，用于查询阶段业务隔离<br />[3] 保留共享模型接口约定与 DataID / 结果表创建口径分层<br />[1] 已更新关键决策、命名规则、共享模型与方法级参数约束<br />[2] 已统一 `SharedTraceDataSource` 接口说明和单句续行表达<br />[3] 本次仅更新方案文档，未改代码 |
+| `2026-04-16 10:00` | [1] 合并同小时方案结论与文档结构迭代<br />[2] 共享模式下 DataID 与结果表创建口径拆分<br />[3] `create_data_id` 使用特权业务 ID，`create_or_update_result_table` 使用 `GLOBAL_CONFIG_BK_BIZ_ID=0` 并透传 `bk_biz_id_alias`<br />[1] 已更新关键决策、命名规则与方法级参数约束<br />[2] 已拆分共享模型、表格后说明与迁移备注<br />[3] 本次仅更新方案文档，未改代码 |
 
 ## 0x04 版本锚点
 
@@ -679,7 +696,7 @@ for bk_biz_id, app_name in apps:
 | ✅ | `feat/apm_meta/#1010158081134345764` | APM 共享数据源增加空间路由 | [TencentBlueKing/bk-monitor #10656](https://github.com/TencentBlueKing/bk-monitor/pull/10656) |
 | ✅ | `feat/apm_shared_datasource_opt/#1010158081134381477` | APM 跨应用共享数据源功能完善 | [TencentBlueKing/bk-monitor #10671](https://github.com/TencentBlueKing/bk-monitor/pull/10671) |
 | ✅ | `feat/apm_meta/#1010158081134528860` | APM 预计算任务调度支持共享数据源场景 | [TencentBlueKing/bk-monitor #10725](https://github.com/TencentBlueKing/bk-monitor/pull/10725) |
-| 🔄 | `<branch_name>` | APM 共享数据源迁入迁出支持可重入 | 待创建 |
+| 🔄 | `feat/apm_trace_switch_history/#1010158081139512314` | APM 数据源切换后历史 Trace 可查，支持指定共享池批量迁移 | [PR #13012 → master](https://github.com/TencentBlueKing/bk-monitor/pull/13012)，未合并 |
 
 ## 0x05 运维操作
 
@@ -754,42 +771,49 @@ SaaS 通过 `trace_result_table_id` 的 `apm_global.shared_trace_` 前缀识别�
 
 ### b. 后台执行迁移
 
-将上一阶段输出的 `APPS` 粘贴到后台 Django shell。首次运行保留 `DRY_RUN = True`；确认输出后改为 `False`，脚本会输出迁移成功的 `SYNC_APPS`。
+指定应用可以混合来自独占和共享数据源。迁入指定的一组共享池时，先在后台运行预览：
 
-```python
-from django.core.management import call_command
-
-APPS = [
-    # 粘贴 SaaS 筛选脚本的输出
-]
-
-TARGET = "shared"
-DRY_RUN = True
-succeeded = []
-
-for bk_biz_id, app_name in APPS:
-    try:
-        args = [
-            "--target",
-            TARGET,
-            f"--apps={bk_biz_id}:{app_name}",
-        ]
-        if DRY_RUN:
-            args.append("--dry-run")
-        call_command("migrate_apm_trace_datasource", *args)
-    except Exception as error:
-        print(f"[failed] {bk_biz_id}:{app_name}: {error}")
-    else:
-        succeeded.append((bk_biz_id, app_name))
-
-if not DRY_RUN:
-    print("SYNC_APPS = [")
-    for bk_biz_id, app_name in succeeded:
-        print(f"    ({bk_biz_id!r}, {app_name!r}),")
-    print("]")
+```bash
+python manage.py migrate_apm_trace_datasource \
+  --target shared \
+  --apps "2:app_a" "2:app_b" \
+  --shared-datasource-ids 1 2 \
+  --dry-run
 ```
 
-`call_command()` 需通过位置参数满足管理命令的必填参数解析。逐应用使用 `--apps=<值>` 可兼容负数业务 ID，也能避免单个应用失败后中断整批迁移。迁出共享时将 `TARGET` 改为 `exclusive`。
+- *[1] ID 为 `SharedTraceDataSource` 的主键；确认预览后去掉 `--dry-run` 执行迁移。*
+- *[2] 先检查整批容量，再按预计 `usage_count` 分配；同用量按 ID 排序，已在目标池内的应用保持原池并刷新配置。*
+- *[3] 指定池必须启用且链路完整；执行时仍原子校验容量，目标不可用会报错，不自动创建池或转入指定范围外的池。*
+
+已有 `APPS` 列表时，在后台 Django shell 执行同一命令的处理入口：
+
+```python
+from apm.management.commands.migrate_apm_trace_datasource import Command
+
+APPS = [
+    # 粘贴筛选结果，或填写 (bk_biz_id, app_name)
+]
+TARGET = "shared"
+SHARED_DATASOURCE_IDS = [1, 2]
+DRY_RUN = True
+
+if not APPS:
+    raise ValueError("请填写 APPS")
+
+Command().handle(
+    target=TARGET,
+    apps=[f"{bk_biz_id}:{app_name}" for bk_biz_id, app_name in APPS],
+    shared_datasource_ids=SHARED_DATASOURCE_IDS,
+    dry_run=DRY_RUN,
+)
+if not DRY_RUN:
+    print(f"SYNC_APPS = {list(dict.fromkeys(APPS))!r}")
+```
+
+- *[1] 直接调用处理入口可保留负数业务 ID，同时整批预览分配，避免逐应用预览总是选中同一空闲池。*
+- *[2] `TARGET="shared"` 且 `SHARED_DATASOURCE_IDS=[]` 沿用自动分配；迁出独占使用 `TARGET="exclusive"` 且目标池列表为空。*
+- *[3] 每个应用独立事务，执行失败会停止本批，已成功应用不会回滚；修正原因后可重跑，已在目标池内的应用不追加历史、不重复占位，并重试配置刷新。*
+- *[4] 数据库回滚不撤销外部接口副作用；实际执行后仍需按下一节同步 SaaS 元数据。*
 
 ### c. SaaS 同步 APM 元数据
 
