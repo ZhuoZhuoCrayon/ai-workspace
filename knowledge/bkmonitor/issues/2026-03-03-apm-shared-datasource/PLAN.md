@@ -676,6 +676,8 @@ for bk_biz_id, app_name in apps:
 
 常规迁入／迁出保留 `apply_datasource` 原有事务和分配流程；批量指定池模式按迁移命令的基础方法流程执行。Trace 通过 `release_for_migration` 保留旧 RT 与索引集，共享迁出仅释放池占用；回到独占时复用备份并通过现有创建／更新流程启用目标 RT。数据库异常回滚覆盖应用绑定、历史记录和池计数，外部 API 仍遵循现有重试语义。
 
+迁回独占时复用旧日志索引集；更新接口明确返回不存在错误码 `3623301` 时重建，重建失败抛出并回滚迁移数据库事务。其他错误保持原日志记录与旧值降级，不按权限、超时或错误文案重建；正常路径不增加 DB 查询或 API 请求。
+
 历史路由在构造查询对象前解析：
 
 - `TraceDataSource.get_query_table_ids()` 按时间区间和延窗选表，先筛选再去重；`QueryProxy` 在每次请求构造查询对象前展开普通 `data_sources`，Target 和查询类不携带历史状态。
@@ -690,6 +692,7 @@ for bk_biz_id, app_name in apps:
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-10-29 10:04` | [a] 修复旧日志索引集删除后迁回独占仍保存失效 ID 的问题，生产代码增加 5 行<br />[b] 75 项回归及 4 项主干对照通过，覆盖重建、失败回滚和其他错误不误建，外部 API 使用 mock<br />[c] 提交 `14ccb5040e9bf4cca664ddc5c5ec1fbf34916301` 已推送，[PR #13012](https://github.com/TencentBlueKing/bk-monitor/pull/13012) 待其他成员评审 |
 | `2026-10-29 08:00` | [a] 批量指定池迁移复用基础方法，每应用独立事务，循环后一次刷新 K8s 配置<br />[b] 通用 API 和池分配器恢复原接口，Trace 历史选表与纯独占查询兼容性保留<br />[c] 测试按查询、数据源和批量命令拆分，删除 2 个重复用例，69 项回归及 4 项主干对照通过，真实存储、MySQL 锁及批量内存负载未联调<br />[d] 提交 `c94a5e352c219e2c50df9db40a9a39936c81c8c3` 已推送，[PR #13012](https://github.com/TencentBlueKing/bk-monitor/pull/13012) 待评审 |
 | `2026-05-14 18:00` | [1] 将 BMW 预计算适配共享数据源拆分到独立 issue [2026-05-14-apm-precalc-shared-multi-app](../2026-05-14-apm-precalc-shared-multi-app/README.md)<br />[2] 旧 `0x02.i 预计算 Trace 视图隔离`「Span 优先 + `BaseInfo` 兜底 + 应用隔离键」方案推倒，连同 `2026-05-13 12:00` 进展条目一并移除<br />[3] 新方案改为「单任务多应用窗口」：`KafkaNotifier` 与 `DistributiveWindow` 之间插入 `Dispatcher`，按 Span 顶层 `(bk_biz_id, app_name)` 命中 Consul `apps[]` 路由到对应 `appBundle`<br />[4] 本 PLAN 的 `0x01.e` 数据链路段移除「预计算」子段，留链接指向新 issue<br />[1] 已核对 master `pkg/bk-monitor-worker/internal/apm/pre_calculate/**` 与 `pkg/collector/exporter/converter/traces.go` 共 `25` 个事实点<br />[2] 本次仅更新方案文档与索引，未改代码 |
 | `2026-05-14 16:00` | [1] 复查 PR #10583 head `7174bb1`，确认检索隔离主路径仍由 `TraceQueryGuard` 收口<br />[2] 旧 `query_es` 直查入口和统计接口残留配置已清理，未发现新的检索隔离阻塞问题<br />[3] `APMAppTarget` 不再允许空应用上下文，预计算路径改为 `target=None + table_id` 旁路<br />[1] 已核对 `TraceQueryGuard`、`BaseQuery._get_q`、`TraceDataSource.get_q`、DB 场景、异常类型图、Trace ID 搜索和拓扑发现 DSL 路径<br />[2] 已自动 resolve `3` 个旧未解决 review 线程<br />[3] 本轮未发布新增 PR 评论，未运行自动测试 |
