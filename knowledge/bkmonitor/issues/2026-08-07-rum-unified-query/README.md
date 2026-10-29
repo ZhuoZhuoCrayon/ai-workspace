@@ -3,7 +3,7 @@ title: RUM 分层统一查询
 tags: [rum, apm, query, span, view, session, factory, unify-query, semconv]
 description: 用统一 Target、查询基类和语义字段目录承接 RUM 分层检索与 APM Trace 查询
 created: 2026-08-07
-updated: 2026-10-16
+updated: 2026-10-30
 ---
 
 # RUM 分层统一查询
@@ -37,7 +37,7 @@ Resource、Action、Long Task、Error、Vital 和 View 的核心详情协议、�
 ### b. 约束
 
 - 本方案不设计 View、Session 的数据生产或预计算过程。
-- View、Session 基础查询只确定类名和代码位置，不展开实现。
+- View、Session 通过原始 Span 折叠与批量补查提供降级列表，保留预计算层级表接入点。
 - `BaseRumLevelHandler` 只持有 `data_sources`，查询对象由具体 Level 组合。
 - Level 公共方法使用显式参数，差异化配置统一放入 `extra_config`。
 - `extra_config` 只在服务端构造，不作为接口参数。

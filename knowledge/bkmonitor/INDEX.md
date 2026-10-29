@@ -11,7 +11,7 @@
 | [APM 服务数据状态下沉到后台服务发现](./issues/2026-09-16-apm-service-data-status-heartbeat/README.md) | `apm` `data-status` `discover` `heartbeat` `topo-node` `log` `profiling` | 后台心跳生产、状态读取切换与旧查询、缓存清理均已合入 | 2026-10-26 |
 | [APM 日志存储支持切换 ES 集群](./issues/2026-10-23-apm-log-storage-cluster-switch/README.md) | `apm` `log` `storage` `frontend` | 方案完成，待开发 | 2026-10-23 |
 | [LLM 消息截断容错展示](./issues/2026-10-20-llm-message-truncation/README.md) | `apm` `llm` `json` `truncation` `frontend` | 方案待验证 | 2026-10-20 |
-| [RUM 分层统一查询](./issues/2026-08-07-rum-unified-query/README.md) | `rum` `apm` `query` `span` `view` `session` `factory` `unify-query` `semconv` | 实现中 | 2026-10-16 |
+| [RUM 分层统一查询](./issues/2026-08-07-rum-unified-query/README.md) | `rum` `apm` `query` `span` `view` `session` `factory` `unify-query` `semconv` | 实现中 | 2026-10-30 |
 | [指标元信息存储与 SaaS/APM 自定义指标改造](./issues/2026-09-15-custom-metric-metadata/README.md) | `metadata` `custom-metric` `apm` `histogram` `bmw` | 方案完成 | 2026-10-14 |
 | [APM 跨应用 Trace 检索](./issues/2026-07-31-apm-cross-app-trace-search/README.md) | `apm` `trace` `cross-app-search` `index-set` `bklog` `celery` `unify-query` | 待合入 | 2026-08-06 |
 | [日志、调用链与事件枚举值查询接入 UnifyQuery](./issues/2026-07-31-enum-values-unify-query/README.md) | `unify-query` `enum-values` `dimension-query` `log` `trace` `event` | 方案完成 | 2026-07-31 |

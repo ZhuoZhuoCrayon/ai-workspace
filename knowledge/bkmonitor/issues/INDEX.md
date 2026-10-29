@@ -6,7 +6,7 @@
 | [APM 服务数据状态下沉到后台服务发现](./2026-09-16-apm-service-data-status-heartbeat/README.md) | `apm` `data-status` `discover` `heartbeat` `topo-node` `log` `profiling` | 由各 telemetry 发现器落盘服务级数据心跳，让应用详情读取心跳判定状态，SaaS 下线请求侧状态重算 | 2026-10-26 |
 | [APM 日志存储支持切换 ES 集群](./2026-10-23-apm-log-storage-cluster-switch/README.md) | `apm` `log` `storage` `frontend` | 补齐日志存储集群编辑入口，复用既有配置链路 | 2026-10-23 |
 | [LLM 消息截断容错展示](./2026-10-20-llm-message-truncation/README.md) | `apm` `llm` `json` `truncation` `frontend` | 避免截断消息被误判为空，保留可解析内容并提示数据不完整 | 2026-10-20 |
-| [RUM 分层统一查询](./2026-08-07-rum-unified-query/README.md) | `rum` `apm` `query` `span` `view` `session` `factory` `unify-query` `semconv` | 用统一 Target、查询基类和语义字段目录承接 RUM 分层检索与 APM Trace 查询 | 2026-10-16 |
+| [RUM 分层统一查询](./2026-08-07-rum-unified-query/README.md) | `rum` `apm` `query` `span` `view` `session` `factory` `unify-query` `semconv` | 用统一 Target、查询基类和语义字段目录承接 RUM 分层检索与 APM Trace 查询 | 2026-10-30 |
 | [指标元信息存储与 SaaS/APM 自定义指标改造](./2026-09-15-custom-metric-metadata/README.md) | `metadata` `custom-metric` `apm` `histogram` `bmw` | 采用取值去重方案，元信息按内容去重为取值，每个 scope 一行存取值 ID 列表，支持按服务过滤、编辑和分组，Histogram 按原名组族，指标项表零 DDL，页面分组表加两列 | 2026-10-14 |
 | [APM 跨应用 Trace 检索](./2026-07-31-apm-cross-app-trace-search/README.md) | `apm` `trace` `cross-app-search` `index-set` `bklog` `celery` `unify-query` | 通过 Trace 数据源域索引集聚合同域 APM Trace 数据源，让 Trace ID 可以跨应用检索 | 2026-08-06 |
 | [日志、调用链与事件枚举值查询接入 UnifyQuery](./2026-07-31-enum-values-unify-query/README.md) | `unify-query` `enum-values` `dimension-query` `log` `trace` `event` | 让枚举值查询统一进入 UnifyQuery.query_dimensions，并复用数据查询的灰度路由 | 2026-07-31 |

@@ -4,7 +4,7 @@ tags: [rum, apm, query, span, view, session, factory, unify-query, semconv]
 issue: ./README.md
 description: 通过统一 Target、查询基类、Level 工厂和语义字段目录收敛 RUM 与 APM 查询
 created: 2026-08-07
-updated: 2026-10-19
+updated: 2026-10-30
 ---
 
 # RUM 分层统一查询 —— 实施方案
@@ -35,8 +35,7 @@ Resource
 
 - 除 `view_config`、Span 核心详情与异步分析约定外的接口细节和错误码。
 - View、Session 的预计算链路与数据生产方式。
-- View、Session 查询原子的具体实现。
-- 各 Level 页面配置和查询参数的业务细节。
+- View、Session 的记录详情、层级时间线和综合统计接口。
 - OTLP 编解码和 RUM 上报协议变更。
 
 ## 0x02 架构设计
@@ -152,6 +151,45 @@ flowchart LR
 
 `SpanQuery`、`OriginTraceQuery` 和 `TraceQuery` 构造查询配置并返回结果列表，`QueryProxy` 统一包装响应协议。
 
+### d. Session 与 View 降级列表
+
+层级表是否齐备由 Query 判断，语义字段目录独立于表结构。列表先折叠检索窗口内的匹配 Span，再以当前页实体 ID 补查保留期内的汇总。
+
+```mermaid
+flowchart LR
+    Level["SessionLevelHandler / ViewLevelHandler"] --> Query["SessionQuery / ViewQuery"]
+    Level --> LevelBase["BaseRumLevelHandler"]
+    Query --> FallbackBase["BaseFallbackRumQuery"]
+    FallbackBase --> QueryBase["BaseRumQuery"]
+    Query --> Ready{"levels 齐备"}
+    Ready -- yes --> Table["SpanQuery<br/>层级表"]
+    Ready -- no --> Fold["_query_group_list()<br/>原始 Span 表"]
+    Fold --> Summary["query_summaries()<br/>当前页 ID"]
+    Summary --> Build["build_records()"]
+    Spec["SessionSpec / ViewSpec"] --> Level
+```
+
+| 能力 | 降级协议 | 层级表就绪 |
+| --- | --- | --- |
+| 字段目录 | [a] `SessionSpec` 包含 `31` 个字段<br />[b] `ViewSpec` 包含 `40` 个字段<br />[c] 按保留表及已确认的 `frustration_count` 定义维护，不调用 UQ 字段发现 | 使用同一语义目录 |
+| 原始字段分析 | [a] Session：`span_type=session AND session.phase=start`<br />[b] View：`span_type=view AND view.phase=update` | 分析实体记录 |
+| 计算字段能力 | [a] `is_agg=false`<br />[b] `is_searchable=false`<br />[c] 消费端关闭计算字段操作入口 *[1]* | 按字段类型开放 |
+| 列表候选 | 按有效的 `attributes.session.id` 或 `attributes.view.id` 折叠全部匹配 Span | 直接分页查询层级表 |
+| 当前页补查 | [a] 按 ID 批量查询计数、最早开始、最晚结束和生命周期<br />[b] Session 补入口、出口及 View 去重数<br />[c] View 按指标取最新 Vital | 不补查 |
+| 关闭状态 | [a] 只由最新生命周期事件判断 `is_active`<br />[b] `end` 返回 `normal` 与结束时间<br />[c] 缺失状态与指标返回 `null` | 使用层级表结果 |
+
+- *[1] `start_time` 允许按匹配 Span 的时间排序；补查后的实体 `start_time` 取 `min(start_time)`，保持折叠分页顺序，不进行页内伪排序。*
+- *[2] 分析统计是事件口径，多个 View `update` 分别计数；Session `rotate` 不纳入 `start` 分析。*
+- *[3] 补查只保留实体 ID 和授权数据源，不继承检索条件，使用数据保留期内的全部可观测数据。*
+- *[4] 多目标必须全部具有对应层级表才切换，避免混合实体统计与事件统计。*
+- *[5] 分页参数由序列化器统一校验，查询层不另设条数上限；补查最多 `6` 个并发任务，聚合查询沿用基类的异常处理。*
+
+`close_reason=timeout` 依赖预计算窗口，降级查询不推断超时。
+
+「挫败行为数」采用已确认的 `frustration_count`。bk-rum 的 `packages/open-telemetry/src/plugins/action.ts` 与 [Action 协议](../../articles/2026-07-12-rum-span-data-protocol/README.md#i-action) 将 `attributes.action.frustration.type` 定义为数组，包含 `rage_click`、`dead_click`、`error_click`，同一 Action 可命中多种类型。查询按当前页实体 ID 与 `span_type=action` 限定范围，再匹配任一挫败类型并对记录计数；不按类型拆桶或求和，同一条 Action 只计一次。该字段归入数量统计分组，缺少匹配记录时为 `0`，降级模式下只供列表展示。
+
+Span、Session、View 的字段配置共用 `BaseRumQuery.query_fields`。字段目录始终以各层级 semconv 为兜底，UQ 失败不丢失语义字段；Span 及已有层级表时再合并存储元数据。服务端移除 `validate_fields`、`validate_search` 和 `_validate_analysis`，消费端依据能力元数据关闭未开放的操作。表格补查的数值聚合复用 `_statistics`，沿用基类现有的异常处理，不引入严格错误模式。
+
 ## 0x03 开发方案
 
 ### a. 代码落点
@@ -182,15 +220,27 @@ packages/rum_web/
     │   └── timeline.py                       # [Add] 会话时间线 Builder
     ├── query/
     │   ├── span.py                           # [Change] SpanQuery
-    │   ├── view.py                           # [Reserved] ViewQuery
-    │   └── session.py                        # [Reserved] SessionQuery
+    │   ├── view.py                           # [Add] ViewQuery
+    │   └── session.py                        # [Add] SessionQuery
     └── level/
         ├── base.py                           # [Add] BaseRumLevelHandler
         ├── factory.py                        # [Add] RumLevelHandlerFactory
         ├── span.py                           # [Add] SpanLevelHandler
-        ├── view.py                           # [Reserved] ViewLevelHandler
-        └── session.py                        # [Reserved] SessionLevelHandler
+        ├── view.py                           # [Add] ViewLevelHandler
+        └── session.py                        # [Add] SessionLevelHandler
 ```
+
+聚合层实现落点：
+
+| 对象 | 职责 |
+| --- | --- |
+| `semconv/rum/session`、`semconv/rum/view` | 分别声明各层级字段树，公共字段定义复用 `semconv/rum/common.py` |
+| `handlers/query/base.py` | 平移 Span 通用原子查询和字段分析，统一语义目录兜底 |
+| `handlers/query/fallback.py` | 专用父类复用折叠、补查与回填，通过 QueryConfigBuilder 复用当前页 ID 与过滤条件，聚合直接调用基类 `_statistics`，任务将结果回填为 `ID → 字段值` |
+| `handlers/query/session.py`、`handlers/query/view.py` | 独立声明语义目录、分析阶段和快照排序，通过 `_add_summary_tasks` 追加各自补查任务，过滤和排序由 Builder 声明，聚合字段、方法及分组使用基类统计接口 |
+| `handlers/level/base.py` | 提供通用列表、字段配置、字段分析及统计响应协议 |
+| `handlers/level/session.py`、`handlers/level/view.py` | 各自声明层级 Query、语义目录及默认字段，不引入中间继承层 |
+| `constants.py` | 沿用分组名称、别名和 `field_names` 协议 |
 
 ### b. `mode` 与 Factory
 
@@ -208,6 +258,8 @@ class RumQueryMode(CachedEnum):
 class RumLevelHandlerFactory:
     HANDLERS = {
         RumQueryMode.SPAN.value: SpanLevelHandler,
+        RumQueryMode.VIEW.value: ViewLevelHandler,
+        RumQueryMode.SESSION.value: SessionLevelHandler,
     }
 
     @classmethod
@@ -227,8 +279,8 @@ class RumLevelHandlerFactory:
 |--------------------------------------------------------------|----------------------------------------------|
 | **[Keep]** `BaseQuery`                                       | `bkmonitor/data_source/utils/query.py`       |
 | **[Change]** `SpanQuery`                                     | `packages/rum_web/handlers/query/span.py`    |
-| **[Reserved]** `ViewQuery`                                   | `packages/rum_web/handlers/query/view.py`    |
-| **[Reserved]** `SessionQuery`                                | `packages/rum_web/handlers/query/session.py` |
+| **[Add]** `ViewQuery`                                   | `packages/rum_web/handlers/query/view.py`    |
+| **[Add]** `SessionQuery`                                | `packages/rum_web/handlers/query/session.py` |
 | **[Change]** APM `BaseQuery`                                 | `apm/core/handlers/query/base.py`            |
 | **[Change]** `TraceQuery` / `OriginTraceQuery` / `SpanQuery` | `apm/core/handlers/query/`                   |
 
@@ -1617,11 +1669,12 @@ MAX = 4 h
 | 测试                                     | 核心断言                                                                                                                                                                                                                                                 |
 | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `test_datasource_target.py`            | [a] `levels` 默认空列表<br />[b] 现有 `TraceDatasourceTarget.build()` 行为不变<br />[c] 可携带多个层级结果表                                                                                                                                                              |
+| `test_layer_query.py` | [a] 字段集合与保留表及确认补充一致，目录不访问 UQ<br />[b] 分析阶段和折叠分页正确<br />[c] 非生命周期事件可命中列表<br />[d] 当前页批量补查不继承筛选，聚合查询沿用基类异常处理<br />[e] 层级表切换、布尔值和缺失指标保持协议<br />[f] Resource 到 UQ 编译链路与共享表应用隔离<br />[g] 挫败类型数组只用于筛选，按 Action 记录计数，无命中为零 |
 | `test_level_factory.py`                | [a] 合法 `mode` 返回对应 Level<br />[b] 未注册模式明确失败<br />[c] `data_sources` 原样传入 Level                                                                                                                                                                       |
 | `test_query.py`                        | [a] Query 复用 `BaseQuery`<br />[b] 接收 `list[TraceDatasourceTarget]`<br />[c] 具备 8 项原子能力                                                                                                                                                               |
 | `semconv/rum/tests/test_span_spec.py`  | [a] `field_alias` 默认空串，`is_real` 默认 `true`<br />[b] 同一原始 `FieldSpec` 可注册到多条路径，重复路径明确失败<br />[c] `from_field()` 返回携带完整路径的绑定副本<br />[d] `fields()` 返回全部已注册字段<br />[e] 枚举保留 `label` 和 `choices()`<br />[f] Web Vitals 评级阈值使用字段单位，末项省略 `value` 并兜底<br />[g] 未知路径返回仅含原始字段名的 `FieldSpec` |
 | `packages/rum_web/tests/query/test_span_query.py` | [a] 真实字段从 `SpanSpec` 补充语义<br />[b] 虚拟字段从 `SpanSpec.fields()` 注入并使用完整路径<br />[c] 别名按语义配置、数据源值、完整字段名依次回退<br />[d] 评级末档省略空 `value`<br />[e] 数据源已有同名字段时不重复注入 |
-| `test_level_handler.py`                | [a] 基类只保存 `data_sources`<br />[b] 具体 Level 可组合多个 Query<br />[c] TopK 方法只接收单个字段<br />[d] 9 项公共方法声明参数与返回类型<br />[e] 未知配置被拒绝，且不能覆盖公共参数或数据源                                                                                                              |
+| `test_level_handler.py`                | [a] 基类保存 `data_sources` 并提供通用查询响应实现<br />[b] 具体 Level 可组合多个 Query<br />[c] TopK 方法只接收单个字段<br />[d] 9 项公共方法声明参数与返回类型<br />[e] 未知配置被拒绝，且不能覆盖公共参数或数据源                                                                                                              |
 | `test_query_resources.py`              | [a] 9 个 URL、HTTP 方法、Resource 和 Level 方法一一对应<br />[b] Resource 不依赖公共基类<br />[c] 请求协议不接受 `extra_config`，客户端无法覆盖 Level 配置<br />[d] `view_config` 保留 `origin_field`，顶层维护全量字段，分组通过字段名引用<br />[e] Span 视图返回按类型配置的默认列与分组适用范围<br />[f] semconv 补充别名、单位、展示类型、枚举选项和评级阈值 |
 | Span 详情验收（待实现） | [a] 五类详情复用字段元数据<br />[b] Long Task 保留上报的阻塞贡献<br />[c] Vital 与 Error 概览不使用 Span 耗时，Vital 徽标取指标值，CLS 无单位<br />[d] View 开始时间与停留时长取 `attributes.view.started_at`，结果不随点开的快照变化<br />[e] 非 View 类型不触发关联查询，记录不存在时明确失败 |
 | Resource 加载时序验收（待实现） | [a] 有 `resource.timing.start_time` 与 `response_end` 时按 A–E 匹配，缺一则回退旧阶段字段<br />[b] 新区间非法时整段省略，不混用旧偏移<br />[c] 有重定向时 B/C/D/E 先输出 `redirect`，发起前等待从 `redirect_end` 起算<br />[d] D/E 的发起前等待画到 `domain_lookup_start`；连接复用输出 0 耗时 DNS/连接/TLS<br />[e] `total_duration = response_end − start_time`，乱序或非正耗时不画条 |
@@ -1630,20 +1683,47 @@ MAX = 4 h
 | 异步分析验收（待实现） | [a] 基础详情不等待关联聚合<br />[b] 未加载、失败与统计为零可区分<br />[c] 应用、关联 ID 和时间边界一致，记录去重<br />[d] 区块合并保留基础字段，切换记录后丢弃旧响应 |
 | 会话时间线验收（待实现） | [a] 每个 View ID 只生成一个 View 节点，`records` 与同 `span_id` 的 `record_detail` 一致，包含相同 Hover<br />[b] 同一 View 内，非 Action 成员在 `action.id` 命中 Action 时挂到该 Action，未命中时挂到 View；跨 View 的成员留在自身 View<br />[c] Action 保持 View 的直接子节点<br />[d] Vital 和 Session 不生成节点，无 `phase=end` 记录时 `end_time` 为 `null`<br />[e] 缺少 View ID 或所属 View 无快照的 Span 不进入时间线<br />[f] 按 `view_id` 查询时只返回一个 View 节点，起止时间取该 View，无 `view.phase=end` 快照时 `end_time` 为 `null` |
 | View 结束判定验收（待实现） | [a] `pagehide` 且停留 `0` 返回 `page_closed`，负停留展示为 `0`<br />[b] 无 `phase=end` 且在 `15 min` 内为 `open`，超出为 `unobserved_end`，时间线 `end_time` 仍为 `null`<br />[c] `session_expired` 按 Session 寿命区分 `session_idle` 与 `session_max_lifetime`，缺起止时回退 `session_idle`<br />[d] `page_closed` 不把 Session 标成已结束 |
-| `apm/tests/test_unified_query_base.py` | [a] APM 继承通用基类<br />[b] 3 类 Query 统一接收 Target 列表<br />[c] Proxy 统一构造原始表与预计算层级<br />[d] 列表查询复用 `_query_list()`，Proxy 固定补 `total=0`<br />[e] 查询配置保持列表形态，多 Target 不丢表                                                                                   |
+| `bkmonitor/data_source/tests/test_utils_query.py` | [a] 多表字段元数据合并<br />[b] 字段检索能力判断<br />[c] 保留期窗口与秒毫秒转换 |
 
 测试门禁：
 
 ```bash
 pytest semconv/rum/tests -q
 pytest packages/rum_web/tests/query -q
-pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.py -q
+pytest bkmonitor/data_source/tests/test_utils_query.py -q
 ```
+
+`2026-10-28` 扩展回归记录：`apm/tests/test_discovery_group_query.py` 因缺失迁移父节点 `monitor_web.0077_collectorpluginmeta_id` 无法初始化测试数据库；`apm/tests/test_trace_query_es_batch.py` 的既有查询返回 `is_es_batch=false`，与断言不符。两处实现未由本次变更修改，未计入通过数。
+
+定向验证覆盖 `semconv/rum/tests`、`rum_web/tests/query`、`rum_web/tests/builder` 和 `test_utils_query.py`，当前共 `617` 项通过。真实后端联调已验证 Session/View 时间字段、候选值、详情两种 ID 入口一致性和 QueryBuilder 等值过滤简写；浏览器已验证列表展示、ID 首列、类型选择隐藏及候选项加载。
+
+`2026-10-29` 整体类型复查覆盖本次涉及的 `16` 个生产文件和 `5` 个测试文件。新增与功能变更代码无类型诊断，纯平移方法按原文比对，保留以下既有诊断。没有为消除提示改写纯平移方法或关闭检查。
+
+| 诊断归属 | 数量 | 处理 |
+| --- | --- | --- |
+| 纯平移的原方法 | `21` | 保持原文，Query `9` 个、Level `12` 个方法逐字比对通过 |
+| Resource 原有方法签名 | `10` | 与原签名一致，保留既有基类覆盖类型诊断 |
+| 未修改的原测试方法 | `8` | 方法源码与原文一致，保留既有类型诊断 |
+| 新增及功能变更代码 | `0` | 补齐类型契约和数据收窄，未使用强转或忽略标记消除诊断 |
+
+分组聚合直接引用指标表达式，避免外层 MIN / MAX 丢失 Session/View ID；编译层与真实 UQ 查询均已核对。补查聚合直接复用 `_statistics` 的时间窗口、表达式、结果合并和数值格式化，异常也沿用基类现有处理，不增加严格模式或单独的聚合执行层。
+
 
 ## 0x06 实施进展
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-10-29` | [a] 复查 Session/View 列表最小适配、常驻过滤、候选值和详情复用，时间线由 Resource 直接调用 Span Handler，基类不再声明占位能力<br />[b] 整理 import 分组、复用记录 ID 扩展点，消除 Session Builder 对主记录的重复打平，`617` 项回归、前端 `6` 文件 ESLint 与相关详情类型检查通过<br />[c] 确认 PreCI 失败源于任务 worktree 错误启用语言规则，按指定配置仅保留并启用 `standard_scc`、`opensource_sensitive_other`，实际扫描本次 `29` 个文件无问题，全部提交 hook 通过<br />[d] GTM 已提交并推送 `ca31392f354be0e849245dc891209d9585a933a5`，[PR #13018](https://github.com/TencentBlueKing/bk-monitor/pull/13018) 已更新 |
+| `2026-10-29` | [a] 从最新 `upstream/master` 创建独立分支并交付 [PR #13018](https://github.com/TencentBlueKing/bk-monitor/pull/13018)，提交 `234d979a56a5436c5aff9b583e8b5406c67c8134`<br />[b] 收回多字段 TopK 的额外异常传播改动，更新统计异常处理文档<br />[c] 独立 worktree 查询测试 `332 passed`，提交时敏感信息扫描、Ruff、格式和提交说明检查通过；真实 UQ 联调未执行，本地 PreCI 未安装，远端检查状态以 PR 为准 |
+| `2026-10-29` | [a] 按用户要求直接复用基类 `_statistics`，聚合异常沿用现有处理<br />[b] 删除新增的 `_query_aggregated_records` 及 fallback 重复统计逻辑，Builder 保留过滤与排序，聚合参数遵循基类接口<br />[c] 查询模块 `332` 项回归、Ruff 和相关类型检查通过 |
+| `2026-10-29` | [a] 按用户确认，将补查的过滤、指标、别名、分组和排序统一为 QueryConfigBuilder，任务只接收完整查询模板，移除无调用方的 `query_group_values` 包装<br />[b] 保留时间窗口、MIN / MAX、多表查询、应用隔离和数值处理；改造前后 `8` 组场景的请求（统一内部引用别名后）及回填结果一致<br />[c] 查询模块 `332` 项回归、Ruff 和 fallback 三个 Query 文件类型检查通过，并为 QueryConfigBuilder 补充实际 QueryConfig 类型声明，避免 IDE 误判 metric 属性<br />[d] 移除补查不再使用的 `raise_on_error` 参数及执行分支，`BaseQuery._statistics` 与 HEAD 原方法逐字一致，查询模块 `332` 项回归通过<br />[e] 从基类聚合方法抽出 `_query_aggregated_records`，标量聚合、分组聚合与 fallback 共用执行逻辑，移除 fallback 重复配置查询集的代码，`332` 项回归及 `8` 组基线对比通过 |
+| `2026-10-29` | [a] 按用户要求将本轮范围收敛为代码规范与重复逻辑清理，撤回统计线程异常、TopK 兜底及区间校验的行为改动<br />[b] 删除 fallback 分页上限及重复参数校验，复用过滤器已有的 EXISTS 处理，字段语义只应用一次<br />[c] 合并指标与记录补查的单次转调，分别命名为 `_build_metric_task` 和 `_build_record_task`；类型、任务构建方法及变量统一使用 Task / task 命名，内联仅调用一次的生命周期过滤助手，AST 比对确认仅重命名和原表达式内联<br />[d] 查询模块 `324` 项回归、Ruff 及 fallback 三个 Query 文件类型检查通过 |
+| `2026-10-29 09:44` | [a] 整体复查生产代码和测试，新增及功能变更代码无类型诊断，纯平移方法原文保持一致<br />[b] fallback 任务直接产出按 ID 组织的回填字段，移除任务名分支和并行字段映射，统一 ID 收窄与结果投影<br />[c] 修正 MIN / MAX 表达式引用名，避免单窗口补查嵌套线程池，`591` 项回归通过 |
+| `2026-10-29 02:11` | [a] 按用户建议新增 Session / View 专用父类 `BaseFallbackRumQuery`，移除模块函数传入 `self`、跨模块私有调用和任务闭包<br />[b] 为 Span Level 声明具体 Query 类型；新父类及两类 Query 静态检查无错误，本地 `579` 项回归通过<br />[c] Span 时间线原有 Optional ID 类型提示仍在，未改动原方法 |
+| `2026-10-29` | [a] 按迁移前源码复核，Query 的 `9` 个、Level 的 `12` 个无功能变更方法逐字平移，恢复额外注解、时间线空串改写及遗漏注释<br />[b] 字段目录兜底、层级字段与分组适配、共享表隔离和补查统计错误处理作为功能变更单独保留，不纳入纯平移结论 |
+| `2026-10-29 01:53` | [a] 移除 entity 继承层，Span / Session / View Query 直接继承 `BaseRumQuery`，通用 Level 实现下沉至 `BaseRumLevelHandler`<br />[b] Session / View 各自声明语义字段树与差异补查，专用补查助手放在 `query/fallback.py`，不进入查询基类<br />[c] 三层共用语义目录兜底，移除过渡字段校验；本地 `579` 项定向回归通过 |
+| `2026-10-28 14:40` | [a] 按用户确认补齐 `frustration_count`，同一 Action 命中多个挫败类型只计一次，Session / View 目录分别为 `31` / `40` 个字段<br />[b] 本地 `591` 项定向测试、Ruff 和新增代码类型检查通过<br />[c] 保留无预计算降级与层级表扩展，代码未提交，真实 UQ 联调未执行 |
+| `2026-10-28 14:00` | Session / View 列表采用原始 Span 折叠与当前页批量补查，分析按生命周期阶段降级，保留层级表切换能力；本地 `589` 项定向测试通过，挫败行为字段 key 和口径待确认。 |
 | `2026-10-19 14:00` | View 关联信息保留 Span 数，新增 `attributes.span_type = action` 的动作数过滤条件，其他非 `view`、`session` 类型沿用等值过滤，接口文档见 [TencentBlueKing/bk-monitor #12826](https://github.com/TencentBlueKing/bk-monitor/pull/12826) |
 | `2026-10-17 00:15` | [a] 按 GTM 重新交付会话时间线 Action 子节点，提交 `5a1ac99857dfb30c50e2c9c4c7f84ed25261a793`<br />[b] 关闭未走 GTM 的 [#12819](https://github.com/TencentBlueKing/bk-monitor/pull/12819)<br />[c] 新 PR [TencentBlueKing/bk-monitor #12820](https://github.com/TencentBlueKing/bk-monitor/pull/12820)，时间线测试 46 项通过，未跑前端点击验收 |
 | `2026-10-16 20:00` | [a] 会话时间线把同一 View 内匹配 `action.id` 的非 Action 成员挂到 Action，Action 仍只作为 View 的直接子节点<br />[b] 交付 [TencentBlueKing/bk-monitor #12819](https://github.com/TencentBlueKing/bk-monitor/pull/12819) |
@@ -1690,6 +1770,7 @@ pytest apm/tests/test_unified_query_base.py apm/tests/test_trace_query_es_batch.
 
 | 状态 | 分支 | 里程碑 | PR |
 | --- | --- | --- | --- |
+| 🔄 | `feat/rum-session-view-query/#1010158081139526191` | Session / View 降级列表及字段分析 | [TencentBlueKing/bk-monitor #13018](https://github.com/TencentBlueKing/bk-monitor/pull/13018) |
 | ✅ | `feat/rum_base_search_module/#1010158081136933145` | 里程碑 0：提供 RUM 基础检索模块 | [TencentBlueKing/bk-monitor #11838](https://github.com/TencentBlueKing/bk-monitor/pull/11838) |
 | ✅ | `feat/rum_base_query_fields/#1010158081136920078` | 里程碑 1：提供 RUM 字段元数据查询（`query_fields`） | [TencentBlueKing/bk-monitor #11840](https://github.com/TencentBlueKing/bk-monitor/pull/11840) |
 | ✅ | `feat/rum_span_list_api/#1010158081137033151`<br />`feat/rum_view_config_add_span_type_display_fields/#1010158081137385339`<br />`feat/rum_view_config_api_add_span_type_display_fields/#1010158081137396316` | 里程碑 2：提供 RUM Span 列表类接口（`list_records`、`view_config`、`get_fields_option_values`、`generate_query_string`） *[1]* | [TencentBlueKing/bk-monitor #11887](https://github.com/TencentBlueKing/bk-monitor/pull/11887)<br />[TencentBlueKing/bk-monitor #12086](https://github.com/TencentBlueKing/bk-monitor/pull/12086)<br />[TencentBlueKing/bk-monitor #12094](https://github.com/TencentBlueKing/bk-monitor/pull/12094) |
