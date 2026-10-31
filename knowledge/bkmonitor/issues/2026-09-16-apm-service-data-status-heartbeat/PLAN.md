@@ -4,7 +4,7 @@ tags: [apm, data-status, discover, heartbeat, topo-node, log, profiling]
 issue: knowledge/bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md
 description: 后台维护服务数据心跳与关联日志状态快照，SaaS 只读映射服务状态
 created: 2026-09-16
-updated: 2026-10-27
+updated: 2026-11-01
 ---
 
 # APM 服务数据状态下沉到后台服务发现 —— 实施方案
@@ -622,6 +622,7 @@ uv run pytest apm/tests packages/apm_web/tests
 
 | 时间                 | 结论性进展                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `2026-10-28 17:00` | [a] 关联日志状态后台刷新 [PR #12998](https://github.com/TencentBlueKing/bk-monitor/pull/12998) 完成 review 并获 Approve，未发现阻塞问题，实现符合里程碑 3，合并提交为 `b620c4ea0b1a5aeb7a33848d922e2f5ac7bf353a`<br />[b] 相关 `120` 项回归在 Python 3.11.11、SQLite 内存表与 LocMemCache 隔离环境通过，变更文件 Ruff 检查通过<br />[c] 未独立验证真实 Redis、日志平台、MySQL 迁移和生产负载 |
 | `2026-10-27 16:00` | [a] Trace 按应用和数据源记录检查边界，最长补扫一小时，单次折叠按 `kind DESC, end_time DESC` 排序，接受有损选择<br />[b] 检查位置使用固定 Trace 缓存模板，缓存生成入口无改动，撤回 NodeDiscover 批次异常扩展并移除截断分支<br />[c] 调度先筛选再加锁，日志保留生命周期、三段延迟与有界摘要，删除重复时间戳、批次调参和过滤计数，不保留 DEBUG<br />[d] 只删 QueryHelper 重复查询体，保留 UNIFY_QUERY，缓存无变化静默，保留增删改摘要、清理原因与十个 ID 样本及写入失败上下文<br />[e] [PR #12958](https://github.com/TencentBlueKing/bk-monitor/pull/12958) 的相关回归 `144` 项通过（含缓存诊断与共享查询层回归），排除的 `7` 项已在未修改基线复现失败或数据库环境问题<br />[f] 未验证真实存储集成和生产负载，本机 PreCI 不可用 |
 | `2026-10-26 11:00` | [a] 旧状态查询与缓存清理 [PR #12920](https://github.com/TencentBlueKing/bk-monitor/pull/12920) 已合入，合并提交为 `969ef23c0a549a43be827aa288c3bb68ffde10fe`<br />[b] 性能分析状态读取 [PR #12893](https://github.com/TencentBlueKing/bk-monitor/pull/12893) 已于 `2026-10-22` 合入，合并提交为 `9a2b831afc758a05d809c252347c10d2a4ffe395`<br />[c] 本期后台心跳生产、服务全集与状态读取、应用详情与图表探测移除、性能分析状态改造及旧对象清理均已合入；真实存储集成与端到端性能未在本次 review 中独立验证 |
 | `2026-10-26 11:00` | [a] 旧状态查询与缓存清理 PR（[#12920](https://github.com/TencentBlueKing/bk-monitor/pull/12920)，`547f8afc7fca7d9e8134b45d2d78f334d4ae252d`）完成 review，未发现阻塞问题，删除入口、状态模板与缓存键均无残余引用<br />[b] 应用级数据量判定、真实指标、图表及 Profiling 明细查询保留，测试桩改为拦截底层查询<br />[c] 相关 118 项回归测试在 SQLite 内存表与 LocMemCache 隔离环境通过，Ruff 与 diff 检查通过；未独立复跑 paas3、MySQL 或真实存储集成验证 |
@@ -661,5 +662,5 @@ uv run pytest apm/tests packages/apm_web/tests
 | ✅ | `feat/apm_app_detail_charts_remove_data_probe/#1010158081139171253` | 应用详情与图表移除请求侧数据探测 | [TencentBlueKing/bk-monitor #12851](https://github.com/TencentBlueKing/bk-monitor/pull/12851) |
 | ✅ | `feat/apm_profiling_service_heartbeat_app_status_group/#1010158081139232058` | 性能分析服务心跳读取与应用状态分组 | [TencentBlueKing/bk-monitor #12893](https://github.com/TencentBlueKing/bk-monitor/pull/12893) |
 | ✅ | `feat/apm_service_status_remove_legacy_query_cache/#1010158081139342361` | 旧服务状态查询、缓存与模板清理 | [TencentBlueKing/bk-monitor #12920](https://github.com/TencentBlueKing/bk-monitor/pull/12920) |
-| 🔄 | `<branch_name>` | 里程碑 3：关联日志状态后台刷新 | 待创建 |
+| ✅ | `feat/apm_related_log_index_status_background_refresh/#1010158081139432693` | 里程碑 3：关联日志状态后台刷新 | [TencentBlueKing/bk-monitor #12998](https://github.com/TencentBlueKing/bk-monitor/pull/12998) |
 | 🔄 | `fix/codex-trace-discovery-catchup/#1010158081165814054` | Trace 服务发现延迟补扫与任务日志 | [TencentBlueKing/bk-monitor #12958](https://github.com/TencentBlueKing/bk-monitor/pull/12958) |

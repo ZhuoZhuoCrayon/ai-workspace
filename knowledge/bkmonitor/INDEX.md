@@ -8,7 +8,7 @@
 
 | 需求 | 标签 | 状态 | 更新日期 |
 |------|------|------|----------|
-| [APM 服务数据状态下沉到后台服务发现](./issues/2026-09-16-apm-service-data-status-heartbeat/README.md) | `apm` `data-status` `discover` `heartbeat` `topo-node` `log` `profiling` | 后台心跳生产、状态读取切换与旧查询、缓存清理均已合入 | 2026-10-26 |
+| [APM 服务数据状态下沉到后台服务发现](./issues/2026-09-16-apm-service-data-status-heartbeat/README.md) | `apm` `data-status` `discover` `heartbeat` `topo-node` `log` `profiling` | 后台心跳、状态读取、旧查询清理与关联日志状态后台刷新均已合入 | 2026-11-01 |
 | [APM 日志存储支持切换 ES 集群](./issues/2026-10-23-apm-log-storage-cluster-switch/README.md) | `apm` `log` `storage` `frontend` | 方案完成，待开发 | 2026-10-23 |
 | [LLM 消息截断容错展示](./issues/2026-10-20-llm-message-truncation/README.md) | `apm` `llm` `json` `truncation` `frontend` | 方案待验证 | 2026-10-20 |
 | [RUM 分层统一查询](./issues/2026-08-07-rum-unified-query/README.md) | `rum` `apm` `query` `span` `view` `session` `factory` `unify-query` `semconv` | 实现中 | 2026-10-30 |
