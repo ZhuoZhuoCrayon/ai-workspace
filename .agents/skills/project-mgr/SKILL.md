@@ -155,7 +155,7 @@ git config --local user.email "<user_email>"
   "skills": [
     {
       "dir": "apm-rum/skills",
-      "skills": ["kube-switch"]
+      "skills": ["bkm-apm-dev"]
     }
   ]
 }

@@ -28,7 +28,7 @@ description: >
 - 查看项目提交历史，再起草分组方案和 commit message。
 - 项目规范与工作区规范冲突时，以项目规范为准。
 
-项目接入 PreCI 时，提交前执行 [PreCI 配置准备](../gtm-cli-delivery/SKILL.md#e-worktree-的-preci-准备)。
+项目接入 PreCI 时，提交前执行 [PreCI 配置准备](../bkm-apm-dev/references/preci.md)。
 
 ## 0x03 工作区知识库提交
 
