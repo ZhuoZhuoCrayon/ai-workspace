@@ -43,6 +43,20 @@
       "computedHash": "5ea13a6d9f0d4bb694405d79acd00cadec0d21bb138c4dd10fcf3c500cb835c2",
       "sourceUrl": "https://github.com/anthropics/skills.git"
     },
+    "ui-craft": {
+      "source": "educlopez/ui-craft",
+      "sourceType": "github",
+      "skillPath": "skills/ui-craft/SKILL.md",
+      "computedHash": "e09de6e10f95e0fbdf406314ebe42dd89d6901d9b2630f083f56d0a8d09a6f8e",
+      "sourceUrl": "https://github.com/educlopez/ui-craft.git"
+    },
+    "ui-craft-dense-dashboard": {
+      "source": "educlopez/ui-craft",
+      "sourceType": "github",
+      "skillPath": "skills/ui-craft-dense-dashboard/SKILL.md",
+      "computedHash": "d0a71ccee90de5638fa4630e8feba31e17f311b4e394412cf3813eacc1c28667",
+      "sourceUrl": "https://github.com/educlopez/ui-craft.git"
+    },
     "webapp-testing": {
       "source": "anthropics/skills",
       "sourceType": "github",
