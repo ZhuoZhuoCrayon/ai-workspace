@@ -172,17 +172,17 @@ flowchart LR
 | 能力 | 降级协议 | 层级表就绪 |
 | --- | --- | --- |
 | 字段目录 | [a] `SessionSpec` 包含 `31` 个字段<br />[b] `ViewSpec` 包含 `40` 个字段<br />[c] 按保留表及已确认的 `frustration_count` 定义维护，不调用 UQ 字段发现 | 使用同一语义目录 |
-| 原始字段分析 | [a] Session：`span_type=session AND session.phase=start`<br />[b] View：`span_type=view AND view.phase=update` | 分析实体记录 |
+| 原始字段分析 | [a] Session：`span_type=session AND session.phase=start`<br />[b] View：`span_type=view AND view.phase=start` | 分析实体记录 |
 | 计算字段能力 | [a] `is_agg=false`<br />[b] `is_searchable=false`<br />[c] 消费端关闭计算字段操作入口 *[1]* | 按字段类型开放 |
 | 列表候选 | 按有效的 `attributes.session.id` 或 `attributes.view.id` 折叠全部匹配 Span | 直接分页查询层级表 |
 | 当前页补查 | [a] 按 ID 批量查询计数、最早开始、最晚结束和生命周期<br />[b] Session 补入口、出口及 View 去重数<br />[c] View 按指标取最新 Vital | 不补查 |
 | 关闭状态 | [a] 只由最新生命周期事件判断 `is_active`<br />[b] `end` 返回 `normal` 与结束时间<br />[c] 缺失状态与指标返回 `null` | 使用层级表结果 |
 
 - *[1] `start_time` 允许按匹配 Span 的时间排序；补查后的实体 `start_time` 取 `min(start_time)`，保持折叠分页顺序，不进行页内伪排序。*
-- *[2] 分析统计是事件口径，多个 View `update` 分别计数；Session `rotate` 不纳入 `start` 分析。*
+- *[2] 字段分析以窗口内开始事件为样本，列表可包含窗口前已开始的活跃实体；View 后续产生的字段可能没有统计结果。*
 - *[3] 补查只保留实体 ID 和授权数据源，不继承检索条件，使用数据保留期内的全部可观测数据。*
 - *[4] 多目标必须全部具有对应层级表才切换，避免混合实体统计与事件统计。*
-- *[5] 分页参数由序列化器统一校验，查询层不另设条数上限；补查最多 `6` 个并发任务，聚合查询沿用基类的异常处理。*
+- *[5] 分页参数由序列化器统一校验，查询层不另设条数上限；补查最多 `6` 个并发任务，聚合查询沿用基类在线程内部记录并吞掉异常的处理，作为非预计算降级策略保留。Session/View 每页均为列表 `1` 次、补查 `7` 次。*
 
 `close_reason=timeout` 依赖预计算窗口，降级查询不推断超时。
 
@@ -1713,6 +1713,8 @@ pytest bkmonitor/data_source/tests/test_utils_query.py -q
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-10-30 17:41` | [a] 普通 Span 与请求计数合并一次聚合，Session 的 View 去重数和入口、退出页合并一次原始查询，两种列表每页各 `8` 次请求<br />[b] 业务筛选与字段映射集中在公共任务构造处，通用计数方法支持单维度和多维度，删除无调用方的记录补查包装<br />[c] 复查未发现新增阻塞问题，查询回归 `350 passed`，全部提交检查通过，PreCI 两项规则扫描 `3` 个文件无问题<br />[d] 提交 `a384898445a7317514322c0bb8358a0ba7541acc` 已推送到 [PR #13018](https://github.com/TencentBlueKing/bk-monitor/pull/13018) |
+| `2026-10-30` | [a] View 字段分析改用开始事件，文档明确其与活跃实体列表的口径差异<br />[b] 请求总数与错误数合并聚合，Web Vitals 一次查询，单数据源 Session/View 每页补查分别为 `10`、`8` 次<br />[c] 查询回归 `347 passed`，PreCI 两项规则扫描 `4` 个文件通过<br />[d] 提交 `4487e62774a1d1f0593712eecba239b92d165035` 已推送到 [PR #13018](https://github.com/TencentBlueKing/bk-monitor/pull/13018)，两条已处理意见已 resolve，异常策略暂不调整 |
 | `2026-10-29` | [a] 复查 Session/View 列表最小适配、常驻过滤、候选值和详情复用，时间线由 Resource 直接调用 Span Handler，基类不再声明占位能力<br />[b] 整理 import 分组、复用记录 ID 扩展点，消除 Session Builder 对主记录的重复打平，`617` 项回归、前端 `6` 文件 ESLint 与相关详情类型检查通过<br />[c] 确认 PreCI 失败源于任务 worktree 错误启用语言规则，按指定配置仅保留并启用 `standard_scc`、`opensource_sensitive_other`，实际扫描本次 `29` 个文件无问题，全部提交 hook 通过<br />[d] GTM 已提交并推送 `ca31392f354be0e849245dc891209d9585a933a5`，[PR #13018](https://github.com/TencentBlueKing/bk-monitor/pull/13018) 已更新 |
 | `2026-10-29` | [a] 从最新 `upstream/master` 创建独立分支并交付 [PR #13018](https://github.com/TencentBlueKing/bk-monitor/pull/13018)，提交 `234d979a56a5436c5aff9b583e8b5406c67c8134`<br />[b] 收回多字段 TopK 的额外异常传播改动，更新统计异常处理文档<br />[c] 独立 worktree 查询测试 `332 passed`，提交时敏感信息扫描、Ruff、格式和提交说明检查通过；真实 UQ 联调未执行，本地 PreCI 未安装，远端检查状态以 PR 为准 |
 | `2026-10-29` | [a] 按用户要求直接复用基类 `_statistics`，聚合异常沿用现有处理<br />[b] 删除新增的 `_query_aggregated_records` 及 fallback 重复统计逻辑，Builder 保留过滤与排序，聚合参数遵循基类接口<br />[c] 查询模块 `332` 项回归、Ruff 和相关类型检查通过 |
