@@ -42,7 +42,7 @@ make bootstrap
 - `~/.bkm-cli/` 下的 profile 和集群配置。
 - `~/.git-credentials` 和用户目录下的 skills。
 
-Agent 与 BKM CLI 的配置在 `private/configs/`，换机时按 `private/configs/README.md` 复制回原路径。
+Agent、BKM CLI 与 DevOps 凭据在 `private/configs/`，换机时按 [私有配置初始化](private/README.md#0x02-配置)运行恢复脚本；`make bootstrap` 不执行凭据恢复。
 
 常用覆盖参数：
 
