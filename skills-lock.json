@@ -19,7 +19,7 @@
       "source": "anthropics/skills",
       "sourceType": "github",
       "skillPath": "skills/mcp-builder/SKILL.md",
-      "computedHash": "826e46adf81e1372282e205c34e1a2ee876e72148007726e4a2512599d2fef7b",
+      "computedHash": "863dfe94bc38b62389884e78fee7f0a9c31bd74a6032f602eb84a66f4b8315c9",
       "sourceUrl": "https://github.com/anthropics/skills.git"
     },
     "pdf": {
