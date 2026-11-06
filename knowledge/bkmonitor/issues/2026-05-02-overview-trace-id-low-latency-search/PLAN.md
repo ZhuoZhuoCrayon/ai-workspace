@@ -4,7 +4,7 @@ tags: [overview, search, apm, trace, pre-calculate, low-latency, user-visit-reco
 issue: knowledge/bkmonitor/issues/2026-05-02-overview-trace-id-low-latency-search/README.md
 description: 双路径并行收集 Trace 命中，流式累计 TopK=3；Trace 绝对 5s deadline 与 Searcher 单项等待对齐，超时保留已有 0～2 条结果并结束
 created: 2026-05-02
-updated: 2026-10-23
+updated: 2026-11-04
 ---
 
 # 优化首页 TraceID 全局搜索的预计算延迟 —— 实施方案
@@ -26,13 +26,14 @@ updated: 2026-10-23
 
 | 决策点 | 结论 | 理由 |
 | --- | --- | --- |
-| 预计算与直查关系 | 并行收集，按 `application_id` 去重累计 | 预计算覆盖老数据广度，直查覆盖延迟期；里程碑 2 不再“先非空者赢” |
+| 预计算与直查关系 | 并行收集，按 `(trace_id, application_id)` 去重累计 | 预计算覆盖老数据广度，直查覆盖延迟期；里程碑 2 不再“先非空者赢” |
+| 批量 TraceID | 英文逗号分隔，去空格、去重后最多 `20` 个；两条路径共享一次请求的 deadline 与并发窗口 | 支撑 RUM 时间轴按可见 Resource 批量关联 Trace，避免逐条请求 |
 | 候选业务范围 | 当前业务、默认业务、`UserVisitRecord` 出现的业务三类去重并集 | 兼顾用户主场景，避免拉全量业务造成雪崩 |
 | 访问数据源 | `UserVisitRecord`，废弃 `FUNCTION_ACCESS_RECORD.apm_service` | 后者是服务访问记录而非应用访问，与 Trace 检索语义不匹配 |
 | 应用权限过滤 | 双路径命中在统一出口校验应用查看权限，授权后才进入快照与 TopK | 业务访问权限不能代替应用查看权限；每个唯一命中只鉴权一次 |
 | 候选应用规模 | TopN 默认 `15`，并发查询 | 与现有预计算多 cluster 并发量级一致 |
 | 直查时间窗口 | 近 `7d` | 与预计算路径对齐，便于结果合并语义统一 |
-| Trace 返回上限 | `K=3`，Trace 专用常量，不复用 `page_size` | 多应用命中只需少量候选；编码成本可忽略 |
+| Trace 返回上限 | 每个 TraceID 独立 `K=3`，Trace 专用常量，不复用 `page_size` | 多应用命中只需少量候选；批量时单个 Trace 不挤占其他 Trace 的名额 |
 | Trace 收集超时 | 绝对 `5s` deadline（`time.monotonic()`） | 与 `Searcher` 单项 `get(timeout=5)` 对齐；`K` 填不满时不扫完全部候选 |
 
 
@@ -105,15 +106,20 @@ score = APP_WEIGHT_CURRENT + log1p(visit)                                       
 |--------------|-------------------------------------------------------|-------------------------------------|
 | `table_id`   | `DataLink.pre_calculate_config.cluster[*].table_name` | `Application.trace_result_table_id` |
 | `time_field` | `PreCalculateSpecificField.MIN_START_TIME`            | `OtlpKey.END_TIME`                  |
-| `filter`     | `trace_id__eq`                                        | `trace_id__eq`                      |
-| `values`     | `BIZ_ID`、`APP_NAME`                                   | `trace_id`（仅判存在）                    |
-| `limit`      | `5`                                                   | `1`                                 |
+| `filter`     | `trace_id__eq=trace_ids`，每张预计算表一次批量查询 | `trace_id__eq=trace_ids`，每应用一次     |
+| `values`     | `TRACE_ID`、`BIZ_ID`、`APP_NAME` | `trace_id`（仅判存在）                    |
+| `distinct`   | 按 `trace_id → app_name → biz_id` 分桶去重 | `trace_id`（折叠，多 Span 不挤占名额）        |
+| `limit`      | UQ ES 每层 `max(TraceID 数, 5)`；旧 ES 不做全局截断，调用方按每个 TraceID 保留 `5` 个候选 | `len(trace_ids)`                    |
 | `time_range` | 近 `7d`                                                | 近 `7d`                              |
 
 
 直查命中后，`bk_biz_id`、`app_name`、`application_id` 由调用侧的 `Application` 实例直接提供，不依赖查询返回值。
 
+预计算查询数固定为预计算表数，直查查询数固定为候选应用数，均不随 TraceID 数量增长。预计算聚合以 TraceID 为最外层，避免热门 Trace 的多条记录挤占其他 Trace 的候选；旧 ES 的 `biz_id` 桶名归一化由解析器兼容。
+
 ### d. 并发与超时
+
+批量扩展 PR 沿用当前主干的 `10s` 收集超时与 `25` 个直查候选；下方里程碑 2 的 `5s` 目标仍待单独收口，本 PR 不承诺真实存储查询在 `5s` 内完成。
 
 里程碑 1（已落地）：直查与双轨使用 `ThreadPool` + `_first_truthy_concurrent`，首个非空即结束。
 
@@ -205,8 +211,8 @@ or stop_event.is_set()
 | `iter_search` | 启动双路、按 `application_id` 去重累计 `K=3`、按 Trace `5s` deadline 收口并流式 yield |
 | `_aggregate_user_visits` | 单次 GROUP BY 查询 `UserVisitRecord`，输出 `(bk_biz_id, app_name) → count` |
 | `_collect_candidate_apps` | 候选业务并集（当前 ∪ 默认 ∪ 访问过） → 全量应用 → 统一打分截 TopN |
-| `_query_raw_apps_by_trace_id` | 直查单应用 `trace_result_table_id`，`limit=1` 仅判存在 |
-| `_query_precalc_apps_by_trace_id` | 多 cluster 并发查询预计算表，由 `_query_apps_by_trace_id` 重命名，逻辑不变 |
+| `_query_raw_apps_by_trace_ids` | 每应用批量直查 `trace_result_table_id`，按 TraceID 折叠并返回命中的 ID |
+| `_query_precalc_apps_by_trace_ids` | 每张预计算表批量聚合候选，由调用方按 TraceID 截取候选上限 |
 
 
 ### b. 候选应用收集步骤
@@ -222,7 +228,8 @@ or stop_event.is_set()
 | 常量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `RAW_QUERY_TOP_N` | `15` | Path B 直查应用上限 |
-| `TRACE_TOP_K` | `3` | Trace 最终返回上限，不复用 `page_size` |
+| `TRACE_TOP_K` | `3` | 每个 TraceID 的返回上限，不复用 `page_size` |
+| `MAX_TRACE_IDS` | `20` | 单次批量检索上限，在 `SearchSerializer.validate_query` 中按反转义、去重后的数量校验 |
 | `TRACE_SEARCH_TIMEOUT` | `5` | Trace 收集绝对超时，与 `Searcher.get(timeout=5)` 对齐 |
 | `BIZ_WEIGHT_CURRENT` | `1` | 未访问层：当前业务加分 |
 | `BIZ_WEIGHT_DEFAULT` | `1` | 未访问层：默认业务加分 |
@@ -238,7 +245,7 @@ or stop_event.is_set()
 | **[Add]** `SearchItem.iter_search()` | 默认把 `search()` 的列表结果逐条 yield；普通搜索项无需改实现。 |
 | **[Change]** `Searcher.search()` | [a] 消费 `iter_search()` 并写入输出队列<br />[b] `get(timeout=5)` 等待下一条，对齐现状 `next(timeout=5)` |
 | **[Change]** `SearchItem.search()` | 签名新增 `stop_event`；普通子类忽略该参数，继续返回列表。 |
-| **[Change]** `TraceSearchItem.iter_search()` | [a] 创建 Trace 专用 `deadline=5` 与 `trace_stop`<br />[b] 去重并 `yield` `1→2→3` 累计快照<br />[c] 满足结束条件后停止 |
+| **[Change]** `TraceSearchItem.iter_search()` | [a] 创建 Trace 专用 `deadline=5` 与 `trace_stop`<br />[b] 按 `(trace_id, application_id)` 去重，各 Trace 独立 TopK<br />[c] 合并已就绪命中后推送累计快照，满足结束条件后停止 |
 | **[Change]** `TraceSearchItem._path_precalc()` | 持续返回各预计算表命中；提交或发起查询前检查 `trace_stop` 与 `deadline`。 |
 | **[Change]** `TraceSearchItem._path_raw()` | 持续返回 TopN 候选命中；提交或发起查询前检查 `trace_stop` 与 `deadline`。 |
 | **[Delete]** `TraceSearchItem._first_truthy_concurrent()` | 删除“首个非空即结束”的公共收敛逻辑。 |
@@ -292,54 +299,47 @@ with ThreadPool() as pool:
 #### [Change] `TraceSearchItem.iter_search()`
 
 ```python
-deadline = time.monotonic() + TRACE_SEARCH_TIMEOUT  # 5s
+deadline = time.monotonic() + TRACE_SEARCH_TIMEOUT
 trace_stop = threading.Event()
-checked_app_ids = set()
+seen = {}  # (trace_id, application_id) -> item
+per_trace_count = Counter()
+application_permissions = {}  # application_id -> allowed
 
-def _drain_path(path):
+# 双路径把 (trace_id, app) 与完成哨兵写入 app_queue。
+# 本批先取一项，再非阻塞收集所有已就绪项；不等待后续命中到齐。
+while unfinished_paths and not cls._should_stop(stop_event, trace_stop, deadline):
     try:
-        for app in path:
-            if stop_event.is_set() or trace_stop.is_set() or time.monotonic() >= deadline:
-                break
-            app_queue.put(app)
-    finally:
-        app_queue.put(None)
+        hit = app_queue.get(timeout=min(0.2, deadline - time.monotonic()))
+    except queue.Empty:
+        continue
+    hits = [hit]
+    while not app_queue.empty():
+        hits.append(app_queue.get_nowait())
 
-paths = [
-    cls._path_precalc(..., stop_event=stop_event, trace_stop=trace_stop, deadline=deadline),
-    cls._path_raw(..., stop_event=stop_event, trace_stop=trace_stop, deadline=deadline),
-]
+    previous_count = len(seen)
+    for hit in hits:
+        if cls._should_stop(stop_event, trace_stop, deadline):
+            break
+        if hit is path_done:
+            unfinished_paths -= 1
+            continue
+        trace_id, app = hit
+        key = (trace_id, app.application_id)
+        if key in seen or per_trace_count[trace_id] >= TRACE_TOP_K:
+            continue
+        if app.application_id not in application_permissions:
+            application_permissions[app.application_id] = bool(filter_data_by_permission(...))
+        if not application_permissions[app.application_id]:
+            continue
+        seen[key] = cls._build_item(trace_id, app)
+        per_trace_count[trace_id] += 1
 
-with ThreadPool(2) as pool:
-    try:
-        pool.map_async(_drain_path, paths)
+    if len(seen) > previous_count:
+        yield {"type": "trace", "name": "Trace", "items": list(seen.values())}
+    if len(seen) == len(trace_ids) * TRACE_TOP_K:
+        break
 
-        while (
-            len(seen) < TRACE_TOP_K
-            and unfinished_paths
-            and not stop_event.is_set()
-            and time.monotonic() < deadline
-        ):
-            remaining = deadline - time.monotonic()
-            try:
-                app = app_queue.get(timeout=min(0.2, remaining))
-            except queue.Empty:
-                continue
-            if app is None:
-                unfinished_paths -= 1
-                continue
-            if app.application_id in checked_app_ids:
-                continue
-            checked_app_ids.add(app.application_id)
-            if not filter_data_by_permission(...):  # 当前租户、用户及 APM 应用查看权限
-                continue
-
-            seen[app.application_id] = app
-            yield [{"type": "trace", "name": "Trace", "items": [
-                cls._build_item(query, hit) for hit in seen.values()
-            ]}]
-    finally:
-        trace_stop.set()
+# generator 关闭、超时或异常时设置 trace_stop，阻止提交新查询。
 ```
 
 #### [Change] 双路径滑动窗口探测
@@ -392,6 +392,7 @@ def _iter_hits(candidates, probe, max_workers):
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-11-04 18:00` | [a] [PR #13097](https://github.com/TencentBlueKing/bk-monitor/pull/13097) 在 `65ed3520ae651ba5841dfeccd802627309509b05` 完成复查，预计算按表批量聚合，队列合并已就绪命中后推送，两条后端线程已修复，前端代码撤出后两条意见仍保留<br />[b] 固定存储延迟 `100 ms`、预计算表 `3` 张、候选应用 `25` 个，各重复 `3` 次：批量 `20` 个 ID 的预计算查询由 `60` 次降到 `3` 次，总耗时中位数由 `1.81s` 降到 `0.61s`，首条结果约 `155 ms`，累计推送 item 由 `210` 条降到 `20` 条，单 ID 调度耗时保持约 `0.61s`<br />[c] `40` 项定向测试及 Ruff 检查通过，覆盖 UQ 与旧 ES 聚合、桶名兼容和各 Trace 独立上限，未独立执行真实 ES 聚合压测或 paas3 验收，模拟结果只说明调度与推送成本 |
 | `2026-10-23 20:00` | 双路径命中统一执行应用级鉴权；业务有权限但应用无权限、TopK 补位、重复命中、异常拒绝及 SSE 输出回归验证通过，相关测试共 `88` 条通过 |
 | `2026-07-24 10:00` | [a] 里程碑 2 收口：`K=3` + Trace 绝对 `5s`<br />[b] `Searcher` 回到 `get(timeout=5)` 汇聚版，不引入 `item_timeout`<br />[c] Trace 内部 `deadline=5` 与外层单项等待对齐 |
 | `2026-05-06 16:00` | PR #10492 review 收口：预计算恢复 `MIN_START_TIME`，访问层基础分 + `log1p`，未访问层保留业务来源与服务数加权 |
@@ -414,3 +415,4 @@ def _iter_hits(candidates, probe, max_workers):
 | ✅ | `feat/apm_trace/#1010158081134011153` | 里程碑 1：首页 TraceID 检索支持原始 Trace 低延迟通道 | [TencentBlueKing/bk-monitor #10492](https://github.com/TencentBlueKing/bk-monitor/pull/10492) |
 | 🔄 | `<branch_name>` | 里程碑 2：流式 TopK=3 + Trace 绝对 5s 超时收口 | 待创建 |
 | 🔄 | `fix/codex-trace-search-permissions/#1010158081165689381` | 全局 Trace 搜索过滤无应用查看权限的命中 | [TencentBlueKing/bk-monitor #12922](https://github.com/TencentBlueKing/bk-monitor/pull/12922) |
+| 🔄 | `feat/rum_timeline_multi_trace_search_streaming_return/#1010158081138936161` | 全局检索支持批量 TraceID 查询，支撑 RUM 时间轴关联 Trace | [TencentBlueKing/bk-monitor #13097](https://github.com/TencentBlueKing/bk-monitor/pull/13097) |

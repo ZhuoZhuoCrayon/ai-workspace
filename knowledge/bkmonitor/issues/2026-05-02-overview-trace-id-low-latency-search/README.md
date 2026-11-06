@@ -3,7 +3,7 @@ title: 优化首页 TraceID 全局搜索的预计算延迟
 tags: [overview, search, apm, trace, pre-calculate, low-latency]
 description: 双路径并行收集 Trace 命中，流式累计 TopK=3；Trace 绝对 5s deadline 与 Searcher 单项等待对齐，超时保留已有结果并结束
 created: 2026-05-02
-updated: 2026-10-23
+updated: 2026-11-04
 ---
 
 # 优化首页 TraceID 全局搜索的预计算延迟

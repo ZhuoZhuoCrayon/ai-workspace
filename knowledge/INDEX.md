@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-11-01
+> 最后更新：2026-11-04
 
 ## 0x01 项目知识
 
@@ -21,8 +21,8 @@
 
 ## 0x02 最近更新
 
+- 2026-11-04：更新 [优化首页 TraceID 全局搜索的预计算延迟](./bkmonitor/issues/2026-05-02-overview-trace-id-low-latency-search/README.md)（批量检索按表聚合并合并累计快照，记录性能复查结果与验证边界）
 - 2026-11-01：更新 [APM 服务数据状态下沉到后台服务发现](./bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md)（补齐关联日志状态后台刷新的评审、验证与合入记录）
 - 2026-10-30：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（补充 Session / View 降级检索设计、验证记录与 PR 交付状态）
 - 2026-10-23：更新 [bk-collector 指标元信息采集与同步](./bkmonitor-datalink/issues/2026-09-15-collector-metric-metadata/README.md)（完成本地生产模块、双 Bloom 轮转、防抖、配额熔断与协议验证，记录发布依赖）
 - 2026-10-23：新增 [APM 日志存储支持切换 ES 集群](./bkmonitor/issues/2026-10-23-apm-log-storage-cluster-switch/README.md)（补齐选择入口与保存后刷新，已提单并加入排期）
-- 2026-10-23：更新 [通用聊天 Agent 桥接组件](./ai-workspace/issues/2026-10-17-agent-chat-bridge/README.md)（执行器与模型全局切换修复已直接推送 `main`，上下文仍按会话保留）
