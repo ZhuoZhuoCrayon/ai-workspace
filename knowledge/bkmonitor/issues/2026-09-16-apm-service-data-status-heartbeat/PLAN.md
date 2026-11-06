@@ -4,7 +4,7 @@ tags: [apm, data-status, discover, heartbeat, topo-node, log, profiling]
 issue: knowledge/bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md
 description: 后台维护服务数据心跳与关联日志状态快照，SaaS 只读映射服务状态
 created: 2026-09-16
-updated: 2026-11-01
+updated: 2026-11-06
 ---
 
 # APM 服务数据状态下沉到后台服务发现 —— 实施方案
@@ -150,11 +150,15 @@ flowchart LR
 
 `touch_heartbeat()` 在 `last_data_at` 非空时确保 `source` 包含当前数据类型。该补偿只更新已有节点，不创建节点；`last_data_at=None` 只推进 `checked_at`，不补来源。
 
-调用链与指标、日志按 `app_id % 10 == minute % 10` 在同一分钟派发，可能同时写同一行。写入方在事务内按 `id` 顺序锁行后重读合并，并发写入串行执行，不会丢失更新。行锁超时或死锁时，写入方回滚本次写入并保留旧值，由下一轮发现补齐。
+调用链与指标、日志按 `app_id % 10 == minute % 10` 在同一分钟派发，可能同时写同一行。写入方在事务内按 `id` 顺序锁行后重读合并，并发写入串行执行，不会丢失更新。
+
+行锁超时（`1205`）或死锁（`1213`）后回滚本次写入；独立调用在事务外退避并重放原观测，外层已有事务时只尝试一次。次数或重试启动预算耗尽后保留旧值，由下一轮发现补齐，其他数据库异常上抛。
 
 - *[1] 写入更新 `heartbeat` 与必要的 `source` 补偿，不改 `updated_at`，节点仍按拓扑更新时间回收。*
 - *[2] 服务状态使用独立的观测窗口，默认 `3600 s`，吸收发现任务排队及缓存滞后；超出窗口仍可能误判，本期不增加更新延迟状态。*
 - *[3] 心跳只由后台发现器更新，页面查询不更新心跳时间。*
+- *[4] 独立调用最多尝试 `3` 次，退避依次为 `0.1 s`、`0.2 s`；每次重新锁行读取最新值，输入数据时间与检查时间保持原观测值。*
+- *[5] 首次可重试冲突后读取会话原生锁等待时间 `T`，以调用开始时刻加 `3T + 0.3 s` 作为重试启动截止点，退避前后均检查。会话配置不修改，正在执行的 SQL 不被截断，该预算不是方法总耗时上限。*
 
 ### e. 状态映射协议
 
@@ -195,62 +199,44 @@ flowchart LR
     A["discover()"] -->|"observed only"| B["topo_key → last_data_at"]
     B --> E
 
-    subgraph T["touch_heartbeat() · transaction"]
+    subgraph T["touch_heartbeat() · transaction.atomic"]
         direction TB
         E["select_for_update()<br/>order_by('id')"] --> F["merge<br/>heartbeat[data_type] + source"]
         F --> G["bulk_update<br/>fields=['heartbeat', 'source']"]
     end
 
-    E -.->|"lock timeout /<br/>deadlock"| R["rollback<br/>return False"]
+    T -.->|"1205 / 1213"| R["rollback"]
+    R --> C{"attempt / retry_deadline"}
+    C -->|"retry"| S["time.sleep()<br/>outside atomic"]
+    S -->|"before deadline"| E
+    C -->|"stop"| X["return False"]
+    S -->|"deadline reached"| X
 ```
 
 - *[1] `upsert_telemetry_nodes` 不加锁：并发覆盖最多丢掉其他来源标签，下一轮有效心跳或节点发现补回。*
-- *[2] 各发现器在 `discover()` 末尾从本轮窗口数据生成「服务键 → 最后数据时间」映射，不改动现有节点写入流程，取值方式见各数据源小节。*
+- *[2] 各发现器从本轮窗口数据生成「服务键 → 最后数据时间」映射，不改动现有节点写入流程，取值方式见各数据源小节。重试范围仅为 `touch_heartbeat`，不重查存储或重放节点发现。*
 
-`touch_heartbeat` 核心逻辑：
+`touch_heartbeat` 的事务与读写统一使用 `router.db_for_write(TopoNode)` 对应连接。单次事务只负责以下合并，重试边界见「心跳协议」：
 
 ```python
-@classmethod
-def touch_heartbeat(
-    cls,
-    bk_biz_id: int,
-    app_name: str,
-    data_type: str,
-    last_data_at_mapping: dict[str, int | None],  # topo_key -> 本轮观测到的最后数据时间（秒）
-    checked_at: int,  # 本次检查完成时间（秒）
-) -> bool:
-    try:
-        with transaction.atomic():
-            # reload：按 id 顺序锁行后重读，并发写入串行合并 [3]
-            nodes: list[TopoNode] = list(
-                cls.objects.select_for_update()
-                .filter(bk_biz_id=bk_biz_id, app_name=app_name, topo_key__in=last_data_at_mapping)
-                .only("id", "topo_key", "heartbeat", "source")
-                .order_by("id")
-            )
+# 已按 id 顺序锁行重读；每次尝试均重新构建 nodes。
+for node in nodes:
+    sub = node.heartbeat.get(data_type) or {}
+    new_last_data_at = last_data_at_mapping[node.topo_key]
+    if new_last_data_at is not None:
+        sub["last_data_at"] = max(sub.get("last_data_at") or 0, new_last_data_at)
+        source = list(node.source or [])
+        if data_type not in source:
+            source.append(data_type)
+            node.source = source
+    sub["checked_at"] = max(sub.get("checked_at") or 0, checked_at)
+    node.heartbeat[data_type] = sub
 
-            # merge：只改本类型心跳；有实际数据时补齐本类型来源
-            for node in nodes:
-                sub: dict[str, int] = node.heartbeat.get(data_type) or {}
-                new_last_data_at: int | None = last_data_at_mapping[node.topo_key]
-                if new_last_data_at is not None:
-                    sub["last_data_at"] = max(sub.get("last_data_at") or 0, new_last_data_at)
-                    source: list[str] = list(node.source or [])
-                    if data_type not in source:
-                        source.append(data_type)
-                        node.source = source
-                sub["checked_at"] = max(sub.get("checked_at") or 0, checked_at)
-                node.heartbeat[data_type] = sub
-
-            # bulk_update：不声明 updated_at，不触发 auto_now
-            cls.objects.bulk_update(nodes, fields=["heartbeat", "source"], batch_size=200)
-    except OperationalError:  # 仅锁超时、死锁返回 False，其他异常上抛
-        return False
-    return True
+TopoNode.objects.using(database).bulk_update(nodes, fields=["heartbeat", "source"], batch_size=200)
 ```
 
-- *[3] 新服务的节点已在 `discover()` 内建出，`heartbeat` 默认为 `{}`，reload 能直接读到。*
-- *[4] `source` 补偿只作用于 `last_data_at_mapping` 命中的已有节点；缺失节点不创建，空数据时间不补来源。*
+- *[3] 新服务的节点已在 `discover()` 内建出，`heartbeat` 默认为 `{}`，reload 能直接读到；缺失节点不创建，空数据时间不补来源。*
+- *[4] Metric 分别写入指标心跳与组件、远程服务的 Trace 心跳，前一次返回 `False` 仍执行后一次；Metric、Log、Profiling 记录各自心跳写入结果。*
 
 ### b. 调用链心跳
 
@@ -622,6 +608,7 @@ uv run pytest apm/tests packages/apm_web/tests
 
 | 时间                 | 结论性进展                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `2026-11-06 10:00` | [a] 心跳锁冲突重试 [PR #13141](https://github.com/TencentBlueKing/bk-monitor/pull/13141)（`4d8802f531d7951a329528d39578ea07bbb271fa`）完成 [review](https://github.com/TencentBlueKing/bk-monitor/pull/13141#pullrequestreview-5795053229)，未发现阻塞问题，待合入<br />[b] 独立调用最多 `3` 次，事务外退避并重新锁行合并原观测；外层事务不重试，重试启动预算不限制在途 SQL，总耗时仍受原生锁等待与批量行锁影响<br />[c] Python 3.11.11、MySQL 8.0.46 隔离模型表下，心跳、真实锁冲突和 Trace 检查点相关 `88` 项回归通过，Ruff、格式与 diff 检查通过<br />[d] 正常单节点写入前后均为 `4` 条 SQL，原生等待 `2 s` 的持续冲突用例耗时约 `6.34 s`<br />[e] 测试使用 LocMemCache、FakeRedis 并跳过其他应用的迁移后初始化，未独立复跑完整迁移、paas3 与生产负载 |
 | `2026-10-28 17:00` | [a] 关联日志状态后台刷新 [PR #12998](https://github.com/TencentBlueKing/bk-monitor/pull/12998) 完成 review 并获 Approve，未发现阻塞问题，实现符合里程碑 3，合并提交为 `b620c4ea0b1a5aeb7a33848d922e2f5ac7bf353a`<br />[b] 相关 `120` 项回归在 Python 3.11.11、SQLite 内存表与 LocMemCache 隔离环境通过，变更文件 Ruff 检查通过<br />[c] 未独立验证真实 Redis、日志平台、MySQL 迁移和生产负载 |
 | `2026-10-27 16:00` | [a] Trace 按应用和数据源记录检查边界，最长补扫一小时，单次折叠按 `kind DESC, end_time DESC` 排序，接受有损选择<br />[b] 检查位置使用固定 Trace 缓存模板，缓存生成入口无改动，撤回 NodeDiscover 批次异常扩展并移除截断分支<br />[c] 调度先筛选再加锁，日志保留生命周期、三段延迟与有界摘要，删除重复时间戳、批次调参和过滤计数，不保留 DEBUG<br />[d] 只删 QueryHelper 重复查询体，保留 UNIFY_QUERY，缓存无变化静默，保留增删改摘要、清理原因与十个 ID 样本及写入失败上下文<br />[e] [PR #12958](https://github.com/TencentBlueKing/bk-monitor/pull/12958) 的相关回归 `144` 项通过（含缓存诊断与共享查询层回归），排除的 `7` 项已在未修改基线复现失败或数据库环境问题<br />[f] 未验证真实存储集成和生产负载，本机 PreCI 不可用 |
 | `2026-10-26 11:00` | [a] 旧状态查询与缓存清理 [PR #12920](https://github.com/TencentBlueKing/bk-monitor/pull/12920) 已合入，合并提交为 `969ef23c0a549a43be827aa288c3bb68ffde10fe`<br />[b] 性能分析状态读取 [PR #12893](https://github.com/TencentBlueKing/bk-monitor/pull/12893) 已于 `2026-10-22` 合入，合并提交为 `9a2b831afc758a05d809c252347c10d2a4ffe395`<br />[c] 本期后台心跳生产、服务全集与状态读取、应用详情与图表探测移除、性能分析状态改造及旧对象清理均已合入；真实存储集成与端到端性能未在本次 review 中独立验证 |
@@ -664,3 +651,4 @@ uv run pytest apm/tests packages/apm_web/tests
 | ✅ | `feat/apm_service_status_remove_legacy_query_cache/#1010158081139342361` | 旧服务状态查询、缓存与模板清理 | [TencentBlueKing/bk-monitor #12920](https://github.com/TencentBlueKing/bk-monitor/pull/12920) |
 | ✅ | `feat/apm_related_log_index_status_background_refresh/#1010158081139432693` | 里程碑 3：关联日志状态后台刷新 | [TencentBlueKing/bk-monitor #12998](https://github.com/TencentBlueKing/bk-monitor/pull/12998) |
 | 🔄 | `fix/codex-trace-discovery-catchup/#1010158081165814054` | Trace 服务发现延迟补扫与任务日志 | [TencentBlueKing/bk-monitor #12958](https://github.com/TencentBlueKing/bk-monitor/pull/12958) |
+| 🔄 | `feat/apm_service_heartbeat_add_lock_conflict_retry/#1010158081139784789` | 服务心跳锁冲突有限重试 | [TencentBlueKing/bk-monitor #13141](https://github.com/TencentBlueKing/bk-monitor/pull/13141) |

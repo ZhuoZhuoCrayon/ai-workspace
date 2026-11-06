@@ -3,8 +3,8 @@
 
 | 文件                                                                                                     | 标签                                                        | 摘要                                                      | 更新日期       |
 |------|------|------|---------|
+| [APM 服务数据状态下沉到后台服务发现](./2026-09-16-apm-service-data-status-heartbeat/README.md) | `apm` `data-status` `discover` `heartbeat` `topo-node` `log` `profiling` | 由各 telemetry 发现器落盘服务级数据心跳，让应用详情读取心跳判定状态，SaaS 下线请求侧状态重算 | 2026-11-06 |
 | [优化首页 TraceID 全局搜索的预计算延迟](./2026-05-02-overview-trace-id-low-latency-search/README.md) | `overview` `search` `apm` `trace` `pre-calculate` `low-latency` | 双路径并行收集 Trace 命中，流式累计 TopK=3，并用绝对 5s deadline 收口 | 2026-11-04 |
-| [APM 服务数据状态下沉到后台服务发现](./2026-09-16-apm-service-data-status-heartbeat/README.md) | `apm` `data-status` `discover` `heartbeat` `topo-node` `log` `profiling` | 由各 telemetry 发现器落盘服务级数据心跳，让应用详情读取心跳判定状态，SaaS 下线请求侧状态重算 | 2026-11-01 |
 | [APM 日志存储支持切换 ES 集群](./2026-10-23-apm-log-storage-cluster-switch/README.md) | `apm` `log` `storage` `frontend` | 补齐日志存储集群编辑入口，复用既有配置链路 | 2026-10-23 |
 | [LLM 消息截断容错展示](./2026-10-20-llm-message-truncation/README.md) | `apm` `llm` `json` `truncation` `frontend` | 避免截断消息被误判为空，保留可解析内容并提示数据不完整 | 2026-10-20 |
 | [RUM 分层统一查询](./2026-08-07-rum-unified-query/README.md) | `rum` `apm` `query` `span` `view` `session` `factory` `unify-query` `semconv` | 用统一 Target、查询基类和语义字段目录承接 RUM 分层检索与 APM Trace 查询 | 2026-10-30 |
