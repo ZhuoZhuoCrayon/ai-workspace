@@ -27,6 +27,7 @@ make bootstrap
 - 把注册表中缺失的项目克隆到 `~/Project`。已有目录不拉取、不改动。
 - 按 `skills-lock.json` 安装外部 skills，链接项目 skills，并把自研 skills 挂到 `.claude/skills/` 和 `.codebuddy/skills/`。
 - 安装 `pre-commit` hook。
+- 安装缺失的 WeCom CLI，打印首次授权命令；默认的企业微信 skills 随锁文件统一安装。
 - 本机没有 `gh` 时安装 GitHub CLI，尚未登录 github.com 时在交互终端里执行 `gh auth login`。
 
 没有内网权限时，`private/` 和内网项目记为失败，其余继续。项目存放位置用 `PROJECTS_ROOT` 覆盖：
@@ -34,6 +35,8 @@ make bootstrap
 ```bash
 make bootstrap PROJECTS_ROOT=/data/workspace
 ```
+
+只需安装技能和配套 WeCom CLI 时执行 `make init-skills`；更新时执行 `make skills-update`，锁文件中新增的 WeCom 技能也随该流程安装和挂载。
 
 MCP、Codex 和 BKM CLI 的配置不在这一步里。`private/` 克隆完成后，按 [private/configs/README.md](private/configs/README.md) 复制到用户目录。依赖、技能更新和提交检查见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 

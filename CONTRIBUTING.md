@@ -29,6 +29,7 @@ make bootstrap
 - 按 `skills-lock.json` 安装外部 skills。
 - 链接项目 skills，并把自研 skills 挂到 `.claude/skills/` 和 `.codebuddy/skills/`。
 - 安装 git `pre-commit` hook。
+- 安装缺失的 WeCom CLI，打印首次授权命令。
 
 `make bootstrap` 还会安装 GitHub CLI。尚未登录 github.com 且当前是交互终端时，接着执行 `gh auth login`。没有交互终端时只打印登录命令。
 
@@ -56,19 +57,23 @@ make bootstrap PROJECTS_ROOT=/data/workspace
 - `NODE_VERSION=20.18.3`：本机有 nvm 时切换到这个版本；没有 nvm 时使用 `PATH` 中的 `node`。
 - `UV=uv`：Python 工具入口，默认读取 `pyproject.toml` 中的镜像源配置。
 
+`make init` 为已有仓库安装 hook、外部 skills 和 WeCom CLI，不克隆注册项目。
+
 ## 0x03 更新 Skills
 
-更新工作区内的外部 skills，重新链接项目 skills 并清理改名后遗留的项目链接和 IDE 挂载：
+按锁文件更新工作区内的外部 skills、同步项目链接和 IDE 挂载，并安装缺失的 WeCom CLI：
 
 ```bash
 make skills-update
 ```
 
-维护者确认差异后提交 `skills-lock.json`。`-p` 只更新安装在工作区内的 skills。
+维护者确认差异后提交 `skills-lock.json`。`-p` 限定工作区范围，锁文件中新增但本机缺失的技能也会安装。
 
 初始化和更新会为旧版 GitHub 锁条目补齐 `sourceUrl`。上游 CLI 的删除检查直接克隆该地址，只记录 `owner/repo` 时会把它当成本地路径并跳过检查。
 
-`make init-skills` 同样同步项目链接和 IDE 挂载。只同步本地项目 skills 时执行 `make skills-update-projects`，无需联网更新外部 skills。
+`make init-skills` 同样同步项目链接、IDE 挂载并安装缺失的 WeCom CLI，`make init` 和 `make bootstrap` 复用该流程。
+
+只同步本地项目 skills 时执行 `make skills-update-projects`，无需联网更新外部 skills。
 
 同步脚本先校验完整清单，再更新链接。旧名称指向已注册项目技能目录时自动移除，后续取消注册的链接由本机 `.agents/.project-skills.json` 记录识别；普通目录和其他来源的软链接保持不动。
 
@@ -81,6 +86,14 @@ make skills-mount
 挂载目标由 `SKILLS_MOUNT_TARGETS` 控制，默认是 `.claude` 和 `.codebuddy`。项目 skills 是符号链接，不挂到 IDE 目录。Cursor 直接读取 `.agents/skills/`。
 
 如需跳过部分 skill，可以覆盖 `SKILLS_MOUNT_BLACKLIST`。
+
+企业微信技能来自 [WecomTeam/wecom-cli](https://github.com/WecomTeam/wecom-cli/tree/main/skills)，通过同一份锁文件安装和更新。默认包含以下技能，名称均以 `wecomcli-` 开头：
+
+- 公共与文档：`shared`、`doc-manage`、`doc`、`smartpage`。
+- 表格：`sheet`、`smartsheet`，需求排期仍由已有的 `work-schedule` 承接。
+- 协作：`contact`、`calendar`、`meeting`、`todo`。
+
+CLI 版本与授权由 `wecomcli-shared` 在首次使用时检查，初始化仅安装缺失的 CLI 并提示 `wecom-cli auth init --noninteractive`。凭据由 CLI 在本机管理；其他技能按需安装后提交锁文件，能力说明以官方技能为准。
 
 ## 0x04 提交前检查
 

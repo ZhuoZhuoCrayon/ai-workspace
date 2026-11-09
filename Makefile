@@ -24,17 +24,17 @@ endef
 help:
 	@printf "%s\n" \
 		"Available targets:" \
-		"  make bootstrap           # 克隆缺失仓库，安装并挂载 skills，安装 hook" \
+		"  make bootstrap           # 克隆缺失仓库，安装 skills、hook 和协作 CLI" \
 		"  make repos-sync          # 克隆缺失的私有仓库和注册项目" \
 		"  make private-pull        # 快进拉取 private/ 的远端改动" \
 		"  make private-push        # 推送 private/ 已提交的改动" \
-		"  make init                # 安装 pre-commit hook 和锁文件中的 skills" \
+		"  make init                # 安装 hook、锁文件中的 skills 和 WeCom CLI" \
 		"  make init-pre-commit     # 安装 git pre-commit hook" \
-		"  make init-skills         # 按 skills-lock.json 安装外部 skills" \
+		"  make init-skills         # 安装外部 skills、同步挂载并安装 WeCom CLI" \
 		"  make init-gh             # 安装 GitHub CLI，并在终端里登录 github.com" \
 		"  make verify              # 验证 hook、断链和 skill 来源" \
 		"  make skills-mount        # 将 .agents/skills 下的目录挂载到 IDE 目录" \
-		"  make skills-update       # 更新工作区内的外部 skills，并链接项目 skills" \
+		"  make skills-update       # 更新 skills、同步挂载并安装缺失的 WeCom CLI" \
 		"Variables:" \
 		"  SKILLS_DIR=$(SKILLS_DIR)       # skills 目录" \
 		"  SKILLS_MOUNT_TARGETS=$(SKILLS_MOUNT_TARGETS) # 挂载目标" \
@@ -56,6 +56,7 @@ init-skills:
 	@python3 scripts/normalize_skill_sources.py
 	@$(MAKE) --no-print-directory skills-update-projects
 	@$(MAKE) --no-print-directory skills-mount
+	@$(call with_node,bash scripts/init_wecom.sh)
 
 init-gh:
 	@bash scripts/init_gh.sh
@@ -75,6 +76,7 @@ skills-update:
 	@python3 scripts/normalize_skill_sources.py
 	@$(MAKE) --no-print-directory skills-update-projects
 	@$(MAKE) --no-print-directory skills-mount
+	@$(call with_node,bash scripts/init_wecom.sh)
 
 skills-update-projects:
 	@python3 scripts/sync_project_skills.py --root "$$(pwd)" \
