@@ -72,6 +72,16 @@ test("对话端编号切换执行器，模型目录、偏好与旧卡片按执�
     await send("continue");
     assert.equal(codex.requests[1]?.model, "cx-b");
     assert.equal(codex.requests[1]?.sessionId, "codex-1");
+    assert.deepEqual(
+      [
+        codex.requests[0]?.prompt,
+        cursor.requests[0]?.prompt,
+        codex.requests[1]?.prompt,
+      ],
+      ["codex task", "cursor task", "continue"],
+    );
+    for (const request of [...codex.requests, ...cursor.requests])
+      assert.match(request.instructions, /聊天通道约定/);
     await bridge.close();
     store.close();
     const resumedStore = new SessionStore(temp.directory);

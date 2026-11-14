@@ -40,6 +40,17 @@ export function reply(): Reply & { updates: string[]; finals: string[] } {
 }
 export function executable(directory: string, source: string): string {
   const file = join(directory, `${randomUUID()}.mjs`);
-  writeFileSync(file, `#!${process.execPath}\n${source}`, { mode: 0o700 });
+  const configServer = `
+if (process.argv[2] === "app-server") {
+  const {createInterface} = await import("node:readline");
+  for await (const line of createInterface({input:process.stdin})) {
+    const {id, method} = JSON.parse(line);
+    console.log(JSON.stringify({id, result: method === "config/read" ? {config:{developer_instructions:"本机已有约定"}} : {}}));
+  }
+  process.exit(0);
+}`;
+  writeFileSync(file, `#!${process.execPath}\n${configServer}\n${source}`, {
+    mode: 0o700,
+  });
   return file;
 }

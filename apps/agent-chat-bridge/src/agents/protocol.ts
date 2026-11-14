@@ -7,6 +7,7 @@ export function buildArguments(
   options: AgentConfig,
   sessionId?: string,
   images: string[] = [],
+  instructionArgs: string[] = [],
 ): string[] {
   if (sessionId && !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$/.test(sessionId))
     throw new BridgeError("Agent 会话 ID 无效。");
@@ -38,6 +39,7 @@ export function buildArguments(
             `sandbox_workspace_write.network_access=${options.networkAccess}`,
           ]
         : []),
+      ...instructionArgs,
       ...model,
       ...images.flatMap((image) => ["--image", image]),
       ...(sessionId ? ["resume", sessionId] : []),
@@ -46,6 +48,7 @@ export function buildArguments(
   }
   return [
     "--print",
+    ...instructionArgs,
     "--trust",
     "--output-format",
     "stream-json",

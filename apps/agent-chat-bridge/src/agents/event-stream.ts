@@ -8,7 +8,7 @@ import { BridgeError } from "../types.js";
 
 // 只组装协议需要的字段；工具参数与结果按块消费，不在桥接层累积。
 const FIELDS =
-  /^(?:|type|thread_id|session_id|subtype|is_error|timestamp_ms|model_call_id|text|result|item\.(?:type|id|text)|message\.content\.\d+\.(?:type|text))$/;
+  /^(?:|type|thread_id|session_id|subtype|call_id|is_error|timestamp_ms|model_call_id|text|result|item\.(?:type|id|text)|message\.content\.\d+\.(?:type|text))$/;
 
 function guard(selected: boolean): Transform {
   let depth = 0;
@@ -76,12 +76,19 @@ function guard(selected: boolean): Transform {
 export async function* readAgentEvents(
   source: Readable,
   onActivity?: () => void,
+  observe?: (value: Record<string, unknown>) => void,
 ): AsyncGenerator<string> {
   let finished!: () => void;
   const done = new Promise<void>((resolve) => {
     finished = resolve;
   });
-  const stream = streamValues.asStream();
+  const stream = new Transform({
+    objectMode: true,
+    transform(event, _encoding, callback) {
+      observe?.(event.value);
+      callback(null, event);
+    },
+  });
   pipeline(
     source,
     new Transform({
@@ -100,6 +107,7 @@ export async function* readAgentEvents(
     guard(false),
     filter.asStream({ filter: FIELDS }),
     guard(true),
+    streamValues.asStream(),
     stream,
     () => finished(),
   );

@@ -49,11 +49,7 @@ const PRESENTATION = `读者可能在手机上阅读，首句给出关键结果�
 
 首句是否回答问题，长项能否拆开，链接是否对应当前证据，是否把尚未完成说成完成。`;
 
-export function buildPrompt(
-  prompt: string,
-  attachments: Attachment[],
-  persona?: string,
-): string {
+export function buildInstructions(persona?: string): string {
   return [
     "[聊天通道约定]",
     "只执行用户明确提出的任务。\n- 需要用户决定时用文本提问，本通道无法回答交互式工具。\n- 长任务先给阶段性结论，继续完成不依赖回答的部分。\n- 访问 GitHub 时优先使用已登录的 gh CLI。\n- 请求失败时区分认证、限频和网络错误，不把单次失败泛化为整机无法连接。",
@@ -61,7 +57,11 @@ export function buildPrompt(
     persona || DEFAULT_VOICE,
     "[结果结构与引用]",
     PRESENTATION,
-    "[用户消息]",
+  ].join("\n\n");
+}
+
+export function buildPrompt(prompt: string, attachments: Attachment[]): string {
+  return [
     prompt,
     ...(attachments.length
       ? [

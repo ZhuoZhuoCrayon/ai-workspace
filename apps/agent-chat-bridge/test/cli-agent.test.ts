@@ -13,6 +13,7 @@ const drain = async (
 ) => {
   const events = [];
   for await (const event of agent.run({
+    instructions: '用 "引号"、反斜线 \\ 和多行\n格式回答。',
     prompt: "--flag; $(touch untrusted)",
     signal,
     ...(sessionId ? { sessionId } : {}),
@@ -44,6 +45,13 @@ test("真实子进程边界：stdin 原文、恢复 ID、凭据过滤和终态",
     assert.equal(events.at(-1)?.type, "completed");
     const observed = JSON.parse(readFileSync(file, "utf8"));
     assert.equal(observed.prompt, "--flag; $(touch untrusted)");
+    const setting = observed.args.find((arg: string) =>
+      arg.startsWith("developer_instructions="),
+    );
+    assert.equal(
+      JSON.parse(setting.slice("developer_instructions=".length)),
+      '本机已有约定\n\n用 "引号"、反斜线 \\ 和多行\n格式回答。',
+    );
     assert.equal(observed.hasSecret, false);
     assert.equal(observed.cwd, realpathSync(temp.directory));
     assert.deepEqual(observed.args.slice(-3), ["resume", "thread-1", "-"]);
@@ -183,6 +191,76 @@ setInterval(()=>{},1000);
       }
     }
     await task.catch(() => {});
+    temp.cleanup();
+  }
+});
+
+test("Cursor 首轮和 resume 只发送用户正文，规则独立加载，探测失败不发送任务", async () => {
+  const temp = temporary();
+  try {
+    const log = join(temp.directory, "calls");
+    const run = (works: boolean) =>
+      new CliAgent(
+        "cursor",
+        {
+          writable: false,
+          command: executable(
+            temp.directory,
+            `
+import fs from 'node:fs';
+import path from 'node:path';
+const args=process.argv.slice(2);
+const workspace=args[args.indexOf('--workspace')+1];
+let dir=workspace;
+while (!fs.existsSync(path.join(dir,'.cursor/rules/bridge-channel.mdc'))) {
+ if(dir===path.dirname(dir)) throw new Error('missing channel rule');
+ dir=path.dirname(dir);
+}
+const rule=fs.readFileSync(path.join(dir,'.cursor/rules/bridge-channel.mdc'),'utf8');
+if(fs.realpathSync(workspace)!==process.cwd())throw new Error('wrong cwd');
+let input=''; for await (const chunk of process.stdin) input+=chunk;
+fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({args,rule,input})+'\\n');
+const token=rule.match(/bridge-rule-[a-f0-9-]{36}/)?.[0];
+console.log(JSON.stringify({type:'result',subtype:'success',session_id:'cursor-1',result:${works} && token ? token : workspace+'/result.txt'}));`,
+          ),
+        },
+        temp.directory,
+      );
+    const agent = run(true);
+    const first = await drain(agent);
+    assert(
+      first.some(
+        (e) =>
+          e.type === "text" && e.content === join(temp.directory, "result.txt"),
+      ),
+    );
+    await drain(agent, undefined, "cursor-1");
+    await assert.rejects(drain(run(false)), /用户消息尚未发送/);
+    const calls = readFileSync(log, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.equal(calls.length, 4);
+    const userCalls = calls.filter(
+      (call) => call.input === "--flag; $(touch untrusted)",
+    );
+    assert.equal(userCalls.length, 2);
+    assert(
+      userCalls.every(
+        (call) =>
+          call.rule.includes("alwaysApply: true") &&
+          call.rule.includes("格式回答"),
+      ),
+    );
+    assert.deepEqual(userCalls[1].args.slice(-2), ["--resume", "cursor-1"]);
+    assert.equal(userCalls[0].args.includes("--resume"), false);
+    assert(
+      calls.every(
+        (call) => !existsSync(call.args[call.args.indexOf("--workspace") + 1]),
+      ),
+    );
+    assert(!existsSync(join(temp.directory, ".cursor", "rules")));
+  } finally {
     temp.cleanup();
   }
 });

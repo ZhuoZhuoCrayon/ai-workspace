@@ -179,8 +179,9 @@ for (const kind of ["idle", "hard", "cancel"] as const) {
       store,
       {
         ...settings,
-        idleTimeoutMs: 300,
-        hardTimeoutMs: 900,
+        // 真实子进程需先完成配置握手再启动执行器；计时器的精确边界由上面的虚拟时钟测试覆盖。
+        idleTimeoutMs: 1500,
+        hardTimeoutMs: 2600,
       },
       logger,
     );
@@ -220,7 +221,7 @@ test("真实 CLI 不完整大工具事件的字节持续刷新空闲计时", asy
     let chunks = 0;
     const interval = setInterval(() => {
       process.stdout.write('x'.repeat(4096));
-      if (++chunks === 12) {
+      if (++chunks === 25) {
         clearInterval(interval);
         console.log('"}}');
         console.log('{"type":"item.completed","item":{"type":"agent_message","text":"完成"}}');
@@ -239,8 +240,8 @@ test("真实 CLI 不完整大工具事件的字节持续刷新空闲计时", asy
     store,
     {
       ...settings,
-      idleTimeoutMs: 400,
-      hardTimeoutMs: 5000,
+      idleTimeoutMs: 1500,
+      hardTimeoutMs: 6500,
     },
     logger,
   );

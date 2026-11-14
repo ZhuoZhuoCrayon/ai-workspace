@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig } from "../src/config.js";
-import { buildPrompt } from "../src/prompt.js";
+import { buildInstructions, buildPrompt } from "../src/prompt.js";
 import { temporary } from "./helpers.js";
 
 test("人格文件按配置目录读取，两种执行器使用同一表达约定且保留任务边界", () => {
@@ -23,14 +23,14 @@ test("人格文件按配置目录读取，两种执行器使用同一表达约�
     );
     const cfg = loadConfig(file);
     assert.equal(cfg.agents.codex.fullAccess, true);
-    const prompt = buildPrompt("用户任务", [], cfg.persona);
+    const prompt = buildInstructions(cfg.persona);
     assert(prompt.includes(cfg.persona));
     assert.match(prompt, /只执行用户明确提出的任务/);
     assert.match(prompt, /优先使用已登录的 gh CLI/);
-    assert(prompt.endsWith("用户任务"));
+    assert.equal(buildPrompt("用户任务", []), "用户任务");
     writeFileSync(join(temp.directory, "persona.md"), "x".repeat(16001));
     assert.throws(() => loadConfig(file), /16,000/);
-    assert.match(buildPrompt("任务", []), /不编造原因/);
+    assert.match(buildInstructions(), /不编造原因/);
   } finally {
     temp.cleanup();
   }

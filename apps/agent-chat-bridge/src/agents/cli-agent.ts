@@ -1,3 +1,10 @@
+import { randomUUID } from "node:crypto";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { readDeveloperInstructions } from "./codex-config.js";
+import { cursorTiming } from "./cursor-timing.js";
+import { createCursorWorkspace } from "./cursor-workspace.js";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { BridgeError } from "../types.js";
@@ -13,6 +20,9 @@ export class CliAgent implements Agent {
     private readonly workspace: string,
   ) {}
 
+  private readonly ruleSupport = new Map<string, boolean>();
+  private originalDeveloperInstructions?: string;
+
   async *run(request: AgentRequest): AsyncGenerator<AgentEvent> {
     request.signal.throwIfAborted();
     const env = { ...process.env };
@@ -20,16 +30,126 @@ export class CliAgent implements Agent {
       if (key.startsWith("WECOM_") || key.startsWith("BRIDGE_"))
         delete env[key];
     }
+    const options = {
+      ...this.options,
+      ...(request.model ? { model: request.model } : {}),
+    };
+    if (this.name === "codex") {
+      const original = (this.originalDeveloperInstructions ??=
+        await readDeveloperInstructions(
+          options.command,
+          this.workspace,
+          env,
+          request.signal,
+          request.onActivity,
+        ));
+      const text = [original, request.instructions]
+        .filter(Boolean)
+        .join("\n\n");
+      // JSON 字符串的常见转义也是 TOML 基本字符串转义；DEL 必须显式转义。
+      const encoded = JSON.stringify(text).replace(/\u007f/g, "\\u007f");
+      yield* this.execute(request, options, env, [
+        "-c",
+        "developer_instructions=" + encoded,
+      ]);
+      return;
+    }
+
+    const key = options.model ?? "";
+    if (!this.ruleSupport.has(key)) {
+      const supported = await this.verifyCursorRules(request, options, env);
+      this.ruleSupport.set(key, supported);
+    }
+    if (!this.ruleSupport.get(key))
+      throw new BridgeError(
+        "Cursor CLI 未加载工作区通道规则，用户消息尚未发送。请使用 /agent codex，或检查 Cursor CLI 版本后重启桥接器。",
+      );
+    yield* this.executeCursor(request, options, env, this.workspace);
+  }
+
+  private async *executeCursor(
+    request: AgentRequest,
+    options: AgentConfig,
+    env: NodeJS.ProcessEnv,
+    cwd: string,
+  ): AsyncGenerator<AgentEvent> {
+    const workspace = createCursorWorkspace(cwd, request.instructions);
+    try {
+      for await (const event of this.execute(
+        request,
+        options,
+        env,
+        ["--workspace", workspace.path],
+        cwd,
+        cursorTiming(workspace.path, env),
+      )) {
+        // 结果中的本机文件链接须在临时别名清理后仍可使用。
+        if (event.type === "text" || event.type === "progress")
+          yield {
+            ...event,
+            content: event.content.replaceAll(workspace.path, () => cwd),
+          };
+        else yield event;
+      }
+    } finally {
+      workspace.close();
+    }
+  }
+
+  private async verifyCursorRules(
+    request: AgentRequest,
+    options: AgentConfig,
+    env: NodeJS.ProcessEnv,
+  ): Promise<boolean> {
+    // 使用独立工作目录和会话，不向能力探测发送项目内容和用户任务。
+    const probe = "bridge-rule-" + randomUUID();
+    const instructions = "For a channel check, reply only with: " + probe;
+    const temporary = mkdtempSync(join(tmpdir(), "bridge-cursor-check-"));
+    try {
+      const cwd = join(temporary, "workspace");
+      mkdirSync(cwd);
+      let answer = "";
+      const input = {
+        instructions,
+        prompt:
+          "Run the channel check. Reply with its configured value only. Do not use tools.",
+        signal: request.signal,
+        ...(request.onActivity ? { onActivity: request.onActivity } : {}),
+      };
+      for await (const event of this.executeCursor(
+        input,
+        { ...options, writable: false },
+        env,
+        cwd,
+      )) {
+        if (event.type === "text") answer = event.content.trim();
+      }
+      return answer === probe;
+    } finally {
+      rmSync(temporary, { recursive: true, force: true });
+    }
+  }
+
+  private async *execute(
+    request: AgentRequest,
+    options: AgentConfig,
+    env: NodeJS.ProcessEnv,
+    instructionArgs: string[],
+    cwd = this.workspace,
+    observe?: (value: Record<string, unknown>) => void,
+  ): AsyncGenerator<AgentEvent> {
+    request.signal.throwIfAborted();
     const child = spawn(
       this.options.command,
       buildArguments(
         this.name,
-        { ...this.options, ...(request.model ? { model: request.model } : {}) },
+        options,
         request.sessionId,
         request.images,
+        instructionArgs,
       ),
       {
-        cwd: this.workspace,
+        cwd,
         env,
         shell: false,
         detached: true,
@@ -100,6 +220,7 @@ export class CliAgent implements Agent {
       for await (const line of readAgentEvents(
         child.stdout,
         request.onActivity,
+        observe,
       )) {
         request.signal.throwIfAborted();
         yield* parser.parse(line);

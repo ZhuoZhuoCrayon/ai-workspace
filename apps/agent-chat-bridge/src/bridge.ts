@@ -13,7 +13,7 @@ import type {
 } from "./types.js";
 import { conversationKey, SessionStore } from "./store.js";
 import { modelLabel } from "./agents/presets.js";
-import { buildPrompt } from "./prompt.js";
+import { buildInstructions, buildPrompt } from "./prompt.js";
 import { DEFAULT_TASK_TIMEOUTS } from "./config.js";
 
 interface BridgeOptions {
@@ -470,7 +470,8 @@ export class Bridge {
       const sessionId = conversation.sessions[name];
       const model = conversation.models?.[name];
       for await (const event of this.agents[name].run({
-        prompt: buildPrompt(prompt, attachments, this.options.persona),
+        instructions: buildInstructions(this.options.persona),
+        prompt: buildPrompt(prompt, attachments),
         signal: controller.signal,
         onActivity,
         ...(attachments.some((attachment) =>

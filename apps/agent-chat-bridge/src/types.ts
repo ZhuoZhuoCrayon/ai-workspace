@@ -38,6 +38,7 @@ export interface ReplyChoice {
 }
 
 export interface AgentRequest {
+  instructions: string;
   prompt: string;
   sessionId?: string;
   model?: string;
