@@ -75,13 +75,14 @@ export class CliAgent implements Agent {
   ): AsyncGenerator<AgentEvent> {
     const workspace = createCursorWorkspace(cwd, request.instructions);
     try {
+      const observe = cursorTiming(workspace.path, env);
       for await (const event of this.execute(
         request,
         options,
-        env,
+        observe ? { ...env, CURSOR_EMIT_MODEL_CALL_USAGE: "1" } : env,
         ["--workspace", workspace.path],
         cwd,
-        cursorTiming(workspace.path, env),
+        observe,
       )) {
         // 结果中的本机文件链接须在临时别名清理后仍可使用。
         if (event.type === "text" || event.type === "progress")

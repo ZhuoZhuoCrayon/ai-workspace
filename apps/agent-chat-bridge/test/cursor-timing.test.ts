@@ -29,3 +29,61 @@ test("只记录完整 CLI 工具边界，不落盘消息正文或不完整的调
   assert.ok(!raw.includes("private"));
   assert.equal(JSON.parse(raw).tools[0].id, "r");
 });
+
+test("流式解析按模型 ID 保存两次独立用量，不保存 result 合计或自定义字段", async (t) => {
+  const { Readable } = await import("node:stream");
+  const { readAgentEvents } = await import("../src/agents/event-stream.js");
+  const temp = temporary();
+  t.after(temp.cleanup);
+  writeFileSync(join(temp.directory, "config.json"), '{"enabled":true}');
+  const record = cursorTiming("/tmp/bridge-cursor-rules-abc123/root/proj", {
+    BK_APM_CURSOR_DATA_DIR: temp.directory,
+  })!;
+  const events = [
+    { type: "user", session_id: "s" },
+    {
+      type: "tool_call",
+      subtype: "started",
+      call_id: "r",
+      model_call_id: "first",
+    },
+    {
+      type: "tool_call",
+      subtype: "completed",
+      call_id: "r",
+      model_call_id: "first",
+    },
+    {
+      type: "usage",
+      subtype: "model_call",
+      model_call_id: "first",
+      usage: { inputTokens: 4, outputTokens: 76, apiKey: "not-recorded" },
+    },
+    { type: "assistant", model_call_id: "final" },
+    {
+      type: "usage",
+      subtype: "model_call",
+      model_call_id: "final",
+      usage: { inputTokens: 2, outputTokens: 15 },
+    },
+    {
+      type: "result",
+      subtype: "success",
+      usage: { inputTokens: 6, outputTokens: 91 },
+    },
+  ];
+  for await (const _ of readAgentEvents(
+    Readable.from(events.map((e) => JSON.stringify(e) + "\n")),
+    undefined,
+    record,
+  )) {
+  }
+  const dir = join(temp.directory, "cli-timing");
+  const raw = JSON.parse(readFileSync(join(dir, readdirSync(dir)[0]!), "utf8"));
+  assert.deepEqual(raw.calls, {
+    first: { inputTokens: 4, outputTokens: 76 },
+    final: { inputTokens: 2, outputTokens: 15 },
+  });
+  assert.equal(raw.tools[0].modelCallId, "first");
+  assert.equal(raw.finalModelCallId, "final");
+});
