@@ -1,10 +1,10 @@
 ---
 title: bk-collector 指标元信息采集与同步方案
 tags: [collector, metrics, metadata, otlp, remote-write]
-description: 协议入口保留描述，双 Bloom 按小时轮转，按主键防抖并以配额限制异常更新
+description: 协议入口保留描述，双 Bloom 按小时轮转，按主键合并待发版本并以配额限制异常更新
 issue: knowledge/bkmonitor-datalink/issues/2026-09-15-collector-metric-metadata/README.md
 created: 2026-09-15
-updated: 2026-10-24
+updated: 2026-11-05
 ---
 
 # bk-collector 指标元信息采集与同步方案
@@ -13,11 +13,11 @@ updated: 2026-10-24
 
 collector 在协议转换时丢失描述、单位和聚合语义。同一 DataID 中的不同服务可以上报同名指标，元信息必须跟随最终身份和实际输出序列登记。
 
-**Store 只保存待发原文，成功版本由两个按小时轮换的 Bloom 去重。** 防抖合并主键内的版本变化，DataID 与全局配额控制异常更新，发送期限和批次限制控制出口。
+**Store 只保存待发原文，成功版本由两个按小时轮换的 Bloom 去重。** 每轮刷新取同一主键的最新版本，DataID 与全局配额控制异常更新，发送期限和批次限制控制出口。
 
 | 约束 | 取舍 |
 | --- | --- |
-| 内存有界 | pending 与快照各不超过配置主键数，条目字符串有字节上限，Bloom 容量固定 |
+| 缓存规模 | 待发缓存和发送快照分别限制条数，字符串按实际长度占用内存，Bloom 容量固定 |
 | 允许极低概率遗漏 | 总目标误判率 `10⁻⁶`，持续观察的指标在过滤器过期后重发，一次性指标可能无法补回 |
 | 历史回退 | `A → B → A` 可能命中历史版本，等待轮转或手动 Clean |
 | 重启 | 只从后续观察重建，不承诺恢复未发送原文 |
@@ -31,11 +31,11 @@ collector 在协议转换时丢失描述、单位和聚合语义。同一 DataID
 
 ```mermaid
 flowchart LR
-    Protocol["Protocol adapter"] -->|"最终 DataID / Scope / Metric"| Store["metricmeta.Store"]
+    Protocol["Protocol adapter"] -->|"来源业务 / DataID / Scope / Metric"| Store["metricmeta.Store"]
     Store -->|"ready snapshot"| Exporter["metricmeta.Exporter"]
-    Exporter -->|"JSON batch + context"| ExportFunc["ExportFunc"]
-    ExportFunc --> Info["/metrics info cache"]
-    Info --> Scraper["现有监控采集链路"]
+    Exporter -->|"[]Entry + context"| ExportFunc["collector 批量回调"]
+    ExportFunc --> Output["目标指标 DataID"]
+    Output --> Storage["监控指标存储"]
     ExportFunc -->|"整批成功"| Bloom["current Bloom"]
     Bloom -->|"去重当前及上一小时版本"| Store
 ```
@@ -43,14 +43,14 @@ flowchart LR
 | 对象 | 职责 |
 | --- | --- |
 | `Scope` | 使用方推断类型与稳定范围，utils 不推断业务身份 |
-| `Key` | `DataID + ScopeType + Scope + Metric`，隔离服务、分组和实际输出序列 |
+| `Key` | `BizID + DataID + ScopeType + Scope + Metric`，隔离服务、分组和实际输出序列 |
 | `Value` | 原名、描述、单位、输出类型、原始类型、累计方式、周期和汇聚操作 |
-| `Store` | 准入、防抖、待发值、成功版本、Clean 与统计 |
+| `Store` | 准入、待发值、成功版本、Clean 与统计 |
 | `Exporter` | 串行发送、限速、整轮期限、确认、回填及生命周期 |
 
 ```go
 type Scope struct { Type ScopeType; Name string }
-type Key struct { DataID int32; ScopeType ScopeType; Scope, Metric string }
+type Key struct { BizID, DataID int32; ScopeType ScopeType; Scope, Metric string }
 type Value struct {
     Name, Unit, Description string
     Type, OriginalType, Temporality, Usage string
@@ -58,7 +58,7 @@ type Value struct {
     Present uint8
 }
 type Observer interface { Observe(Key, Value) bool }
-type ExportFunc func(context.Context, []byte) error
+func NewBatchExporter(Config, func(context.Context, []Entry) error) (*Exporter, error)
 ```
 
 - `ScopeType` 预定义 APM／PLUGIN／DEFAULT，支持非空自定义类型；collector 根据最终维度推断 APM 或 DEFAULT。
@@ -67,46 +67,46 @@ type ExportFunc func(context.Context, []byte) error
 
 ### b. 双 Bloom 轮转
 
-默认 `full_report_interval=2h`，每半周期轮换一个过滤器。查询两代，只向当前代登记成功版本；每代目标误判率为配置值的一半，重复观察不刷新任何代。
+默认最长去重时间为 `2 h`，每半周期轮换一个过滤器。查询两代，只向当前代登记成功版本；每代目标误判率为总目标的一半，重复观察不刷新任何代。
 
 | 触发 | 行为 |
 | --- | --- |
 | 到达小时边界 | 切换当前代并清空该代，保留上一代 |
 | 跨过至少两个小时边界 | 清空两代，轮转基准按固定节奏推进 |
-| 当前代成功版本达容量 | 暂停后续发送，保留已接收积压，拒绝新增未命中版本，等下次轮换恢复 |
-| 手动 `Clean()` | 清空两代，保留 pending 和防抖状态，下一快照强制发送 |
+| 当前代成功版本超过设计量 | 继续发送并登记，位图大小固定，误判率随填充程度上升 |
+| 手动 `Clean()` | 清空两代，保留 pending，下一快照强制发送 |
 
-版本有效期为 `1 h～2 h`，实际重报还需等待重新观察、防抖和排队。容量满不会提前重建，避免版本抖动反复触发全量发送。
+版本有效期为 `1 h～2 h`，实际重报还需等待重新观察和刷新。容量满不会提前重建，避免版本抖动反复触发全量发送。
 
-双 Bloom 分散跨小时批次的到期量，同小时集中写入仍会集中到期。批次间隔和准入配额限制重报峰值，整轮期限限制单次发送占用。
+双 Bloom 分散跨小时批次的到期量，同小时集中写入仍会集中到期。分钟配额限制新增及变化的次数，整轮期限限制单次发送占用。
 
 若需要进一步平滑到期，可按 Key 哈希划分固定分片，每片保留双 Bloom，并把轮转相位均匀错开在 `1 h` 内。该方案无需逐指标 TTL，但增加分片容量管理，且首次启动仍需出口限速；本实现保留双 Bloom 与有界发送。
 
 `Clean()` 增加独立清理代号，在途旧快照成功后不再填充被清理的 Bloom；自然时间轮换按确认时间登记成功版本。
 
-### c. 防抖与熔断
+### c. 待发合并与熔断
 
 ```text
 Observe(Key, Value)
-  → 黑名单 / 合法性 / 字节上限
+  → 黑名单 / 合法性
   → 同键同值复用；已发送版本去重
-  → Bloom / pending 容量限制
+  → Bloom 去重 / pending 容量限制
   → DataID 与全局更新配额
-  → 覆盖该键候选，保留首次等待时间，重置最后变更时间
+  → 覆盖该键的待发值
 
 Flush
-  → 稳定时间达到 debounce_interval，或累计等待达到 debounce_max_wait
-  → 取出最新候选，按批次和发送间隔处理
+  → 取出最新候选，满批即发，末批发送剩余条目
 ```
 
-相同值不延后稳定时间。默认等待稳定 `1 min`，持续变化满 `10 min` 后具备发送资格，由下一次刷新处理；默认刷新周期为 `1 min`，实际发布时间还包含调度与排队延迟。被防抖合并的版本也计入准入配额。
+默认每分钟刷新一次。同一轮内收到的多个版本只保留最新值，跨轮持续变化的指标每轮最多发送一个版本。被待发缓存合并的版本也计入准入配额。
 
-配额为固定窗口，按全局和 DataID 计候选新增及变更。DataID 独立配置覆盖默认值，`0` 禁用该 DataID；窗口到期自动恢复，Clean 不重置配额。拒绝当前变化时移除该键旧待发候选，避免直接发送已知过期值。
+配额为固定窗口，按全局和 DataID 计候选新增及变更。SDK 支持调用方覆盖单个 DataID 的额度，collector 本轮只接入平台默认额度。窗口到期自动恢复，Clean 不重置配额。拒绝当前变化时移除该键旧待发候选，避免直接发送已知过期值。
 
 ## 0x03 元信息协议
 
 ```json
 {
+  "bk_biz_id": 7,
   "dataid": 1001,
   "__scope_type": "APM",
   "__scope": "checkout%2Dhttp-sdk",
@@ -124,7 +124,8 @@ Flush
 
 | 字段 | 类型 | 必填 | 契约 |
 | --- | --- | --- | --- |
-| `dataid` | int32 | 是 | 鉴权后的指标 DataID，大于 `0` |
+| `bk_biz_id` | int32 | 是 | 鉴权后的来源业务或空间 ID |
+| `dataid` | int32 | 是 | 来源指标 DataID，大于 `0`，不作元信息的输出目标 |
 | `__scope_type`／`__scope` | string | 是 | 类型非空，范围可以为空 |
 | `__metric`／`__name` | string | 是 | 非空，分别为实际输出名和拆分、规范化前原名 |
 | `__description`／`__unit` | string / null | 是 | 来源空字符串映射为 null，明确无量纲使用 `1` |
@@ -142,15 +143,15 @@ APM Scope 从最终 `service_name` 与 `scope_name` 读取，各自先转义 `% 
 
 | 位置 | 调用关系与边界 |
 | --- | --- |
-| `pkg/utils/metricmeta` | `DefaultConfig → NewExporter → Store/Start/Flush/Stop`，`Store` 实现 Observer 并提供 Clean、Stats |
+| `pkg/utils/metricmeta` | `DefaultConfig → NewBatchExporter → Store/Start/Flush/Stop`，`Store` 实现 Observer 并提供 Clean、Stats |
 | `collector/exporter.New` | 默认关闭，启用时创建元信息实例，通过 `NewCommonConverterWithMetadata` 注入 Observer |
 | `collector/exporter.Start` | 先启动元信息，再启动消费者，外层 goroutine 启动前登记 WaitGroup |
 | `collector/exporter.Stop` | 停止 Tars 聚合，再取消并等待消费者，最后停止元信息发送，重复调用幂等 |
 | `collector/example/metric_metadata.yml` | 独立配置片段，不改动现有本地示例配置 |
 
-快照直接接管 pending map，未稳定项留在新 pending；编码与回调均在锁外执行。发送失败或超时回填未确认项，同键保留并发新值，合并强制标记和首次等待时间；回填超限计数丢弃。
+快照直接接管 pending map，并发到达的新值写入新 pending；编码与回调均在锁外执行。发送失败或超时回填未确认项，同键保留并发新值，合并强制标记；回填超限计数丢弃。
 
-`ExportFunc` 必须响应 context，返回 nil 表示整批确认，部分成功返回错误可能导致重试重复。Stop 拒绝新 Observe，取消后台请求后，用独立期限执行最后一轮并跳过防抖，剩余丢弃计数后释放缓存。
+批量回调同步读取 `[]Entry`。需要 JSON 的调用方可使用 `NewExporter`，由 SDK 在发送边界编码整批。两种回调均须响应 context，返回 nil 表示整批确认，部分成功返回错误可能导致重试重复。Stop 拒绝新 Observe，取消后台请求后，用独立期限执行最后一轮，剩余丢弃计数后释放缓存。
 
 ### b. 协议适配
 
@@ -171,34 +172,29 @@ Tars／OTP 的周期 SUM 按 counter 记录，负值语义沿用平台约定。�
 
 ### c. 出口与接收端边界
 
-默认发送回调将 JSON 批次发布为 `/metrics` 上的 `bk_collector_metric_metadata_info=1`。标签为 dataid、scope_type、scope、metric、name、description、unit、temporality、interval、original_type、type、usage、present；可空字段未知时标签为空，present 保留字段存在语义。
+本轮联调通过后台全局开关启用，复用 collector 自监控 DataID `1100014`。独立 DataID 的动态申领留待后续。单租户和多租户共用同一套 collector 上报配置。
 
-采集窗口按完整主键替换最新版本，容量复用 `max_pending_entries`，默认保留 `2 min`；到期由发送或采集清理，保留时间至少覆盖两次采集间隔。批次超容量时整批拒绝并回填，避免 Prometheus 标签向量永久保存历史版本。成功确认仅表示本机可采集，远端持久化通过现有监控链路验证；后续重报仍受 Bloom 控制。
+collector 将 `bk_collector_metric_metadata_info=1` 打包为标准时序事件，外层 `dataid` 选择发送目标，点的 `dimension.dataid` 和 `dimension.bk_biz_id` 标识来源。指标名、描述、单位、类型、聚合语义沿用原 info 维度，`present` 保留未知字段语义。
 
-指定 `endpoint` 时改为 HTTP POST，`2xx` 确认整批；重定向、`429`、其他错误均保留待发项。HTTP 消费方应按主键和版本幂等写入，并通过每 DataID 基数、更新速率和请求大小上限防御异常输入。
+成功表示本地发布客户端接纳整批；失败保留候选，持续观察后可重试。远端入库需要单独核对。collector 的 `/metrics` 仅暴露运行统计，不再保留高基数 info 样本。
 
 ## 0x05 配置与观测
 
-完整示例位于 `pkg/collector/example/metric_metadata.yml`，重启生效。
+完整示例位于 `pkg/collector/example/metric_metadata.yml`。仅平台模板按需渲染。后台开关 `BK_COLLECTOR_METRIC_METADATA_ENABLED` 默认关闭，关闭时平台渲染结果与原版逐字节一致。
 
-| 参数 | 默认 | 校验／效果 |
+| 层级 | 字段 | 默认与行为 |
 | --- | --- | --- |
-| `enabled`／`endpoint` | false／空 | 启用后默认发布 info 指标；非空 endpoint 要求无 userinfo 的 HTTP(S) URL |
-| `info_retention` | `2 min` | info 采集窗口保留时间，必须为正并覆盖至少两次采集间隔 |
-| `flush_interval`／`full_report_interval` | `1 min`／`2 h` | 正数，半个补报周期大于 flush 周期 |
-| `bloom_capacity`／`bloom_error_rate` | `100,000`／`10⁻⁶` | 每代容量，概率介于 `0` 和 `1`，拒绝 NaN 和过大分配 |
-| `max_pending_entries`／`max_entry_bytes` | `100,000`／`4,096 B` | 同时限制入队与回填，字符串总字节超限拒绝整条 |
-| `export_batch_size`／`export_batch_bytes` | `1,000`／`256 KiB` | 实际 JSON 数组同时满足两个限制，条目数不超过 pending 上限 |
-| `export_min_interval`／`export_timeout` | `100 ms`／`5 s` | 开始间隔小于整轮期限，整轮期限小于 flush 周期 |
-| `debounce_interval`／`debounce_max_wait` | `1 min`／`10 min` | 稳定时间允许 `0`，最大等待为正且不小于稳定时间 |
-| `circuit_window`／`max_updates` | `1 min`／`100,000` | 固定窗口全局候选更新上限 |
-| `max_updates_per_dataid` | `10,000` | 每 DataID 默认窗口上限 |
-| `blocked_dataids` | `[]` | 正数 DataID 列表，拒绝黑名单元信息 |
-| `dataid_limits` | `[]` | `[{dataid: 1001, max_updates: 1000}]`，DataID 唯一，上限允许 `0` |
+| 平台 | `enabled`、`dataid` | 默认关闭，启用时目标 ID 必须为正数 |
+| 平台 | `exporter.interval`、`exporter.timeout` | 默认每 `1 min` 发送一轮，所有批次共用 `5 s` 期限 |
+| 平台 | `exporter.batch_size`、`exporter.queue_size` | 每批最多 `1,000` 条，队列最多容纳 `100,000` 个待发指标 |
+| 平台 | `rate_limit.instance_per_minute` | 每个 collector 每分钟最多处理 `100,000` 次元信息新增或变化 |
+| 平台 | `rate_limit.dataid_per_minute` | 每个来源每分钟最多接纳 `10,000` 次 |
 
-collector 暴露 `bk_collector_metric_metadata_` 前缀的 info_entries、pending_entries、bloom_versions、bloom_rotations_total、cleans_total、forced_entries_total、export_entries_total、suppressed_total、debounced_total、export_failures_total、dropped_total 和 flush_duration_seconds。
+同目标的发送参数和配额重载保留窗口计数、待发项和 Bloom。非法配置保留上一版。目标切换会丢弃旧目标的待发状态，持续观察的指标向新目标重新登记；停用不影响数值队列。
 
-丢弃 reason 固定为 blacklist、invalid、entry_bytes、bloom_capacity、pending_capacity、global_circuit、dataid_circuit、restore_capacity、batch_bytes、closed、shutdown；来源失败另计 source_dropped_total，reason 为 unknown_semantics／descriptor_mismatch，这些运行统计不以指标名或 DataID 创建标签；info 指标按元信息协议携带标签。
+collector 暴露 `bk_collector_metric_metadata_` 前缀的 pending_entries、bloom_versions、bloom_rotations_total、cleans_total、forced_entries_total、export_entries_total、suppressed_total、export_failures_total、dropped_total 和 flush_duration_seconds。
+
+丢弃 reason 固定为 blacklist、invalid、pending_capacity、global_circuit、dataid_circuit、restore_capacity、closed、shutdown；来源失败另计 source_dropped_total，reason 为 unknown_semantics／descriptor_mismatch，这些运行统计不以指标名或 DataID 创建标签；info 指标按元信息协议携带标签。
 
 ## 0x06 验收与验证
 
@@ -222,14 +218,16 @@ go test ./pkg/utils/metricmeta -run '^$' -bench . -benchmem
 | --- | --- |
 | 集中到期 | `TestRotationCohortExpiry`：同小时进入的两批各 1,000 条在两小时后全部到期；跨小时进入时仅第一批 1,000 条到期 |
 | 轮转／误判／回退 | `TestHourlyRotationAndFallback`、`TestFalsePositiveExpiresWithoutRefresh`：两代去重不续期，Clean 与过期恢复发送 |
-| 防抖／配额 | `TestDebounceLatestAndMaxWait`、`TestBlacklistCircuitCapacityAndRecovery`：稳定后取最新值，持续变化有最大等待，黑名单及配额到期恢复 |
-| 容量／发送 | `TestBloomSaturationDefersAcceptedBacklogUntilRotation`、`TestBatchLimitsTimeoutAndRetry`：饱和不清空、不超发，数量和 JSON 字节限额、间隔、超时续传 |
+| 待发合并／配额 | `TestFlushLatestValuePerKey`、`TestBlacklistCircuitCapacityAndRecovery`：每轮取最新值，跨轮变化可发送，黑名单及配额到期恢复 |
+| 容量／发送 | `TestBloomContinuesPastDesignLoadAndRotatesHourly`、`TestBatchLimitsTimeoutAndRetry`：超过设计量继续发送、按小时轮转、满批发送和超时续传 |
 | 回填／清理 | `TestRetryPreservesNewerAndClean`、`TestSuccessfulInFlightCleanCannotRepopulateBloom`：不覆盖并发新值，旧快照不污染 Clean 后的过滤器 |
 | 生命周期 | `TestConcurrentLifecycle`、`TestStopCancelsBackgroundAndUsesIndependentFinalDeadline`：重复并发调用、未启动即关闭、取消和独立收尾期限 |
 | 协议与身份 | `converter/metric_metadata_test.go`：OTLP 类型、单位和原名，trpc 校验，Summary quantile，Tars 聚合与推导服务，Remote Write 描述对齐及最终身份 |
-| OTP 中文 Histogram | SDK 协议报文经集群上报，中文原名和分组保留，count／bucket 单位为 `1`，sum 未知单位为空，数值指标及三条 info 均可回读 |
-| info 默认出口 | `TestMetadataDefaultInfoExporter`、`TestMetadataInfoReplacementCapacityAndExpiry`、`TestMetadataInfoConcurrentExportAndScrape`：配置默认值、真实 `/metrics` 编码、同键替换、整批容量拒绝、TTL 和并发采集 |
-| HTTP 可选出口 | `TestMetricMetadataHTTPConfigAndFinalFlush`、`TestMetricMetadataHTTPFailureRetryAndCancellation`：真实配置解析、JSON 请求、429 重试、2xx 确认和关闭收尾 |
+| 协议回归 | 旧出口的中文 Histogram 集群结果见历史基准；新出口本地验证中文描述和来源身份 |
+| 目标指标出口 | `TestMetadataDestinationAndSourceIdentity`、`TestMetadataSendFailure`：数值与元信息分流、业务隔离、重试、运行统计与 info 不出现在 scrape |
+| 配置重载 | `TestMetadataReload`：平台加载、非法更新、移除平台配置和目标切换；模板回归比较未声明字段时的渲染字节 |
+
+早期来源额度原型的本地验证使用 OTLP 输入与 libbeat console 输出，未连接远端存储。来源 `301` 的四个数值点均保留；元信息配额为 `1` 时目标 `901` 收到一条 info，改为 `0` 后仅发送数值。移除覆盖并切换至 `902` 后，同名指标重新登记，两次 info 均携带 `bk_biz_id=73`。
 
 ### b. 性能结果
 
@@ -245,7 +243,18 @@ go test ./pkg/utils/metricmeta -run '^$' -bench . -benchmem
 
 `2026-10-24`，同机 `BenchmarkMetadataOTLP/enabled=true` 连续 `5` 次：单批 `1,000` 点复用请求内 Scope 后，耗时中位数降低约 `15%`，每批减少 `2,997` 次分配和 `119,880 B` 分配量。缓存仅保存上一组最终身份，维度变化立即重算。
 
+`2026-11-05`，Apple M4 Pro、Go `1.23.4`，每组 `6` 轮中位数。`BenchmarkMetadataExport1000` 每轮清除去重记录，观察 `1,000` 个带单位和描述的不同指标，构造 GSE 事件并由本地回调确认。
+
+| collector 发送路径 | 每千条耗时 | 每千条分配量 | 每千条分配次数 |
+| --- | --- | --- | --- |
+| JSON 编码后再解码 | `4.72 ms` | `5.00 MiB` | `39,090` |
+| 直接传递 `[]Entry` | `1.39 ms` | `2.44 MiB` | `17,056` |
+
+待发同值观察从 `67.5 ns/op` 降到 `39.2 ns/op`，已发送版本观察从 `311 ns/op` 降到 `285 ns/op`，两条路径均为零分配。本地基准不含网络发送。
+
 ## 0x07 基准压测
+
+本节是旧 `/metrics` info 出口的集群基准；新时序事件出口仅在本地验证，尚未复测集群容量。
 
 ### a. 配置
 
@@ -299,7 +308,7 @@ go test ./pkg/utils/metricmeta -run '^$' -bench . -benchmem
 
 首次登记第 `13～17 min` 的过渡窗平均 CPU 为 `1.797` 核，P99 为 `68.93 ms`，接收与数值链路错误增量为 `0`。首次登记和轮转重报需要额外 CPU 余量，不能用去重稳态结果代替。
 
-默认 Bloom 的 `100,000` 成功版本容量由所有 DataID 共用，背景业务也占用额度；满额后拒绝新增元信息，数值指标继续处理。因此数值组合容量不等于元信息完整覆盖数。
+该历史版本的 Bloom 上限为 `100,000`，由所有 DataID 共用，背景业务也占用额度；满额后拒绝新增元信息，数值指标继续处理。因此数值组合容量不等于元信息完整覆盖数。
 
 | 功能工况 | 结果 |
 | --- | --- |
@@ -321,4 +330,5 @@ go test ./pkg/utils/metricmeta -run '^$' -bench . -benchmem
 
 | 状态 | 分支 | 里程碑 | PR |
 | --- | --- | --- | --- |
-| 🔄 | `feat/collector-metric-metadata/#1010158081139354539` | 指标元信息采集、轮转去重与默认 info 出口 | [#1556](https://github.com/TencentBlueKing/bkmonitor-datalink/pull/1556) |
+| 🔄 | `feat/collector-metric-metadata/#1010158081139354539` | 指标元信息采集、平台开关渲染及 GSE 出口 | [#1556](https://github.com/TencentBlueKing/bkmonitor-datalink/pull/1556) |
+| 🔄 | `feat/collector-metric-metadata/#1010158081139354539` | 指标元信息模型、迁移和后台全局开关 | [#13135](https://github.com/TencentBlueKing/bk-monitor/pull/13135) |

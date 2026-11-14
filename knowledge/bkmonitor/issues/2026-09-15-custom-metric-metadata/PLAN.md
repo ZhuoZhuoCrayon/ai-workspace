@@ -517,14 +517,14 @@ erDiagram
 
 除 `fingerprint` 外每一列都来自上报字段，任一字段不同即为另一种取值：
 
-| 存储列 | 含义 | 上报字段 |
-| --- | --- | --- |
-| `field_name` | 存储中的指标名 | `__metric` |
-| `original_name` | 拆分前的原名，Histogram 族成员的族名 | `__name` |
-| `original_type` | 拆分前的原始类型，如 histogram | `__original_type` *[1]* |
-| `metric_type` | 本条输出序列自身的类型，取 counter、gauge 或 unknown | `__type` |
-| `meta` | [a] `unit`：单位<br />[b] `description`：描述<br />[c] `temporality`：累计方式<br />[d] `interval`：上报周期<br />[e] `usage`：汇聚方式 | [a] `__unit`<br />[b] `__description`<br />[c] `__temporality`<br />[d] `__interval`<br />[e] `__usage` |
-| `fingerprint` | 除 `field_name` 外四个字段规范 JSON 的 MD5 | 无，bmw 计算 |
+| 存储列             | 含义                                                                                                                 | 上报字段                                                                                                    |
+| --------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `field_name`    | 存储中的指标名                                                                                                            | `__metric`                                                                                              |
+| `original_name` | 拆分前的原名，Histogram 族成员的族名                                                                                            | `__name`                                                                                                |
+| `original_type` | 拆分前的原始类型，如 histogram                                                                                               | `__original_type` *[1]*                                                                                 |
+| `metric_type`   | 本条输出序列自身的类型，取 counter、gauge 或 unknown                                                                              | `__type`                                                                                                |
+| `meta`          | [a] `unit`：单位<br />[b] `description`：描述<br />[c] `temporality`：累计方式<br />[d] `interval`：上报周期<br />[e] `usage`：汇聚方式 | [a] `__unit`<br />[b] `__description`<br />[c] `__temporality`<br />[d] `__interval`<br />[e] `__usage` |
+| `fingerprint`   | 除 `field_name` 外四个字段规范 JSON 的 MD5                                                                                  | 无，bmw 计算                                                                                                |
 
 - *[1] 原始类型是新增字段：Collector 协议新增 `__original_type`，`__type` 改为本条序列自身的类型，见「接收协议」。*
 

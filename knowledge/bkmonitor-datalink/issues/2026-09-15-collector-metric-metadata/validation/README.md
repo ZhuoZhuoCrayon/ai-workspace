@@ -46,7 +46,7 @@ make test
 
 ## 0x04 实现边界
 
-原型在 BloomStore 中合并存储与发送，保留为选型对照。生产 Store／Exporter 使用双 Bloom、按主键防抖和准入配额，测试见 [实现验收](../PLAN.md#0x06-验收与验证)，原型结果不代表生产模块。
+原型在 BloomStore 中合并存储与发送，保留为选型对照。生产 Store／Exporter 使用双 Bloom、按主键合并待发版本和准入配额，测试见 [实现验收](../PLAN.md#0x06-验收与验证)，原型结果不代表生产模块。
 
 ## 0x05 集群发压
 
@@ -79,7 +79,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o loadgen ./cmd/loadgen
 
 `Services × Groups × Metrics` 为元信息主键数，单次请求携带一个服务／分组的 `Metrics` 个指标。服务和分组按请求轮转，样本为 `10` 服务 × `10` 分组 × `1,000` 指标，共 `100,000` 个主键。
 
-`Seconds` 包含预热；请求统计和资源统计排除 `Warmup`。`steady` 保持描述不变，`churn` 每次请求变更描述。默认防抖验证使用 `1` 个指标持续变更 `660 s`，停止后再等待稳定窗口；DataID 配额验证使用 `1,000` 个指标持续变更。
+`Seconds` 包含预热；请求统计和资源统计排除 `Warmup`。`steady` 保持描述不变，`churn` 每次请求变更描述。合并验证使用 `1` 个指标在同一刷新周期内多次更新描述，核对下一轮只发送最后一个值；DataID 配额验证使用 `1,000` 个指标持续变更。
 
 输出包含目标／实际 QPS、HTTP 状态、部分接收、P99、CPU、RSS、按 `ScrapeSeconds` 采样的资源和元信息计数。`DataID` 用于筛选出口点与处理链路丢弃计数；接收预检失败按输入 Token 筛选，输出不保留 Token 标签。HTTP 成功只证明入口接收，数值指标与 info 的入库结果须按服务和分组另行查询。
 

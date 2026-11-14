@@ -3,7 +3,7 @@ title: bk-collector 指标元信息采集与同步
 tags: [collector, metrics, metadata, otlp, remote-write]
 description: 在指标语义丢失前提取元信息，按隔离范围聚合并减少重复同步
 created: 2026-09-15
-updated: 2026-10-24
+updated: 2026-11-05
 ---
 
 # bk-collector 指标元信息采集与同步
@@ -20,13 +20,13 @@ collector 将不同协议转换为数值指标时，会丢失描述、单位和�
 
 - 明确 OTLP、Tars、OTP 和 Prometheus Remote Write 的元信息来源与采集位置。
 - 在 `pkg/utils/metricmeta` 实现 Scope、Store 与 Exporter，提供 Start／Stop、Clean 和使用方注入的 ExportFunc。
-- 对持续变化、异常 DataID 和发送失败提供有界防御，并验证默认 `/metrics` info 指标及可选 HTTP 出口。
+- 对持续变化、异常 DataID 和发送失败提供有界防御，并验证目标指标 DataID 与来源配额重载。
 
 ## 0x02 实现路线
 
 ### a. 选定方案
 
-待发缓冲（pending）保存每个主键的最新候选，成功版本用双 Bloom 去重，默认总误判率为 `1e-6`。每 `1 h` 轮换一代，版本保留 `1 h～2 h`，通过持续观察重报；防抖、黑名单和全局／DataID 配额限制异常更新。
+待发缓冲（pending）保存每个主键的最新候选，成功版本用双 Bloom 去重，默认总误判率为 `1e-6`。每 `1 h` 轮换一代，版本保留 `1 h～2 h`，通过持续观察重报；待发合并、黑名单和全局／DataID 配额限制异常更新。
 
 OTP 描述随 Record 传递，在 exporter 绑定身份并登记；OTLP、Tars、Pushgateway 在各自 converter 提取。原生 Remote Write v1 的独立 Metadata 缺少可靠的实际序列绑定，暂不登记元信息。
 
@@ -41,11 +41,11 @@ OTP 描述随 Record 传递，在 exporter 绑定身份并登记；OTLP、Tars�
 
 ### b. 约束
 
-默认 info 出口复用监控采集链路，验收结果见 [基准压测](./PLAN.md#0x07-基准压测)。OTP 接收器与 collector 的描述传递接口配套交付。
+元信息单独写入后台提供的目标 DataID，设计与本地验证见 [PLAN](./PLAN.md)。旧出口对照数据见 [基准压测](./PLAN.md#0x07-基准压测)。OTP 接收器与 collector 的描述传递接口配套交付。
 
-- 主键为 `dataid + __scope_type + __scope + __metric`，需求中的 `__scope_name` 统一为 `__scope`。
+- 主键为 `bk_biz_id + dataid + __scope_type + __scope + __metric`，需求中的 `__scope_name` 统一为 `__scope`。
 - utils 预定义 APM／PLUGIN／DEFAULT，允许使用方扩展类型和范围，collector 的 APM 路径使用最终 service_name 与 scope_name 编码。
-- ExportFunc 的发送目标由使用方决定，collector 默认发布有界、短期保留的元信息 info 指标。
+- ExportFunc 的发送目标由使用方决定，collector 将 info 指标提交到目标时序数据源。
 - 持续观测的未变更元信息也必须周期重发，内存缓存不提供进程重启后的补发保证。
 - 允许极低概率遗漏，一次性指标可能无法补回，历史值回退可能等待强制补报。
 
