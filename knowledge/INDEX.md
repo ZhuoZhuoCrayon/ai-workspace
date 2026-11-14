@@ -1,6 +1,6 @@
 # 知识库索引
 
-> 最后更新：2026-11-06
+> 最后更新：2026-11-12
 
 ## 0x01 项目知识
 
@@ -8,7 +8,7 @@
 |------|------|------|------|
 | ai-workspace | [ai-workspace/](./ai-workspace/INDEX.md) | 6 篇 | AI 工作区 — 知识管理与多项目协作中枢 |
 | bk-cli | [bk-cli/](./bk-cli/INDEX.md) | 0 篇 | 蓝鲸平台 API 命令行工具 |
-| bkmonitor | [bkmonitor/](./bkmonitor/INDEX.md) | 52 篇 | 蓝鲸监控平台（bk-monitor/bkmonitor） |
+| bkmonitor | [bkmonitor/](./bkmonitor/INDEX.md) | 53 篇 | 蓝鲸监控平台（bk-monitor/bkmonitor） |
 | bkm-skills | [bkm-skills/](./bkm-skills/INDEX.md) | 6 篇 | BlueKing Monitor Skills |
 | bk-product-designs | [bk-product-designs/](./bk-product-designs/INDEX.md) | 0 篇 | 蓝鲸监控产品设计协作仓库 |
 | bkmonitor_mcp | [bkmonitor_mcp/](./bkmonitor_mcp/INDEX.md) | 1 篇 | 蓝鲸监控 MCP Server |
@@ -21,8 +21,8 @@
 
 ## 0x02 最近更新
 
+- 2026-11-12：新增 [Aegis SDK v2 数据协议](./bkmonitor/articles/2026-11-12-aegis-sdk-v2-data-protocol/README.md)（补齐字段枚举与采集机制，说明 Web Vitals 的选值、汇聚及首次隐藏上报规则）
 - 2026-11-06：更新 [APM 服务数据状态下沉到后台服务发现](./bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md)（补齐心跳锁冲突重试协议、MySQL 验证与 PR 评审记录）
 - 2026-11-05：更新 [bk-collector 指标元信息采集与同步](./bkmonitor-datalink/issues/2026-09-15-collector-metric-metadata/README.md)（简化元信息目标与来源额度的配置命名）
 - 2026-11-04：更新 [优化首页 TraceID 全局搜索的预计算延迟](./bkmonitor/issues/2026-05-02-overview-trace-id-low-latency-search/README.md)（批量检索按表聚合并合并累计快照，记录性能复查结果与验证边界）
 - 2026-10-30：更新 [RUM 分层统一查询](./bkmonitor/issues/2026-08-07-rum-unified-query/README.md)（补充 Session / View 降级检索设计、验证记录与 PR 交付状态）
-- 2026-10-23：新增 [APM 日志存储支持切换 ES 集群](./bkmonitor/issues/2026-10-23-apm-log-storage-cluster-switch/README.md)（补齐选择入口与保存后刷新，已提单并加入排期）
