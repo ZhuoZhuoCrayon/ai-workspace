@@ -14,7 +14,6 @@ import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
 import { parseEnv } from "node:util";
 import { BridgeError } from "./types.js";
-import { validUserId } from "./access.js";
 import { DEFAULT_TASK_TIMEOUTS } from "./config.js";
 
 export interface SetupPrompt {
@@ -141,7 +140,6 @@ export async function initialize(
 }
 
 export function savePairedUser(file: string, userId: string): void {
-  if (!validUserId(userId)) throw new BridgeError("用户 ID 无效。");
   const config = JSON.parse(readFileSync(file, "utf8"));
   const previous = config.wecom?.allowedUsers ?? [];
   if (!Array.isArray(previous)) throw new BridgeError("白名单格式无效。");
@@ -150,7 +148,6 @@ export function savePairedUser(file: string, userId: string): void {
     wecom: {
       ...config.wecom,
       allowedUsers: [...new Set([...previous, userId])],
-      adminUsers: previous.length ? (config.wecom?.adminUsers ?? []) : [userId],
     },
   };
   const temporary = join(dirname(file), `.pair-${randomUUID()}.tmp`);

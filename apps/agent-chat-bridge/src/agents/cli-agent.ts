@@ -1,5 +1,3 @@
-import { executionOptions } from "../execution.js";
-import type { ExecutionIdentity } from "../execution.js";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { BridgeError } from "../types.js";
@@ -13,11 +11,15 @@ export class CliAgent implements Agent {
     private readonly name: AgentName,
     private readonly options: AgentConfig,
     private readonly workspace: string,
-    private readonly identity?: ExecutionIdentity,
   ) {}
 
   async *run(request: AgentRequest): AsyncGenerator<AgentEvent> {
     request.signal.throwIfAborted();
+    const env = { ...process.env };
+    for (const key of Object.keys(env)) {
+      if (key.startsWith("WECOM_") || key.startsWith("BRIDGE_"))
+        delete env[key];
+    }
     const child = spawn(
       this.options.command,
       buildArguments(
@@ -28,7 +30,7 @@ export class CliAgent implements Agent {
       ),
       {
         cwd: this.workspace,
-        ...executionOptions(this.identity),
+        env,
         shell: false,
         detached: true,
         stdio: ["pipe", "pipe", "pipe"],
