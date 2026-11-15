@@ -63,5 +63,13 @@
     "branch": "master",
     "local_path": "Github/bk/monitor/bk-cli",
     "language": "zh"
+  },
+  {
+    "name": "helm-charts",
+    "description": "Helm charts for shared services and development environments",
+    "git_url": "https://github.com/ZhuoZhuoCrayon/helm-charts.git",
+    "branch": "main",
+    "local_path": "Github/helm/helm-charts",
+    "language": "en"
   }
 ]
