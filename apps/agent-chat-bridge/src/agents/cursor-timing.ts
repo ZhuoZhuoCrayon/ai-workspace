@@ -32,11 +32,7 @@ export function cursorTiming(workspace: string, env: NodeJS.ProcessEnv) {
     id: string;
     start: number;
     end?: number;
-    modelCallId?: string;
   }[] = [];
-  const calls = new Map<string, Record<string, number> | null>();
-  let finalModelCallId: string | undefined;
-  let usageOverflow = false;
   return (value: Record<string, unknown>) => {
     if (invalid) return;
     const at = epoch + Math.round(performance.now() - base);
@@ -47,40 +43,7 @@ export function cursorTiming(workspace: string, env: NodeJS.ProcessEnv) {
       }
       session = value.session_id;
     }
-    const modelId =
-      typeof value.model_call_id === "string" &&
-      value.model_call_id.length <= 512
-        ? value.model_call_id || undefined
-        : undefined;
-    if (
-      value.type === "usage" &&
-      value.subtype === "model_call" &&
-      modelId &&
-      !usageOverflow
-    ) {
-      if (calls.size >= 257) usageOverflow = true;
-      else {
-        const usage: Record<string, number> = {};
-        for (const key of [
-          "inputTokens",
-          "outputTokens",
-          "cacheReadTokens",
-          "cacheWriteTokens",
-          "reasoningTokens",
-        ]) {
-          const count = (value.usage as Record<string, unknown> | undefined)?.[
-            key
-          ];
-          if (
-            typeof count === "number" &&
-            Number.isSafeInteger(count) &&
-            count >= 0
-          )
-            usage[key] = count;
-        }
-        calls.set(modelId, calls.has(modelId) ? null : usage);
-      }
-    } else if (value.type === "user") {
+    if (value.type === "user") {
       if (started !== undefined) invalid = true;
       started = at;
     } else if (value.type === "tool_call") {
@@ -99,12 +62,7 @@ export function cursorTiming(workspace: string, env: NodeJS.ProcessEnv) {
           invalid = true;
           return;
         }
-        tools.push({
-          id,
-          start: at,
-          ...(modelId ? { modelCallId: modelId } : {}),
-        });
-        finalModelCallId = undefined;
+        tools.push({ id, start: at });
         assistant = undefined;
       } else if (value.subtype === "completed") {
         const tool = tools.find((t) => t.id === id);
@@ -116,7 +74,6 @@ export function cursorTiming(workspace: string, env: NodeJS.ProcessEnv) {
       }
     } else if (value.type === "assistant") {
       assistant = at;
-      if (modelId) finalModelCallId = modelId;
     } else if (value.type === "result") {
       invalid = true;
       if (
@@ -143,9 +100,6 @@ export function cursorTiming(workspace: string, env: NodeJS.ProcessEnv) {
             start: started,
             end: assistant,
             tools,
-            ...(!usageOverflow && calls.size
-              ? { finalModelCallId, calls: Object.fromEntries(calls) }
-              : {}),
           }),
           { mode: 0o600 },
         );

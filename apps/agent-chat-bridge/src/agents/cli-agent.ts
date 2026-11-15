@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { readDeveloperInstructions } from "./codex-config.js";
 import { cursorTiming } from "./cursor-timing.js";
 import { createCursorWorkspace } from "./cursor-workspace.js";
@@ -79,7 +79,7 @@ export class CliAgent implements Agent {
       for await (const event of this.execute(
         request,
         options,
-        observe ? { ...env, CURSOR_EMIT_MODEL_CALL_USAGE: "1" } : env,
+        env,
         ["--workspace", workspace.path],
         cwd,
         observe,
@@ -140,23 +140,32 @@ export class CliAgent implements Agent {
     observe?: (value: Record<string, unknown>) => void,
   ): AsyncGenerator<AgentEvent> {
     request.signal.throwIfAborted();
-    const child = spawn(
-      this.options.command,
-      buildArguments(
-        this.name,
-        options,
-        request.sessionId,
-        request.images,
-        instructionArgs,
-      ),
-      {
-        cwd,
-        env,
-        shell: false,
-        detached: true,
-        stdio: ["pipe", "pipe", "pipe"],
-      },
+    let command = this.options.command;
+    let args = buildArguments(
+      this.name,
+      options,
+      request.sessionId,
+      request.images,
+      instructionArgs,
     );
+    // 服务不一定继承 shell 的 PATH；保留用户配置的原生 CLI（包括绝对路径）。
+    if (observe && ["agent", "cursor-agent"].includes(basename(command))) {
+      const plugin =
+        env.BK_APM_CURSOR_PLUGIN_ROOT ||
+        join(homedir(), ".cursor", "plugins", "local", "bk-apm-cursor-tracing");
+      const launcher = join(plugin, "scripts", "auto-cli.mjs");
+      if (existsSync(launcher)) {
+        args = [launcher, command, ...args];
+        command = process.execPath;
+      }
+    }
+    const child = spawn(command, args, {
+      cwd,
+      env,
+      shell: false,
+      detached: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     const closed = new Promise<{ code: number | null; error?: Error }>(
       (resolve) => {
         child.once("error", (error) => resolve({ code: null, error }));
