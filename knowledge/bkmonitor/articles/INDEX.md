@@ -1,9 +1,10 @@
 # bkmonitor Articles 索引
 
-> 最后更新：2026-11-12
+> 最后更新：2026-11-17
 
 | 文件 | 标签 | 摘要 | 更新日期 |
 |------|------|------|---------|
+| [从会话到瀑布图：六家 RUM 平台交互调研](./2026-11-17-rum-session-waterfall/README.md) | `rum` `session` `waterfall` `product-research` | 对照六家 RUM 平台的官方截图，梳理从会话中选取页面或操作后，瀑布图的入口、展开方式和分析范围。 | 2026-11-17 |
 | [Aegis SDK v2 数据协议](./2026-11-12-aegis-sdk-v2-data-protocol/README.md) | `rum` `aegis` `web` `data-protocol` `session` `performance` | 说明 Aegis Web SDK 的上报字段、取值含义，以及会话、页面、操作、请求和性能数据的采集机制。 | 2026-11-12 |
 | [Agent 观测产品调研：轨迹、质量评估与持续改进](./2026-10-22-agent-observability-product-research/README.md) | `agent` `llm` `observability` `trajectory` `evaluation` `product-research` | 对照 LangSmith、Langfuse、Datadog 和 Dynatrace 的官方资料与产品截图，分析 Agent 观测的共同能力、交互设计和蓝鲸建设顺序。 | 2026-10-22 |
 | [Agent 工作原理中的 Message、Part 与 Span](./2026-09-06-agent-message-part-span-conversation/README.md) | `llm` `agent` `message` `part` `span` `trace` | 通过天气查询示例，说明 Agent 执行循环、消息与片段的层级，以及模型调用和工具执行的 Span 边界。 | 2026-09-06 |

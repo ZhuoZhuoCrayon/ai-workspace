@@ -40,7 +40,7 @@
 
 | 分类 | 路径 | 数量 | 说明 |
 |------|------|------|------|
-| 主题文章 | [articles/](./articles/INDEX.md) | 5 篇 | 领域知识整理与主题归档 |
+| 主题文章 | [articles/](./articles/INDEX.md) | 6 篇 | 领域知识整理与主题归档 |
 
 ### c. Troubleshooting
 
