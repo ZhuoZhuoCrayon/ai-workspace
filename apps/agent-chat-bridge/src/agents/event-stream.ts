@@ -76,19 +76,12 @@ function guard(selected: boolean): Transform {
 export async function* readAgentEvents(
   source: Readable,
   onActivity?: () => void,
-  observe?: (value: Record<string, unknown>) => void,
 ): AsyncGenerator<string> {
   let finished!: () => void;
   const done = new Promise<void>((resolve) => {
     finished = resolve;
   });
-  const stream = new Transform({
-    objectMode: true,
-    transform(event, _encoding, callback) {
-      observe?.(event.value);
-      callback(null, event);
-    },
-  });
+  const stream = streamValues.asStream();
   pipeline(
     source,
     new Transform({
@@ -107,7 +100,6 @@ export async function* readAgentEvents(
     guard(false),
     filter.asStream({ filter: FIELDS }),
     guard(true),
-    streamValues.asStream(),
     stream,
     () => finished(),
   );
