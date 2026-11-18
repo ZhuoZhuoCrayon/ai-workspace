@@ -779,7 +779,7 @@ def build(spans: Sequence[dict[str, Any]], view_id: str | None = None) -> dict[s
     return {"start_time": start_time, "end_time": end_time, "tree": tree, "records": records}
 ```
 
-起止时间：
+生命周期起止时间（规范化前）：
 
 | 查询范围 | 字段 | 过滤条件 | 取值 |
 | --- | --- | --- | --- |
@@ -788,8 +788,31 @@ def build(spans: Sequence[dict[str, Any]], view_id: str | None = None) -> dict[s
 | `view_id` | `start_time` | `attributes.span_type = view` | `min(attributes.view.started_at) × 1000` |
 | `view_id` | `end_time` | `attributes.span_type = view AND attributes.view.phase = end` | `max(end_time)` |
 
-- *[1] 无匹配的 Span 时返回 `null`。*
+- *[1] 缺少生命周期边界时按下方时间线摘要规则补齐，无匹配记录时返回“记录不存在”错误。*
 - *[2] `start`、`rotate` 的上报时刻晚于首个 View 的 `attributes.view.started_at` 约 `0.6 s～1.7 s`，待 SDK 优化。*
+
+Session / View 时间线摘要：
+
+```text
+SpanLevelHandler.timeline(session_id | view_id)
+  └─ SpanQuery.query_list(limit=10000)
+       ├─ timeline_builder.build(spans) → tree、records、Session 起止时间
+       ├─ _view_time_range(spans) → View 起止时间（仅 View 入口）
+       └─ timeline_builder.summary(spans, start_time, end_time) → start_time、end_time、duration、status
+```
+
+两种入口直接使用本次查询的原始 Span 计算摘要，保留单次查询及现有条数上限，不补查边界。摘要不使用组装后的 `records`，避免遗漏未进入节点的 Span。
+
+| 顶层字段 | 契约 |
+| --- | --- |
+| `start_time` | 优先取 Session 生命周期或 View 导航起点，缺失时取本次 Span 的最早开始时间，返回 Unix 毫秒级时间戳 |
+| `end_time` | 优先取当前 Session / View 自身 end span 的结束时间，缺失时取本次 Span 的最晚结束时间，返回 Unix 毫秒级时间戳 |
+| `duration` | 规范化起止时间之间的持续时长，单位毫秒 |
+| `status` | 收到当前对象的 end 为 `ended`，无 end 且距开始已满 `4 h` 为 `expired`，其余为 `active` |
+
+Session 和 View 共用同一套规范化规则。结束时间取值与状态判断独立，四小时超时只标记 `expired`，不覆盖观测末尾。`end_time` 有值不代表已结束，调用方使用 `status` 区分。
+
+正常响应的四个摘要字段均非空。Handler 在无数据时沿用记录详情的“记录不存在”错误，Builder 直接使用入库 Span 的起止时间，不额外兼容非法原始时间。用户接口文档只保留含义、单位和状态说明。
 
 父子层级：
 
@@ -1760,6 +1783,10 @@ pytest bkmonitor/data_source/tests/test_utils_query.py -q
 | `2026-11-18 13:00` | 交付总数与趋势接口 [#13336](https://github.com/TencentBlueKing/bk-monitor/pull/13336)，覆盖三个视角；493 项查询测试及 27 组真实接口过滤验证通过，页面联动待前端接入。 |
 | `2026-11-18 10:00` | [a] 虚拟字段配置保留在后台，复合布局通过 `extra_config.composite` 返回，列表恢复扁平原值；补齐 Session 配置及各视角默认列<br />[b] 代码与字段值展示改动收敛至 [#13219](https://github.com/TencentBlueKing/bk-monitor/pull/13219)，原 #13229 已关闭<br />[c] 768 项回归、59 个文档 JSON 示例及提交检查通过，#13219 已合并<br />[d] 剩余默认列调整由 [#13332](https://github.com/TencentBlueKing/bk-monitor/pull/13332) 交付，111 项相关测试通过 |
 | `2026-11-11 16:38` | 交付虚拟字段查询与复合列后端协议 [#13229](https://github.com/TencentBlueKing/bk-monitor/pull/13229)：模板统一从右拆分，复合列引用成员能力；基于最新 master 的 784 项回归通过，消费方需协调默认列接入。 |
+| `2026-11-10 17:35` | [a] Session / View 优先使用自身 end span 的结束时间，缺失时使用最大观测 `end_time`；四小时超时只影响状态，不再补齐结束时间或扩大时长<br />[b] 提交 `55e1d03cd4c7c1ab25c456fa8a7c727880e327c8`，回归 `607 passed`，Ruff、提交 hooks 和三个文件的 PreCI 实际扫描通过<br />[c] [PR #13179](https://github.com/TencentBlueKing/bk-monitor/pull/13179) 复查未发现阻塞问题，本次调整尚未部署 |
+| `2026-11-10 17:10` | [a] Session / View 时间线顶层 `start_time`、`end_time`、`duration` 统一使用毫秒，保留小数精度；用户文档同步字段类型、单位和示例<br />[b] 提交 `4d4083b3c2bebaf372c3569ca6be3afef7984c30`，回归 `605 passed`，Ruff、提交 hooks 和三个变更文件的 PreCI 实际扫描通过<br />[c] [PR #13179](https://github.com/TencentBlueKing/bk-monitor/pull/13179) 复查未发现阻塞问题，本次单位调整尚未部署 |
+| `2026-11-10 13:00` | [a] Session / View 统一规范起止时间，过期时补齐四小时结束时间，时长从外层边界派生；正常响应摘要字段均非空，无数据时返回记录不存在<br />[b] 用户文档仅保留含义、单位和状态说明，删除计算公式与过程<br />[c] 提交 `2a0185543bbc64da872c1bf7f0af39265f592b3c`，回归 `605 passed`，Ruff、提交 hooks 和四个变更文件的 PreCI 扫描通过<br />[d] [PR #13179](https://github.com/TencentBlueKing/bk-monitor/pull/13179) 复查未发现阻塞问题，保持单次查询和既有 limit |
+| `2026-11-09 20:00` | [a] Session / View 时间线统一返回 `duration`、`status`，直接复用本次原始 Span，删除额外查询，沿用既有 limit<br />[b] View 按自身生命周期判断，四小时过期只用于 Session；接口文档仅保留字段含义和状态规则<br />[c] 提交 `4184f836b5a46c3bb9452dc317843d68310aae36`，回归 `616 passed`，提交 hooks 与实际覆盖五个变更文件的 PreCI 扫描通过<br />[d] [PR #13179](https://github.com/TencentBlueKing/bk-monitor/pull/13179) 复查未发现阻塞问题，真实 UQ 联调与浏览器验收未执行 |
 | `2026-10-30 17:41` | [a] 普通 Span 与请求计数合并一次聚合，Session 的 View 去重数和入口、退出页合并一次原始查询，两种列表每页各 `8` 次请求<br />[b] 业务筛选与字段映射集中在公共任务构造处，通用计数方法支持单维度和多维度，删除无调用方的记录补查包装<br />[c] 复查未发现新增阻塞问题，查询回归 `350 passed`，全部提交检查通过，PreCI 两项规则扫描 `3` 个文件无问题<br />[d] 提交 `a384898445a7317514322c0bb8358a0ba7541acc` 已推送到 [PR #13018](https://github.com/TencentBlueKing/bk-monitor/pull/13018) |
 | `2026-10-30` | [a] View 字段分析改用开始事件，文档明确其与活跃实体列表的口径差异<br />[b] 请求总数与错误数合并聚合，Web Vitals 一次查询，单数据源 Session/View 每页补查分别为 `10`、`8` 次<br />[c] 查询回归 `347 passed`，PreCI 两项规则扫描 `4` 个文件通过<br />[d] 提交 `4487e62774a1d1f0593712eecba239b92d165035` 已推送到 [PR #13018](https://github.com/TencentBlueKing/bk-monitor/pull/13018)，两条已处理意见已 resolve，异常策略暂不调整 |
 | `2026-10-29` | [a] 复查 Session/View 列表最小适配、常驻过滤、候选值和详情复用，时间线由 Resource 直接调用 Span Handler，基类不再声明占位能力<br />[b] 整理 import 分组、复用记录 ID 扩展点，消除 Session Builder 对主记录的重复打平，`617` 项回归、前端 `6` 文件 ESLint 与相关详情类型检查通过<br />[c] 确认 PreCI 失败源于任务 worktree 错误启用语言规则，按指定配置仅保留并启用 `standard_scc`、`opensource_sensitive_other`，实际扫描本次 `29` 个文件无问题，全部提交 hook 通过<br />[d] GTM 已提交并推送 `ca31392f354be0e849245dc891209d9585a933a5`，[PR #13018](https://github.com/TencentBlueKing/bk-monitor/pull/13018) 已更新 |
@@ -1822,6 +1849,7 @@ pytest bkmonitor/data_source/tests/test_utils_query.py -q
 | 🔄 | `feat/rum-search-overview/#1010158081140241770` | 三个视角的检索总数与时间趋势 | [TencentBlueKing/bk-monitor #13336](https://github.com/TencentBlueKing/bk-monitor/pull/13336) |
 | ✅ | `feat/rum-network-quality-labels/#1010158081139982713` | 虚拟字段查询、复合列协议与字段值展示 | [TencentBlueKing/bk-monitor #13219](https://github.com/TencentBlueKing/bk-monitor/pull/13219) |
 | 🔄 | `codex/rum-span-default-fields/#1010158081139982713` | Span 默认列与常驻筛选调整 | [TencentBlueKing/bk-monitor #13332](https://github.com/TencentBlueKing/bk-monitor/pull/13332) |
+| 🔄 | `feat/rum-session-duration-status/#1010158081139909065` | Session / View 时间线统一起止时间和状态 | [TencentBlueKing/bk-monitor #13179](https://github.com/TencentBlueKing/bk-monitor/pull/13179) |
 | 🔄 | `feat/rum-session-view-query/#1010158081139526191` | Session / View 降级列表及字段分析 | [TencentBlueKing/bk-monitor #13018](https://github.com/TencentBlueKing/bk-monitor/pull/13018) |
 | ✅ | `feat/rum_base_search_module/#1010158081136933145` | 里程碑 0：提供 RUM 基础检索模块 | [TencentBlueKing/bk-monitor #11838](https://github.com/TencentBlueKing/bk-monitor/pull/11838) |
 | ✅ | `feat/rum_base_query_fields/#1010158081136920078` | 里程碑 1：提供 RUM 字段元数据查询（`query_fields`） | [TencentBlueKing/bk-monitor #11840](https://github.com/TencentBlueKing/bk-monitor/pull/11840) |
