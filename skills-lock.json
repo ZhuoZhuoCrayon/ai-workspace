@@ -5,7 +5,7 @@
       "source": "anthropics/skills",
       "sourceType": "github",
       "skillPath": "skills/docx/SKILL.md",
-      "computedHash": "59c70107f8eae818bdfca7da685a6e4111aa519638b667775b794cb74987ec47",
+      "computedHash": "c758da1a6cddbba78cb366570ae9ed99cbf30c640aec28a5d09527e594e8caa6",
       "sourceUrl": "https://github.com/anthropics/skills.git"
     },
     "i-have-adhd": {
@@ -26,14 +26,14 @@
       "source": "anthropics/skills",
       "sourceType": "github",
       "skillPath": "skills/pdf/SKILL.md",
-      "computedHash": "cfbc539377088ca7e44a813b30c306327385bbd973cd7a721e1743f60837dd62",
+      "computedHash": "24858494d43b3dece295c46a60e7a8c00712e4456639889957aac3f029f28962",
       "sourceUrl": "https://github.com/anthropics/skills.git"
     },
     "pptx": {
       "source": "anthropics/skills",
       "sourceType": "github",
       "skillPath": "skills/pptx/SKILL.md",
-      "computedHash": "82eaf5daede5a1779aa17ccf06597cb209a0c2bd41d3a2f18bd45e0301a387fb",
+      "computedHash": "c9d95ca54b6b59220bdcd9e66206b38c7eeccd03e222b7136b91386cd86f9361",
       "sourceUrl": "https://github.com/anthropics/skills.git"
     },
     "skill-creator": {
@@ -138,7 +138,7 @@
       "source": "anthropics/skills",
       "sourceType": "github",
       "skillPath": "skills/xlsx/SKILL.md",
-      "computedHash": "f5945e6e76dc7c178375e5cdf3140959b30cbcd4570ec3dc62296812259fc38d",
+      "computedHash": "42b8412ad20fc3733b1a1a49a25d1ded979980b7a2d60958d53f2bc9c4822f0d",
       "sourceUrl": "https://github.com/anthropics/skills.git"
     }
   }
