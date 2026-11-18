@@ -8,6 +8,7 @@
 |------|------|------|------|
 | Issues | [issues/](./issues/INDEX.md) | 5 篇 | 进行中任务与需求调研 |
 | 已归档 Issues | [issues/](./issues/INDEX.md) | 1 篇 | 已完结的任务记录 |
+| 文章 | [articles/](./articles/INDEX.md) | 1 篇 | 工作区架构与实践复盘 |
 
 ## 0x02 Issues
 
@@ -24,3 +25,9 @@
 | 文件 | 标签 | 摘要 | 归档日期 |
 |------|------|------|---------|
 | [AI 工作区项目启动](./issues/2026-02-06-AI%E5%B7%A5%E4%BD%9C%E5%8C%BA%E9%A1%B9%E7%9B%AE%E5%90%AF%E5%8A%A8/README.md) | `ai-workspace` `规划` | AI 工作区的整体规划和建设 | 2026-02-09 |
+
+## 0x04 文章
+
+| 文件 | 标签 | 摘要 | 更新日期 |
+| --- | --- | --- | --- |
+| [AI 工作区半年架构复盘](./articles/2026-11-16-workspace-evolution/README.md) | `ai-workspace` `skills` `evaluation` `portability` | 用半年提交、技能安装检查和外部实证研究判断哪些工作区机制应保留，哪些应先验证再扩展。 | 2026-11-16 |
