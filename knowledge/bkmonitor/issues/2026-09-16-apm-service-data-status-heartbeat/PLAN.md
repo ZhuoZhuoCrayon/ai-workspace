@@ -4,7 +4,7 @@ tags: [apm, data-status, discover, heartbeat, topo-node, log, profiling]
 issue: knowledge/bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md
 description: 后台维护服务数据心跳与关联日志状态快照，SaaS 只读映射服务状态
 created: 2026-09-16
-updated: 2026-11-06
+updated: 2026-11-09
 ---
 
 # APM 服务数据状态下沉到后台服务发现 —— 实施方案
@@ -365,6 +365,7 @@ for field in ("resource.service.name", "resource.server"):
 - *[1] `extra_data.kind=profiling` 没有消费方，原先只在 `list_services` 中为纯性能分析服务临时拼出。按普通服务落库后，不需要为「未归类节点」做额外补偿。*
 - *[2] 发现窗口为 `check_time` 前 `10 min`，用检查时间近似数据时间的误差不超过 `10 min`；页面状态统一使用独立的服务观测窗口。*
 - *[3] 新增写入只有几次数据库读写，相比 Doris 查询可以忽略；改为 `delay()` 派发会在 Doris 和 `celery_cron` 队列上形成并发尖峰。*
+- *[4] `ServiceDiscover.discover` 首轮按 `service_name,sample_type,type` 聚合，使用 `count(*) AS count`；取得有效样本且三个维度均非空时复用组内计数，以严格大于 `10,000` 判定 `is_large`。维度缺失时调用 `is_large_service` 保留省略过滤后的原口径，无样本不写入该组合；计数与采样均使用 `DiscoverHandler` 传入的最近 `10 min` 窗口。*
 
 ## 0x04 开发方案 —— 读取协议
 
@@ -608,6 +609,7 @@ uv run pytest apm/tests packages/apm_web/tests
 
 | 时间                 | 结论性进展                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `2026-11-09 18:00` | [a] Profiling 聚合计数复用 [PR #13160](https://github.com/TencentBlueKing/bk-monitor/pull/13160)（`a42459717cda4660e11c4922b307ad5f5aad6a9d`）完成 [review](https://github.com/TencentBlueKing/bk-monitor/pull/13160#pullrequestreview-5824739030)，未发现阻塞问题，待合入<br />[b] 有效样本且三维完整的组合复用首轮计数，缺失维度回退旧查询，正常调度窗口与严格大于 `10,000` 的阈值保持<br />[c] Python 3.11.11、SQLite 模型表、LocMemCache 与 FakeRedis 隔离环境下，`54` 项仓库回归和 `4` 项改动前后请求对照通过，Ruff、格式和 diff 检查通过<br />[d] 真实查询构造器与 BKData 桩对照两个有效分组，请求从 `5` 次降到 `3` 次且大数据量判定一致；未独立验证真实 Doris 耗时、paas3 或完整迁移 |
 | `2026-11-06 10:00` | [a] 心跳锁冲突重试 [PR #13141](https://github.com/TencentBlueKing/bk-monitor/pull/13141)（`4d8802f531d7951a329528d39578ea07bbb271fa`）完成 [review](https://github.com/TencentBlueKing/bk-monitor/pull/13141#pullrequestreview-5795053229)，未发现阻塞问题，待合入<br />[b] 独立调用最多 `3` 次，事务外退避并重新锁行合并原观测；外层事务不重试，重试启动预算不限制在途 SQL，总耗时仍受原生锁等待与批量行锁影响<br />[c] Python 3.11.11、MySQL 8.0.46 隔离模型表下，心跳、真实锁冲突和 Trace 检查点相关 `88` 项回归通过，Ruff、格式与 diff 检查通过<br />[d] 正常单节点写入前后均为 `4` 条 SQL，原生等待 `2 s` 的持续冲突用例耗时约 `6.34 s`<br />[e] 测试使用 LocMemCache、FakeRedis 并跳过其他应用的迁移后初始化，未独立复跑完整迁移、paas3 与生产负载 |
 | `2026-10-28 17:00` | [a] 关联日志状态后台刷新 [PR #12998](https://github.com/TencentBlueKing/bk-monitor/pull/12998) 完成 review 并获 Approve，未发现阻塞问题，实现符合里程碑 3，合并提交为 `b620c4ea0b1a5aeb7a33848d922e2f5ac7bf353a`<br />[b] 相关 `120` 项回归在 Python 3.11.11、SQLite 内存表与 LocMemCache 隔离环境通过，变更文件 Ruff 检查通过<br />[c] 未独立验证真实 Redis、日志平台、MySQL 迁移和生产负载 |
 | `2026-10-27 16:00` | [a] Trace 按应用和数据源记录检查边界，最长补扫一小时，单次折叠按 `kind DESC, end_time DESC` 排序，接受有损选择<br />[b] 检查位置使用固定 Trace 缓存模板，缓存生成入口无改动，撤回 NodeDiscover 批次异常扩展并移除截断分支<br />[c] 调度先筛选再加锁，日志保留生命周期、三段延迟与有界摘要，删除重复时间戳、批次调参和过滤计数，不保留 DEBUG<br />[d] 只删 QueryHelper 重复查询体，保留 UNIFY_QUERY，缓存无变化静默，保留增删改摘要、清理原因与十个 ID 样本及写入失败上下文<br />[e] [PR #12958](https://github.com/TencentBlueKing/bk-monitor/pull/12958) 的相关回归 `144` 项通过（含缓存诊断与共享查询层回归），排除的 `7` 项已在未修改基线复现失败或数据库环境问题<br />[f] 未验证真实存储集成和生产负载，本机 PreCI 不可用 |
@@ -652,3 +654,4 @@ uv run pytest apm/tests packages/apm_web/tests
 | ✅ | `feat/apm_related_log_index_status_background_refresh/#1010158081139432693` | 里程碑 3：关联日志状态后台刷新 | [TencentBlueKing/bk-monitor #12998](https://github.com/TencentBlueKing/bk-monitor/pull/12998) |
 | 🔄 | `fix/codex-trace-discovery-catchup/#1010158081165814054` | Trace 服务发现延迟补扫与任务日志 | [TencentBlueKing/bk-monitor #12958](https://github.com/TencentBlueKing/bk-monitor/pull/12958) |
 | 🔄 | `feat/apm_service_heartbeat_add_lock_conflict_retry/#1010158081139784789` | 服务心跳锁冲突有限重试 | [TencentBlueKing/bk-monitor #13141](https://github.com/TencentBlueKing/bk-monitor/pull/13141) |
+| 🔄 | `feat/apm_profiling_discover_reused_aggregation_count/#1010158081139817700` | Profiling 服务发现复用聚合计数 | [TencentBlueKing/bk-monitor #13160](https://github.com/TencentBlueKing/bk-monitor/pull/13160) |

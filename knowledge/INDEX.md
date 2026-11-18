@@ -26,4 +26,4 @@
 - 2026-11-16：新增 [AI 工作区半年架构复盘](./ai-workspace/articles/2026-11-16-workspace-evolution/README.md)（对照半年提交和外部研究，评估技能分发、任务质量与执行方式）。
 - 2026-11-15：接入 [helm-charts](./helm-charts/INDEX.md)。
 - 2026-11-12：新增 [Aegis SDK v2 数据协议](./bkmonitor/articles/2026-11-12-aegis-sdk-v2-data-protocol/README.md)（补齐字段枚举与采集机制，说明 Web Vitals 的选值、汇聚及首次隐藏上报规则）
-- 2026-11-06：更新 [APM 服务数据状态下沉到后台服务发现](./bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md)（补齐心跳锁冲突重试协议、MySQL 验证与 PR 评审记录）
+- 2026-11-09：更新 [APM 服务数据状态下沉到后台服务发现](./bkmonitor/issues/2026-09-16-apm-service-data-status-heartbeat/README.md)（补齐 Profiling 聚合计数复用、请求次数对照与 PR 评审记录）
