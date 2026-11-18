@@ -4,7 +4,7 @@ tags: [rum, apm, query, span, view, session, factory, unify-query, semconv]
 issue: ./README.md
 description: 通过统一 Target、查询基类、Level 工厂和语义字段目录收敛 RUM 与 APM 查询
 created: 2026-08-07
-updated: 2026-11-14
+updated: 2026-11-18
 ---
 
 # RUM 分层统一查询 —— 实施方案
@@ -516,7 +516,11 @@ BaseRumRequestSerializer                    # bk_biz_id、app_name、mode
 | `POST` /rum/search/download_topk/            | `RumDownloadTopKResource`         | `download_topk`            |
 | `POST` /rum/search/get_fields_option_values/ | `RumFieldsOptionValuesResource`   | `get_fields_option_values` |
 | `POST` /rum/search/list_records/             | `RumRecordsResource`              | `list_records`             |
+| `POST` /rum/search/total/                    | `RumTotalResource`                | `total`                    |
+| `POST` /rum/search/time_series/              | `RumTimeSeriesResource`           | `time_series`              |
 | `POST` /rum/search/record_detail/            | `RumRecordDetailResource`         | `record_detail`            |
+
+`total`、`time_series` 与列表共用检索范围。Span 按记录计数，趋势按 Span 类型分组；View、Session 按实体 ID 去重，降级查询包含命中筛选的子 Span。趋势在每个时间桶内独立去重，各桶之和不代表窗口总数。原有字段分析仍使用生命周期开始事件。
 
 ### g. semconv
 
@@ -939,60 +943,42 @@ def build(spans: Sequence[dict[str, Any]], view_id: str | None = None) -> dict[s
 
 #### 字段组合协议
 
-`fields` 同时维护普通字段、可查询虚拟字段和复合展示列；`display_fields` 继续引用字段名。
+`FieldSpec.extra_config` 同时容纳 `virtual` 和 `composite`；普通字段、虚拟字段均可附带复合布局，`display_fields` 继续引用字段名。
 
-| 扩展项 | 内容 | 查询语义 |
+| 扩展项 | 内容 | 接口与查询语义 |
 | --- | --- | --- |
-| `virtual_config` | `fields` 绑定模板变量到原字段，`template` 定义拼接 | 过滤反解为原字段条件，分析联合分组后按最终值归并，排序按模板成员顺序展开 |
-| `composite_config` | `primary` 指定默认成员，`sections` 组织多行，行内使用 `items`、`badges` 和可选 `separator` | 消费方提交具体成员字段查询；复合列自身不作为聚合维度 |
+| `extra_config.virtual` | `fields` 绑定成员，`template` 拼接，`parse_pattern` 按命名分组反解 | 仅后台使用；过滤拆分为原字段条件，分析联合分桶后归并，排序展开为成员字段 |
+| `extra_config.composite` | `primary` 指定默认查询成员，`sections` 组织多行，行内使用 `items`、`badges` 和可选 `separator`；成员支持 `show_if` | 由 `view_config.fields[]` 返回，前端动态渲染；查询提交具体成员字段 |
 
 虚拟字段模板：
 
 ```json
 {
-  "virtual.span_kind": "{span_type|--}[（{resource_type}）]",
   "virtual.viewport": "{width|--} x {height|--}",
   "virtual.browser": "{name|--} {version|--}",
   "virtual.network": "{connection|--} / {quality|--}"
 }
 ```
 
-模板按固定文本从右拆分，返回值不额外转义。配置方保证右侧成员与默认值不含相邻分隔文本，例如浏览器名称允许空格、版本不含空格。可选片段在无默认值的成员缺失时整段隐藏；成员全空时返回 `null`，否则使用模板默认值。模板默认文本只表示空值占位符，反解不额外匹配相同文本的原始值。
+`--` 表示空值，成员全空时返回 `null`。浏览器名称可包含空格，版本不含空格，由配置的正则完成反解。虚拟字段只支持 `equal` 和 `not_equal`；多值匹配取 OR，多值排除取 AND。Top-K 完整归并后截断；排序复用普通字段逻辑，并为虚拟排序追加默认时间与记录 ID。
 
-虚拟字段只支持 `equal` 和 `not_equal`；成员缺失、`null` 和空字符串视为空值，`0` 与 `false` 保留。Top-K 完整归并后截断，比例分母使用非空值计数。排序沿用成员原始类型，空值在后，并追加默认时间与记录 ID 保持分页稳定。
+复合配置附在 `span_name`、`attributes.view.url_template`、`virtual.browser`、`attributes.error.source`、`attributes.resource.size` 上；Session 的会话配置附在 `attributes.session.id`。页面与环境配置跨视角复用，资源获取方式直接引用 `attributes.resource.delivery_type`。`show_if` 同一字段的候选值取 OR，不同字段取 AND。
 
-复合展示列包括 `display.span_name`、`display.page`、`display.environment` 和 `display.resource_size`。资源获取说明 `display.resource.delivery` 复用资源时序判断，只展示 `Service Worker` 或 `Cache`，不提供过滤与分析操作。默认列切换为复合字段时，需与支持该配置的消费方协调上线。
-
-`list_records` 由后台计算虚拟字段，并按 `composite_config` 组装复合单元格。普通字段和虚拟字段继续返回扁平键；复合字段保留对象结构：
+`list_records` 返回扁平原值和后台计算的虚拟值，由前端根据 `extra_config.composite` 组装单元格：
 
 ```json
 {
   "list": [
     {
       "virtual.browser": "Chrome 131",
-      "virtual.network": "wifi / 4g",
-      "display.environment": {
-        "sections": [
-          {
-            "items": [
-              {"field_name": "virtual.browser", "value": "Chrome 131"},
-              {"field_name": "resource.user_agent.os.name", "value": "macOS"}
-            ],
-            "separator": " · "
-          },
-          {
-            "items": [{"field_name": "virtual.network", "value": "wifi / 4g"}]
-          }
-        ]
-      }
+      "resource.user_agent.os.name": "macOS",
+      "virtual.network": "wifi / 4g"
     }
   ]
 }
 ```
 
-- *[1] `items` 和 `badges` 保留配置中的 `field_name`、`icon`，后台填入 `value`；成员缺失时为 `null`。*
-- *[2] 消费方负责布局渲染与单位格式化，成员查询能力和默认 `primary` 继续读取 `view_config`。*
-- *[3] 复合对象在原始记录展平后生成，避免 `sections`、`items` 被拆成扁平字段。*
+默认列按 Session / View / Span 配置，消费方需接入动态复合布局并协调上线。原始 Span 补查得到的入口页面等字段保持仅展示能力；预计算层级表已有查询能力时才提供对应操作符。
 
 
 ### b. RecordDetail（Resource）
@@ -1771,7 +1757,8 @@ pytest bkmonitor/data_source/tests/test_utils_query.py -q
 
 | 时间 | 结论性进展 |
 | --- | --- |
-| `2026-11-14 00:00` | [a] 修复虚拟过滤条件与查询转换器的层级不兼容，过滤与字段分析时序恢复<br />[b] `list_records` 在后台组装复合单元格，保留成员字段名和原始值<br />[c] 开发环境 `924` 条真实记录验证四个虚拟字段的过滤与时序计数一致，Span/View/Session 列表包含虚拟值和复合对象，后端回归 `796` 项通过，默认文本按空值占位符反解<br />[d] 修复保留在本地分支，尚未推送到 [#13229](https://github.com/TencentBlueKing/bk-monitor/pull/13229)，前端需接入复合对象渲染 |
+| `2026-11-18 13:00` | 交付总数与趋势接口 [#13336](https://github.com/TencentBlueKing/bk-monitor/pull/13336)，覆盖三个视角；493 项查询测试及 27 组真实接口过滤验证通过，页面联动待前端接入。 |
+| `2026-11-18 10:00` | [a] 虚拟字段配置保留在后台，复合布局通过 `extra_config.composite` 返回，列表恢复扁平原值；补齐 Session 配置及各视角默认列<br />[b] 代码与字段值展示改动收敛至 [#13219](https://github.com/TencentBlueKing/bk-monitor/pull/13219)，原 #13229 已关闭<br />[c] 768 项回归、59 个文档 JSON 示例及提交检查通过，#13219 已合并<br />[d] 剩余默认列调整由 [#13332](https://github.com/TencentBlueKing/bk-monitor/pull/13332) 交付，111 项相关测试通过 |
 | `2026-11-11 16:38` | 交付虚拟字段查询与复合列后端协议 [#13229](https://github.com/TencentBlueKing/bk-monitor/pull/13229)：模板统一从右拆分，复合列引用成员能力；基于最新 master 的 784 项回归通过，消费方需协调默认列接入。 |
 | `2026-10-30 17:41` | [a] 普通 Span 与请求计数合并一次聚合，Session 的 View 去重数和入口、退出页合并一次原始查询，两种列表每页各 `8` 次请求<br />[b] 业务筛选与字段映射集中在公共任务构造处，通用计数方法支持单维度和多维度，删除无调用方的记录补查包装<br />[c] 复查未发现新增阻塞问题，查询回归 `350 passed`，全部提交检查通过，PreCI 两项规则扫描 `3` 个文件无问题<br />[d] 提交 `a384898445a7317514322c0bb8358a0ba7541acc` 已推送到 [PR #13018](https://github.com/TencentBlueKing/bk-monitor/pull/13018) |
 | `2026-10-30` | [a] View 字段分析改用开始事件，文档明确其与活跃实体列表的口径差异<br />[b] 请求总数与错误数合并聚合，Web Vitals 一次查询，单数据源 Session/View 每页补查分别为 `10`、`8` 次<br />[c] 查询回归 `347 passed`，PreCI 两项规则扫描 `4` 个文件通过<br />[d] 提交 `4487e62774a1d1f0593712eecba239b92d165035` 已推送到 [PR #13018](https://github.com/TencentBlueKing/bk-monitor/pull/13018)，两条已处理意见已 resolve，异常策略暂不调整 |
@@ -1832,7 +1819,9 @@ pytest bkmonitor/data_source/tests/test_utils_query.py -q
 
 | 状态 | 分支 | 里程碑 | PR |
 | --- | --- | --- | --- |
-| 🔄 | `feat/rum-field-protocol/#1010158081139998202` | 虚拟字段查询与复合列后端协议 | [TencentBlueKing/bk-monitor #13229](https://github.com/TencentBlueKing/bk-monitor/pull/13229) |
+| 🔄 | `feat/rum-search-overview/#1010158081140241770` | 三个视角的检索总数与时间趋势 | [TencentBlueKing/bk-monitor #13336](https://github.com/TencentBlueKing/bk-monitor/pull/13336) |
+| ✅ | `feat/rum-network-quality-labels/#1010158081139982713` | 虚拟字段查询、复合列协议与字段值展示 | [TencentBlueKing/bk-monitor #13219](https://github.com/TencentBlueKing/bk-monitor/pull/13219) |
+| 🔄 | `codex/rum-span-default-fields/#1010158081139982713` | Span 默认列与常驻筛选调整 | [TencentBlueKing/bk-monitor #13332](https://github.com/TencentBlueKing/bk-monitor/pull/13332) |
 | 🔄 | `feat/rum-session-view-query/#1010158081139526191` | Session / View 降级列表及字段分析 | [TencentBlueKing/bk-monitor #13018](https://github.com/TencentBlueKing/bk-monitor/pull/13018) |
 | ✅ | `feat/rum_base_search_module/#1010158081136933145` | 里程碑 0：提供 RUM 基础检索模块 | [TencentBlueKing/bk-monitor #11838](https://github.com/TencentBlueKing/bk-monitor/pull/11838) |
 | ✅ | `feat/rum_base_query_fields/#1010158081136920078` | 里程碑 1：提供 RUM 字段元数据查询（`query_fields`） | [TencentBlueKing/bk-monitor #11840](https://github.com/TencentBlueKing/bk-monitor/pull/11840) |
