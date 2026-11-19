@@ -64,75 +64,12 @@
       "computedHash": "ad5b1fc52807e9afa4635e59218a026b164dc58b6c3f41b0f7c644dcd6ccf572",
       "sourceUrl": "https://github.com/anthropics/skills.git"
     },
-    "wecomcli-calendar": {
-      "source": "WecomTeam/wecom-cli",
+    "wecom-unified": {
+      "source": "WecomTeam/wecom-unified",
       "sourceType": "github",
-      "skillPath": "skills/wecomcli-calendar/SKILL.md",
-      "computedHash": "4e8f108edc11cc254eadbe26a87b54fcee26f549715147340d177622f45dd1bb",
-      "sourceUrl": "https://github.com/WecomTeam/wecom-cli.git"
-    },
-    "wecomcli-contact": {
-      "source": "WecomTeam/wecom-cli",
-      "sourceType": "github",
-      "skillPath": "skills/wecomcli-contact/SKILL.md",
-      "computedHash": "2263f00fee2f3f5d0e9b548364f5b7bbc3eaef48221aeab269152feac866f5c5",
-      "sourceUrl": "https://github.com/WecomTeam/wecom-cli.git"
-    },
-    "wecomcli-doc": {
-      "source": "WecomTeam/wecom-cli",
-      "sourceType": "github",
-      "skillPath": "skills/wecomcli-doc/SKILL.md",
-      "computedHash": "f5fdccc4c312939efa95d413adaf1dafa375bc32815bef63d2d6dd35ea7afed5",
-      "sourceUrl": "https://github.com/WecomTeam/wecom-cli.git"
-    },
-    "wecomcli-doc-manage": {
-      "source": "WecomTeam/wecom-cli",
-      "sourceType": "github",
-      "skillPath": "skills/wecomcli-doc-manage/SKILL.md",
-      "computedHash": "a8b8e9b03d99f2eb923565832843c3191c9b17ae47a2acf7ef3e00c30e8baa92",
-      "sourceUrl": "https://github.com/WecomTeam/wecom-cli.git"
-    },
-    "wecomcli-meeting": {
-      "source": "WecomTeam/wecom-cli",
-      "sourceType": "github",
-      "skillPath": "skills/wecomcli-meeting/SKILL.md",
-      "computedHash": "23a9c5b2df0998072ed87c1693e242f3885c87dbc54c1ce85930b81ac481db99",
-      "sourceUrl": "https://github.com/WecomTeam/wecom-cli.git"
-    },
-    "wecomcli-shared": {
-      "source": "WecomTeam/wecom-cli",
-      "sourceType": "github",
-      "skillPath": "skills/wecomcli-shared/SKILL.md",
-      "computedHash": "4596c27868dd4c6bc40c88c5c8cc5b9e50e4edb8e8034e73dba057ab2a74f370",
-      "sourceUrl": "https://github.com/WecomTeam/wecom-cli.git"
-    },
-    "wecomcli-sheet": {
-      "source": "WecomTeam/wecom-cli",
-      "sourceType": "github",
-      "skillPath": "skills/wecomcli-sheet/SKILL.md",
-      "computedHash": "24c5263dafe6759ad9f534e6cbb0fbf49895348366bea419bede6d5e6720db6c",
-      "sourceUrl": "https://github.com/WecomTeam/wecom-cli.git"
-    },
-    "wecomcli-smartpage": {
-      "source": "WecomTeam/wecom-cli",
-      "sourceType": "github",
-      "skillPath": "skills/wecomcli-smartpage/SKILL.md",
-      "computedHash": "d2b1f1d59fab1d712109aad86dd583fe53109a0d2bd881c5ac087fe43c38f16b",
-      "sourceUrl": "https://github.com/WecomTeam/wecom-cli.git"
-    },
-    "wecomcli-smartsheet": {
-      "source": "WecomTeam/wecom-cli",
-      "sourceType": "github",
-      "skillPath": "skills/wecomcli-smartsheet/SKILL.md",
-      "computedHash": "bdc6b2288e3a0962868949838e361fdad28bcff7d7901582b6f442dc1c2958a8",
-      "sourceUrl": "https://github.com/WecomTeam/wecom-cli.git"
-    },
-    "wecomcli-todo": {
-      "source": "WecomTeam/wecom-cli",
-      "sourceType": "github",
-      "skillPath": "skills/wecomcli-todo/SKILL.md",
-      "computedHash": "f4979be05d6d12b017b6bdef56592e736479e9f0f05d314f45a26f39a7e5fb25",
-      "sourceUrl": "https://github.com/WecomTeam/wecom-cli.git"
+      "skillPath": "skills/wecom-unified/SKILL.md",
+      "computedHash": "364e43d447f62a6211a0a671db45bd0416c51c0ac6cfaba831b33be0f11448ef",
+      "sourceUrl": "https://github.com/WecomTeam/wecom-unified.git"
     },
     "xlsx": {
       "source": "anthropics/skills",

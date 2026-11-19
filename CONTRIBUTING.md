@@ -87,13 +87,9 @@ make skills-mount
 
 如需跳过部分 skill，可以覆盖 `SKILLS_MOUNT_BLACKLIST`。
 
-企业微信技能来自 [WecomTeam/wecom-cli](https://github.com/WecomTeam/wecom-cli/tree/main/skills)，通过同一份锁文件安装和更新。默认包含以下技能，名称均以 `wecomcli-` 开头：
+企业微信统一使用 `wecom-unified`。运行 `make init-skills` 或 `make skills-update` 会在工作区安装统一技能，随后移除原有的 10 个分项技能及其 IDE 挂载。[企业微信官方技能](https://github.com/WecomTeam/wecom-unified)
 
-- 公共与文档：`shared`、`doc-manage`、`doc`、`smartpage`。
-- 表格：`sheet`、`smartsheet`，需求排期仍由已有的 `work-schedule` 承接。
-- 协作：`contact`、`calendar`、`meeting`、`todo`。
-
-CLI 版本与授权由 `wecomcli-shared` 在首次使用时检查，初始化仅安装缺失的 CLI 并提示 `wecom-cli auth init --noninteractive`。凭据由 CLI 在本机管理；其他技能按需安装后提交锁文件，能力说明以官方技能为准。
+`wecom-unified` 在使用时检查 CLI 版本与授权。首次授权可运行 `wecom-cli auth init --noninteractive`。需求排期继续使用 `work-schedule`。
 
 ## 0x04 提交前检查
 

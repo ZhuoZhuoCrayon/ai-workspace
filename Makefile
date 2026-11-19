@@ -11,7 +11,7 @@ SKILLS_MOUNT_BLACKLIST ?=
 REGISTRY_SCRIPT ?= $(SKILLS_DIR)/project-mgr/scripts/registry.py
 
 .PHONY: help init init-pre-commit init-skills init-gh verify verify-pre-commit verify-skills \
-	skills-update skills-update-projects skills-mount repos-sync bootstrap private-pull private-push
+	skills-update skills-clean-legacy-wecom skills-update-projects skills-mount repos-sync bootstrap private-pull private-push
 
 define with_node
 	if [ -f "$(NVM_SCRIPT)" ]; then \
@@ -54,6 +54,7 @@ init-skills:
 	@python3 scripts/normalize_skill_sources.py
 	@$(call with_node,npx skills experimental_install)
 	@python3 scripts/normalize_skill_sources.py
+	@$(MAKE) --no-print-directory skills-clean-legacy-wecom
 	@$(MAKE) --no-print-directory skills-update-projects
 	@$(MAKE) --no-print-directory skills-mount
 	@$(call with_node,bash scripts/init_wecom.sh)
@@ -74,9 +75,14 @@ skills-update:
 	@python3 scripts/normalize_skill_sources.py
 	@$(call with_node,npx skills update -p -y)
 	@python3 scripts/normalize_skill_sources.py
+	@$(MAKE) --no-print-directory skills-clean-legacy-wecom
 	@$(MAKE) --no-print-directory skills-update-projects
 	@$(MAKE) --no-print-directory skills-mount
 	@$(call with_node,bash scripts/init_wecom.sh)
+
+skills-clean-legacy-wecom:
+	@test -s .agents/skills/wecom-unified/SKILL.md || { echo "缺少 wecom-unified，已保留旧版企微技能" >&2; exit 1; }
+	@rm -rf -- .agents/skills/wecomcli-{calendar,contact,doc,doc-manage,meeting,shared,sheet,smartpage,smartsheet,todo}
 
 skills-update-projects:
 	@python3 scripts/sync_project_skills.py --root "$$(pwd)" \
