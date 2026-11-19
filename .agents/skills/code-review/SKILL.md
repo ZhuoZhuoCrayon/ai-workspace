@@ -34,6 +34,8 @@ GitHub 写操作必须得到用户明确授权，包括评论、approve、reques
 
 授权模糊时必须先确认，不得猜测执行。
 
+`review 无需确认`、`直接发` 只免除等待用户确认草稿，不跳过草稿和自检。仍按 [0x07 评论规范](#0x07-评论规范) 写出评论文件，通过 [0x08 交付自检](#0x08-交付自检) 后再发布。
+
 ### b. Assignees
 
 PR review 场景开始前必须补齐 assignees，未完成前不得继续 review 或执行 GitHub 写操作。
@@ -243,6 +245,8 @@ GTM 交付时同时检查关联 TAPD 标题是否与 PR 标题正文一致。
 
 仅当问题无法定位到单行，或工具限制无法 inline 时，退化为 conversation 评论，并注明 `path:line` 与退化原因。
 
+每条 finding 写入独立的 `.md` 文件，文件内容即发布正文。发布时从文件读取，例如 `gh api -F body=@<file>` 或 `jq --rawfile body <file>`。不在 JS、Shell 或 JSON 字符串字面量里拼写正文。
+
 行内评论格式：
 
 ````markdown
@@ -331,6 +335,16 @@ for code_field, message_field in cls.RPC_EXCEPTION_FIELDS.items():
 - 发布前逐条比对最终草稿，禁止在发布时二次改写、压缩、补充或删减。
 - 发布到 PR 前再次确认 inline 评论、总结评论和语言选择。
 - 关联方案的 review 必须完成 [0x09 方案回写](#0x09-方案回写)。草稿记录已经写回的位置，不再询问是否写回。
+
+发布前对 finding 文件目录运行格式检查，汇总评论不放入该目录。`<SKILL_DIR>` 为本文件所在目录：
+
+```bash
+python3 <SKILL_DIR>/scripts/check_review_comments.py <comments_dir>
+```
+
+- 退出码非 `0`：按输出修改文件后重跑，通过前不发布。
+- 出现 `!` 警告：代码块过长，确认仍是核心伪代码。
+- 脚本只查格式：极短豁免是否成立、伪代码是否切中问题，仍逐条人工判断。
 
 ## 0x09 方案回写
 
