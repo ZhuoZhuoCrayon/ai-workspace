@@ -5,6 +5,17 @@ import { AgentProtocol, buildArguments } from "../src/agents/protocol.js";
 const push = (parser: AgentProtocol, event: unknown) =>
   parser.parse(JSON.stringify(event));
 
+test("Codex 新会话和续聊的图片参数不吞掉会话 ID 或标准输入占位符", () => {
+  const options = { command: "codex", writable: false };
+  const images = ["/tmp/first image.png", "/tmp/second.png"];
+  const imageArgs = ["--image", images[0], "--image", images[1]];
+  for (const session of [undefined, "thread-1"]) {
+    const args = buildArguments("codex", options, session, images);
+    const tail = [...(session ? ["resume", session] : []), "-", ...imageArgs];
+    assert.deepEqual(args.slice(-tail.length), tail);
+  }
+});
+
 test("Codex 文本、工具与终态隔离，恢复命令绑定具体 ID", () => {
   const parser = new AgentProtocol("codex");
   assert.deepEqual(

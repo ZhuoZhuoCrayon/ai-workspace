@@ -41,9 +41,9 @@ export function buildArguments(
         : []),
       ...instructionArgs,
       ...model,
-      ...images.flatMap((image) => ["--image", image]),
       ...(sessionId ? ["resume", sessionId] : []),
       "-",
+      ...images.flatMap((image) => ["--image", image]),
     ];
   }
   return [
