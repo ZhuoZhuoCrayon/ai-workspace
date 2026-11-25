@@ -4,7 +4,7 @@ tags: [rum, apm, query, span, view, session, factory, unify-query, semconv]
 issue: ./README.md
 description: 通过统一 Target、查询基类、Level 工厂和语义字段目录收敛 RUM 与 APM 查询
 created: 2026-08-07
-updated: 2026-11-18
+updated: 2026-11-25
 ---
 
 # RUM 分层统一查询 —— 实施方案
@@ -175,7 +175,7 @@ flowchart LR
 | 原始字段分析 | [a] Session：`span_type=session AND session.phase=start`<br />[b] View：`span_type=view AND view.phase=start` | 分析实体记录 |
 | 计算字段能力 | [a] `is_agg=false`<br />[b] `is_searchable=false`<br />[c] 消费端关闭计算字段操作入口 *[1]* | 按字段类型开放 |
 | 列表候选 | 按有效的 `attributes.session.id` 或 `attributes.view.id` 折叠全部匹配 Span | 直接分页查询层级表 |
-| 当前页补查 | [a] 按 ID 批量查询计数、最早开始、最晚结束和生命周期<br />[b] Session 补入口、出口及 View 去重数<br />[c] View 按指标取最新 Vital | 不补查 |
+| 当前页补查 | [a] 按 ID 批量查询计数、最早开始、最晚结束和生命周期<br />[b] Session 补入口、出口及 View 去重数<br />[c] View 按指标取最新 Vital：同一指标 ID 先比 `vital.version` 再比 `end_time`，多个 ID 时取 `end_time` 最新的值 | 不补查 |
 | 关闭状态 | [a] 只由最新生命周期事件判断 `is_active`<br />[b] `end` 返回 `normal` 与结束时间<br />[c] 缺失状态与指标返回 `null` | 使用层级表结果 |
 
 - *[1] `start_time` 允许按匹配 Span 的时间排序；补查后的实体 `start_time` 取 `min(start_time)`，保持折叠分页顺序，不进行页内伪排序。*
@@ -718,7 +718,7 @@ def build(
 | 关联记录 | 过滤条件 | 选取 |
 | --- | --- | --- |
 | View 生命周期 | 同 View ID、`span_type=view` | 按 `view.version` 降序取最新一条 |
-| Web Vitals | 同 View ID、`span_type=vital` | 每个指标按 `end_time` 降序取最新一条 |
+| Web Vitals | 同 View ID、`span_type=vital` | 同一指标 ID 先按 `vital.version`、再按 `end_time` 取最新，多个 ID 时取 `end_time` 最新的一条，与列表汇总同一口径 |
 | Session 生命周期 | 同 Session ID、`span_type=session` | `start` / `rotate` / `end` 全部保留，供结束判定 |
 
 - *[1] View 和 Vital 按全局唯一的 View ID 定位，不追加 Session 条件。Session 生命周期按主记录的 `attributes.session.id` 另查。*
@@ -820,7 +820,8 @@ Session 和 View 共用同一套规范化规则。结束时间取值与状态判
 | --- | --- | --- |
 | View | -- | 按 `attributes.view.id` 去重，取 `min(attributes.view.version)` 的快照 |
 | Action | View | `attributes.view.id` 相等，不因 `attributes.action.id` 挂到其他 Action |
-| 非 Action 成员 | Action、View | 同一 View 内 `attributes.action.id` 命中 Action 时挂到该 Action，否则挂到 View |
+| Resource、Error、Long Task | Action、View | 同一 View 内挂到 `attributes.action.ids` 命中的每个 Action，未命中时挂到 View |
+| 其他成员 | View | 直属 View，不按 Action ID 挂载 |
 
 - *[1] View 按 `attributes.view.started_at` 升序，子节点按 `start_time` 升序。*
 - *[2] Vital、Session 不生成节点。*
@@ -907,7 +908,7 @@ Session 和 View 共用同一套规范化规则。结束时间取值与状态判
     },
     {
       "field_name": "LCP",
-      "field_alias": "最大内容绘制",
+      "field_alias": "LCP",
       "field_type": "double",
       "field_unit": "ms",
       "field_display_type": "duration",
@@ -921,7 +922,10 @@ Session 和 View 共用同一套规范化规则。结束时间取值与状态判
         {"rating": "good", "value": 2500},
         {"rating": "needs_improvement", "value": 4000},
         {"rating": "poor"}
-      ]
+      ],
+      "extra_config": {
+        "hover": {"title": "LCP（最大内容绘制）", "description": "..."}
+      }
     }
   ],
   "groups": [
@@ -962,16 +966,18 @@ Session 和 View 共用同一套规范化规则。结束时间取值与状态判
 - *[6] `is_list = false` 的字段不进入可选列表列；检索与分析能力分别由 `is_searchable` 和 `is_agg` 声明。*
 - *[7] `option_values` 存在别名时，字段分析和候选值使用 `{alias}（{value}）` 展示，列表使用 `{alias}`。*
 - *[8] `rating_config` 按数组顺序匹配。`value` 是包含性上界，单位沿用字段的 `field_unit`；未设置 `value` 的末项承接剩余值。*
+- *[9] Web Vitals 字段的 `field_alias` 只返回指标简称，完整名称和说明由可选的 `extra_config.hover` 提供，结构见 [Hover](#h-hover)。*
 
 
 #### 字段组合协议
 
-`FieldSpec.extra_config` 同时容纳 `virtual` 和 `composite`；普通字段、虚拟字段均可附带复合布局，`display_fields` 继续引用字段名。
+`FieldSpec.extra_config` 同时容纳 `virtual`、`composite` 和 `hover`；普通字段、虚拟字段均可附带复合布局，`display_fields` 继续引用字段名。
 
 | 扩展项 | 内容 | 接口与查询语义 |
 | --- | --- | --- |
 | `extra_config.virtual` | `fields` 绑定成员，`template` 拼接，`parse_pattern` 按命名分组反解 | 仅后台使用；过滤拆分为原字段条件，分析联合分桶后归并，排序展开为成员字段 |
 | `extra_config.composite` | `primary` 指定默认查询成员，`sections` 组织多行，行内使用 `items`、`badges` 和可选 `separator`；成员支持 `show_if` | 由 `view_config.fields[]` 返回，前端动态渲染；查询提交具体成员字段 |
+| `extra_config.hover` | 字段说明，结构见 [Hover](#h-hover)；文案维护在 `semconv/rum/hover.py` | 由 `view_config.fields[].extra_config.hover` 返回副本，详情 Builder 引用同一份定义 |
 
 虚拟字段模板：
 
@@ -1085,13 +1091,11 @@ flowchart TD
         "request": {
           "attributes.http.request.method": "POST",
           "attributes.url.template": "/api/orders",
-          "attributes.url.full": "https://example.com/api/orders",
-          "attributes.server.address": "example.com"
+          "attributes.url.full": "https://example.com/api/orders"
         },
         "duration": {"elapsed_time": 128000},
         "http_result": {
-          "attributes.http.response.status_code": 200,
-          "attributes.outcome.type": "success"
+          "attributes.http.response.status_code": 200
         },
         "transfer": {
           "display.compression_ratio": 0.6295,
@@ -1144,8 +1148,7 @@ flowchart TD
       "type": "summary_cards",
       "data": {
         "http_result": {
-          "attributes.http.response.status_code": 200,
-          "attributes.outcome.type": "success"
+          "attributes.http.response.status_code": 200
         },
         "duration": {"elapsed_time": 60300},
         "transfer": {
@@ -1156,7 +1159,7 @@ flowchart TD
         },
         "delivery": {
           "attributes.resource.delivery_type": "cache",
-          "attributes.resource.cache.hit": true
+          "display.resource.cache_hit": true
         },
         "blocking": {
           "attributes.resource.render_blocking_status": "non-blocking"
@@ -1169,11 +1172,6 @@ flowchart TD
       "items": [
         {"field_name": "attributes.resource.type", "value": "img"},
         {"field_name": "attributes.url.template", "value": "/static/img/db.svg"},
-        {
-	      "field_name": "attributes.server.address",
-	      "value": "rum.example.com"
-	    },
-        {"field_name": "attributes.http.request.method", "value": "GET"},
         {"field_name": "attributes.resource.protocol", "value": "h2"}
       ]
     },
@@ -1193,8 +1191,7 @@ flowchart TD
     "title": "click .submit-btn",
     "badges": [
       {"field_name": "elapsed_time", "value": 432000},
-      {"field_name": "attributes.action.type", "value": "click"},
-      {"field_name": "attributes.outcome.type", "value": "warning"}
+      {"field_name": "attributes.action.type", "value": "click"}
     ],
     // 省略，同 Resource。
     "items": []
@@ -1223,7 +1220,7 @@ flowchart TD
 | 触发请求数       | `statistics` | `attributes.span_type: resource`  | `count(attributes.span_type)` |
 | 错误数         | `statistics` | `attributes.span_type: error`     | `count(attributes.span_type)` |
 | LongTasks 数 | `statistics` | `attributes.span_type: long_task` | `count(attributes.span_type)` |
-* *[1] 统一过滤条件：`attributes.action.id: {当前 Action ID}`。*
+* *[1] 统一过滤条件：`attributes.action.ids: {当前 Action ID}`。*
 * *[2] 查询时间范围：[end_time - 1d, end_time + 1d]。*
 
 ### d. RecordDetail（LongTask）
@@ -1235,8 +1232,7 @@ flowchart TD
   "overview": {
     "title": "longTask",
     "badges": [
-      {"field_name": "elapsed_time", "value": 123500},
-      {"field_name": "attributes.outcome.type", "value": "warning"}
+      {"field_name": "elapsed_time", "value": 123500}
     ],
     // 省略，同 Resource。
     "items": []
@@ -1250,10 +1246,10 @@ flowchart TD
           "elapsed_time": 123500,
           "attributes.long_task.blocking_duration": 42.5
         },
-        "action": {"attributes.action.id": "xxxxxx"},
+        "action": {"attributes.action.ids": ["xxxxxx"]},
         "attribution": {
-          "attributes.long_task.entry_type": "long-animation-frame",
-          "attributes.long_task.name": "long-animation-frame",
+          // long_task.name 仅在 entry_type 为 long-task 时返回。
+          "attributes.long_task.entry_type": "long-animation-frame"
         }
       }
     }
@@ -1261,13 +1257,13 @@ flowchart TD
 }
 ```
 
-*[1] 根据 `attributes.action.id` 异步补齐名称和时间。*
+*[1] 用全部 `attributes.action.ids` 异步补齐名称和类型，取 `end_time` 最新的一条。*
 
 异步拉取的「关键信息」：
 
 | 关联信息      | API            | 过滤条件                                                         |
 | --------- | -------------- | ------------------------------------------------------------ |
-| 关联 Action | `list_records` | `attributes.span_type: action AND attributes.action.id: xxx` |
+| 关联 Action | `list_records` | `attributes.span_type: action AND attributes.action.id: ({action.ids})` |
 
 ### e. RecordDetail（Error）
 
@@ -1277,9 +1273,7 @@ flowchart TD
   "span_id": "9d199175096474e4",
   "overview": {
     "title": "TypeError: Cannot read properties of undefined (reading 'name')",
-    "badges": [
-      {"field_name": "attributes.outcome.type", "value": "error"}
-    ],
+    "badges": [],
     // 省略，同 Resource。
     "items": []
   },
@@ -1435,10 +1429,6 @@ flowchart TD
         "ttfb": {
           "attributes.vital.metric": "ttfb",
           "attributes.vital.value": 101.7,
-          "attributes.vital.ttfb.waiting_duration": 1.2,
-          "attributes.vital.ttfb.dns_duration": 3.8,
-          "attributes.vital.ttfb.connection_duration": 10,
-          "attributes.vital.ttfb.request_duration": 83.7,
           "display.rating_config": [
             {"rating": "good", "value": 800, "alias": "良好"},
             {"rating": "needs_improvement", "value": 1800, "alias": "需改进"},
@@ -1609,7 +1599,7 @@ View Span 关联信息获取（后端）：
 
 ### h. Hover
 
-`record_detail` 在加载阶段、里程碑、Web Vitals 和评级对象中返回统一的 `hover` 元数据：
+`record_detail` 的加载阶段、里程碑、Web Vitals 和评级对象，以及 `view_config` 的 Web Vitals 字段，返回统一的 `hover` 元数据：
 
 ```json
 {
@@ -1638,6 +1628,7 @@ View Span 关联信息获取（后端）：
 
 | 对象 | Hover 落点 | 约束 |
 | --- | --- | --- |
+| Web Vitals 列表表头 | `view_config.fields[].extra_config.hover` | [a] 覆盖 Span 层级的 `LCP` 等根级字段和 View 层级的 `web_vitals.*`<br />[b] 与详情的 Web Vital 共用定义，其他字段不返回 |
 | Resource 加载阶段 | `sections.loading_timing.data.phases[].hover` | [a] 按语义键取值<br />[b] `prepare` 是 C / D / E 共用文案，用「可能包含」覆盖缓存、连接复用等场景，不按单条色条改写 |
 | View 加载阶段 | `sections.loading_timing.data.phases[].hover` | 阶段缺失时随阶段一起省略。 |
 | View 指标标记 | `sections.loading_timing.data.markers[].hover` | TTFB、FCP、LCP 与 `web_vitals` 使用同一指标定义。 |
@@ -1645,7 +1636,7 @@ View Span 关联信息获取（后端）：
 | Web Vital | `sections.web_vitals.data.<metric>.hover`、`sections.vital_rating.data.hover` | TTFB、FCP、LCP、INP 和 CLS 共用定义。 |
 | Web Vital 评级 | `display.rating_config[].hover` | `good`、`needs_improvement` 和 `poor` 共用评级定义。 |
 
-Builder 在 `packages/rum_web/handlers/builder/hover.py` 维护静态定义。Resource、View、Vital Builder 只按语义键取值，
+Builder 在 `packages/rum_web/handlers/builder/hover.py` 维护静态定义，Web Vitals 文案引用 `semconv/rum/hover.py`。Resource、View、Vital Builder 只按语义键取值，
 不在各 Builder 复制文案。Timeline 继续调用 `span_builder.build()`；View record 直接复用
 `sections.web_vitals` 和 `sections.loading_timing`，不重算 Hover。
 
@@ -1748,7 +1739,7 @@ MAX = 4 h
 | View 加载时序验收（待实现） | [a] 前四段复用同条 TTFB 耗时，连接不拆 TLS，倒推起点保留空隙<br />[b] View 三段按首字节、DOMContentLoaded、Load 和自动 Loading Time 的边界计算并返回到 `phases`<br />[c] `markers` 仅包含 TTFB、FCP、LCP，评级阈值与 `web_vitals` 卡片一致，缺失指标不补造<br />[d] 非首次加载不返回 `loading_timing`，原点不一致、非法数值和倒序边界不组装伪时序，手动 Loading Time 不生成 `phases` 和 `milestones` 中的 `page_stable`，自动计时的微小负耗时按 `0` 处理<br />[e] `total_duration` 等于有效的 `view.loading_time`，缺失或非法时省略，有效零值保留，标记超出总耗时仅扩展横轴<br />[f] `milestones` 依次取 `dom_complete`、`load_event` 和 `loading_time`，不返回别名，缺失字段直接省略 |
 | Hover 协议验收（待实现） | [a] Resource、View、Vital 共用 `title`、`description`、`user_experience`、`source` 结构<br />[b] 可选字段按内容省略<br />[c] 响应不包含 `formula`、`calculation` 或原始字段表达式<br />[d] 指标标记与 Web Vital 卡片共用定义，View 与 Vital 详情共用评级定义 |
 | 异步分析验收（待实现） | [a] 基础详情不等待关联聚合<br />[b] 未加载、失败与统计为零可区分<br />[c] 应用、关联 ID 和时间边界一致，记录去重<br />[d] 区块合并保留基础字段，切换记录后丢弃旧响应 |
-| 会话时间线验收（待实现） | [a] 每个 View ID 只生成一个 View 节点，`records` 与同 `span_id` 的 `record_detail` 一致，包含相同 Hover<br />[b] 同一 View 内，非 Action 成员在 `action.id` 命中 Action 时挂到该 Action，未命中时挂到 View；跨 View 的成员留在自身 View<br />[c] Action 保持 View 的直接子节点<br />[d] Vital 和 Session 不生成节点，无 `phase=end` 记录时 `end_time` 为 `null`<br />[e] 缺少 View ID 或所属 View 无快照的 Span 不进入时间线<br />[f] 按 `view_id` 查询时只返回一个 View 节点，起止时间取该 View，无 `view.phase=end` 快照时 `end_time` 为 `null` |
+| 会话时间线验收（待实现） | [a] 每个 View ID 只生成一个 View 节点，`records` 与同 `span_id` 的 `record_detail` 一致，包含相同 Hover<br />[b] 同一 View 内，Resource、Error、Long Task 挂到 `action.ids` 命中的每个 Action，未命中时挂到 View，其他成员直属 View；跨 View 的成员留在自身 View<br />[c] Action 保持 View 的直接子节点<br />[d] Vital 和 Session 不生成节点，无 `phase=end` 记录时 `end_time` 为 `null`<br />[e] 缺少 View ID 或所属 View 无快照的 Span 不进入时间线<br />[f] 按 `view_id` 查询时只返回一个 View 节点，起止时间取该 View，无 `view.phase=end` 快照时 `end_time` 为 `null` |
 | View 结束判定验收（待实现） | [a] `pagehide` 且停留 `0` 返回 `page_closed`，负停留展示为 `0`<br />[b] 无 `phase=end` 且在 `15 min` 内为 `open`，超出为 `unobserved_end`，时间线 `end_time` 仍为 `null`<br />[c] `session_expired` 按 Session 寿命区分 `session_idle` 与 `session_max_lifetime`，缺起止时回退 `session_idle`<br />[d] `page_closed` 不把 Session 标成已结束 |
 | `bkmonitor/data_source/tests/test_utils_query.py` | [a] 多表字段元数据合并<br />[b] 字段检索能力判断<br />[c] 保留期窗口与秒毫秒转换 |
 
@@ -1780,6 +1771,9 @@ pytest bkmonitor/data_source/tests/test_utils_query.py -q
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-11-25 14:35` | [a] Web Vitals 字段的 `field_alias` 改为指标简称，字段说明放在 `view_config.fields[].extra_config.hover`，前端据此显示表头虚线提示<br />[b] `hover` 作为 `FieldSpec.extra_config` 的标准扩展项，与 `virtual`、`composite` 并列。文案集中在 `semconv/rum/hover.py`，详情 Builder 的 `VITAL_HOVERS` 引用同一份定义<br />[c] 按 GTM 重新交付 [PR #13453](https://github.com/TencentBlueKing/bk-monitor/pull/13453)，最新提交 `93cd6a34167ff134b1cdaa827b21f5d979dc7331`，`rum_web` 与 `semconv` 回归 `753 passed`，Ruff、提交 hooks 和 PreCI 实际扫描通过。未走 GTM 的 #13451 已关闭<br />[d] paas3 已部署 `3.12.0-deploy-paas3-dev-v3.807`，34 个 Pod 就绪。自审未发现阻塞问题，前端联调未执行 |
+| `2026-11-24 19:00` | [a] 复查 [#13430](https://github.com/TencentBlueKing/bk-monitor/pull/13430)：Vital 选取抽成 `select_latest_vitals`，列表、详情和时间线共用。挂载文档已修正，3 条线程已 resolve<br />[b] 协议删除 `outcome.type` 和 `action.name`，Resource 的 `http_result` 只保留状态码，Error 概览不再返回徽标<br />[c] `url.scheme`（Resource）、`http.request.method`（Fetch / XHR）、`server.address` 与 `server.port`（WebSocket）为有条件保留字段，只在其余场景废弃。PR 删除了定义及按场景保留的引用，已补发更正评论要求恢复<br />[d] rebase 后前端适配移出 PR，前端仍读旧字段，已提 P1：需恢复前端改动或配套 PR 同步合入。异常数线程并入该问题跟进 |
+| `2026-11-24 16:00` | [a] review 新版 SDK 协议适配（[#13430](https://github.com/TencentBlueKing/bk-monitor/pull/13430)），发布 COMMENT review，无阻塞问题<br />[b] 方案同步协议变化：时间线成员按 `action.ids` 挂到多个 Action，仅 Resource、Error、Long Task 参与，缓存命中改为后端推导的 `display.resource.cache_hit`，Request 卡片不再返回 `server.address`，Action、Long Task 徽标去掉 `outcome.type`，`web_vitals` 不再返回 TTFB 分段<br />[c] Vital 选取改为同一指标 ID 先比 `version` 再比 `end_time`。PR 只改了列表汇总，详情与时间线仍按 `end_time` 选取，已提 P1<br />[d] 既有线程「View 异常数只统计 Error Span」未修复，保持 unresolved。本地 venv 依赖落后，单测未运行 |
 | `2026-11-18 13:00` | 交付总数与趋势接口 [#13336](https://github.com/TencentBlueKing/bk-monitor/pull/13336)，覆盖三个视角；493 项查询测试及 27 组真实接口过滤验证通过，页面联动待前端接入。 |
 | `2026-11-18 10:00` | [a] 虚拟字段配置保留在后台，复合布局通过 `extra_config.composite` 返回，列表恢复扁平原值；补齐 Session 配置及各视角默认列<br />[b] 代码与字段值展示改动收敛至 [#13219](https://github.com/TencentBlueKing/bk-monitor/pull/13219)，原 #13229 已关闭<br />[c] 768 项回归、59 个文档 JSON 示例及提交检查通过，#13219 已合并<br />[d] 剩余默认列调整由 [#13332](https://github.com/TencentBlueKing/bk-monitor/pull/13332) 交付，111 项相关测试通过 |
 | `2026-11-11 16:38` | 交付虚拟字段查询与复合列后端协议 [#13229](https://github.com/TencentBlueKing/bk-monitor/pull/13229)：模板统一从右拆分，复合列引用成员能力；基于最新 master 的 784 项回归通过，消费方需协调默认列接入。 |
@@ -1846,6 +1840,9 @@ pytest bkmonitor/data_source/tests/test_utils_query.py -q
 
 | 状态 | 分支 | 里程碑 | PR |
 | --- | --- | --- | --- |
+| 🔄 | `feat/rum-web-vitals-field-hover/#1010158081140477210` | Web Vitals 列表表头显示简称并返回字段 Hover | [TencentBlueKing/bk-monitor #13453](https://github.com/TencentBlueKing/bk-monitor/pull/13453) |
+| 🔄 | `feat/rum-to-new-sdk/#1010158081140387781` | 适配新版 RUM SDK 字段协议，迁移废弃字段引用，Vital 按版本选取 | [TencentBlueKing/bk-monitor #13430](https://github.com/TencentBlueKing/bk-monitor/pull/13430) |
+| 🔄 | `feat/adapt-rum-waterfall-to-new-sdk/#1010158081140245676` | View 与 Resource 详情兼容新版 SDK 的浏览器原始时间点 | [TencentBlueKing/bk-monitor #13354](https://github.com/TencentBlueKing/bk-monitor/pull/13354) |
 | 🔄 | `feat/rum-search-overview/#1010158081140241770` | 三个视角的检索总数与时间趋势 | [TencentBlueKing/bk-monitor #13336](https://github.com/TencentBlueKing/bk-monitor/pull/13336) |
 | ✅ | `feat/rum-network-quality-labels/#1010158081139982713` | 虚拟字段查询、复合列协议与字段值展示 | [TencentBlueKing/bk-monitor #13219](https://github.com/TencentBlueKing/bk-monitor/pull/13219) |
 | 🔄 | `codex/rum-span-default-fields/#1010158081139982713` | Span 默认列与常驻筛选调整 | [TencentBlueKing/bk-monitor #13332](https://github.com/TencentBlueKing/bk-monitor/pull/13332) |
