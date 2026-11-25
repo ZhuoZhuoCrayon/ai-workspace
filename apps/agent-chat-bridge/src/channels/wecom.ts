@@ -1,4 +1,4 @@
-import { readWeComInput, downloadAttachment } from "./wecom-input.js";
+import { readWeComInput } from "./wecom-input.js";
 import { extractImages } from "./outbound-images.js";
 import { renderProgress } from "./progress.js";
 import { portableLinks } from "./links.js";
@@ -363,13 +363,11 @@ export function connectWeCom(
           )
         )
           throw new Error("不支持的消息类型");
-        const input = await readWeComInput(
-          { downloadFile: (url, key) => downloadAttachment(url, key, signal) },
+        return readWeComInput(
           frame.body!,
           options.attachmentDir ?? ".state/attachments",
           signal,
         );
-        return input;
       })
       .catch(() => logger.error("企业微信消息处理或交付失败。"));
   });

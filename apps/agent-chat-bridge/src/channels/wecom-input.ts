@@ -1,14 +1,14 @@
-import { decryptFile } from "@wecom/aibot-node-sdk";
-import { randomUUID } from "node:crypto";
+import { createDecipheriv, randomUUID } from "node:crypto";
 import {
   mkdirSync,
-  writeFileSync,
+  renameSync,
   readdirSync,
   lstatSync,
   unlinkSync,
 } from "node:fs";
+import { open, type FileHandle } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { BaseMessage, WSClient } from "@wecom/aibot-node-sdk";
+import type { BaseMessage } from "@wecom/aibot-node-sdk";
 import type { Attachment } from "../types.js";
 import { BridgeError } from "../types.js";
 import { stripBotMention } from "./text.js";
@@ -45,53 +45,61 @@ interface MediaReference {
   image: boolean;
 }
 
+// 企业微信《接收消息》对 file 回调规定的单文件上限。
+const maxFileBytes = 100 * 1024 * 1024;
+
+function* messageParts(root: Record<string, any>) {
+  const pending = [root];
+  while (pending.length) {
+    const part = pending.pop()!;
+    if (part.msgtype !== "mixed") {
+      yield part;
+      continue;
+    }
+    const items = part.mixed?.msg_item ?? [];
+    for (let i = items.length - 1; i >= 0; i--) pending.push(items[i]);
+  }
+}
+
 export async function readWeComInput(
-  client: Pick<WSClient, "downloadFile">,
   body: BaseMessage,
   directory: string,
-  signal?: AbortSignal,
+  signal: AbortSignal,
+  fetcher: typeof fetch = fetch,
 ): Promise<{ text: string; attachments: Attachment[] }> {
   const references: MediaReference[] = [];
   const segments: string[] = [];
   let quoteUnavailable = false;
-  const collect = (
-    part: Record<string, any>,
-    quoted: boolean,
-    depth = 0,
-  ): void => {
-    if (depth > 3 || references.length > 5)
-      throw new BridgeError("消息附件结构超出限制。");
-    const text =
-      part.msgtype === "voice"
-        ? part.voice?.content
-        : part.msgtype === "text"
-          ? part.text?.content
-          : undefined;
-    if (typeof text === "string" && text.trim()) {
-      if (quoted && /^[\[【]?该消息类型暂不能展示[\]】]?$/.test(text.trim()))
-        quoteUnavailable = true;
-      else
-        segments.push(
-          quoted ? `[引用消息]\n${text}` : stripBotMention(text).text,
-        );
-    }
-    if (part.msgtype === "mixed") {
-      for (const item of part.mixed?.msg_item ?? [])
-        collect(item, quoted, depth + 1);
-    }
-    if (part.msgtype === "image" || part.msgtype === "file") {
-      const media = part[part.msgtype];
-      if (
-        !media ||
-        typeof media.url !== "string" ||
-        !media.url.startsWith("https://")
-      )
-        throw new BridgeError("附件下载地址无效。");
-      references.push({
-        url: media.url,
-        ...(typeof media.aeskey === "string" ? { aeskey: media.aeskey } : {}),
-        image: part.msgtype === "image",
-      });
+  const collect = (root: Record<string, any>, quoted: boolean): void => {
+    for (const part of messageParts(root)) {
+      const text =
+        part.msgtype === "voice"
+          ? part.voice?.content
+          : part.msgtype === "text"
+            ? part.text?.content
+            : undefined;
+      if (typeof text === "string" && text.trim()) {
+        if (quoted && /^[\[【]?该消息类型暂不能展示[\]】]?$/.test(text.trim()))
+          quoteUnavailable = true;
+        else
+          segments.push(
+            quoted ? `[引用消息]\n${text}` : stripBotMention(text).text,
+          );
+      }
+      if (part.msgtype === "image" || part.msgtype === "file") {
+        const media = part[part.msgtype];
+        if (
+          !media ||
+          typeof media.url !== "string" ||
+          !media.url.startsWith("https://")
+        )
+          throw new BridgeError("附件下载地址无效。");
+        references.push({
+          url: media.url,
+          ...(typeof media.aeskey === "string" ? { aeskey: media.aeskey } : {}),
+          image: part.msgtype === "image",
+        });
+      }
     }
   };
   if (body.quote) {
@@ -99,8 +107,6 @@ export async function readWeComInput(
     if (!segments.length && !references.length) quoteUnavailable = true;
   }
   collect(body, false);
-  if (references.length > 5)
-    throw new BridgeError("单条消息最多包含 5 个附件。");
   const root = resolve(directory);
   const attachments: Attachment[] = [];
   if (references.length) {
@@ -115,32 +121,7 @@ export async function readWeComInput(
   }
   try {
     for (const media of references) {
-      const { buffer, filename } = await client.downloadFile(
-        media.url,
-        media.aeskey,
-      );
-      if (
-        !buffer.length ||
-        buffer.length > (media.image ? 10 : 20) * 1024 * 1024
-      )
-        throw new BridgeError("附件为空或超过大小限制。");
-      signal?.throwIfAborted();
-      const type = imageType(buffer);
-      if (media.image && !type)
-        throw new BridgeError(
-          "图片格式不受支持，请发送 PNG、JPEG、WebP 或 GIF。",
-        );
-      const extension =
-        type?.extension ??
-        (filename?.match(/\.([a-zA-Z0-9]{1,10})$/)?.[1]?.toLowerCase() ||
-          "bin");
-      const path = join(root, `${randomUUID()}.${extension}`);
-      writeFileSync(path, buffer, { flag: "wx", mode: 0o600 });
-      attachments.push({
-        path,
-        name: filename?.slice(0, 200) || `attachment.${extension}`,
-        mimeType: type?.mimeType ?? "application/octet-stream",
-      });
+      attachments.push(await saveAttachment(media, root, signal, fetcher));
     }
   } catch (error) {
     for (const attachment of attachments) unlinkSync(attachment.path);
@@ -157,39 +138,107 @@ export async function readWeComInput(
   };
 }
 
-export async function downloadAttachment(
-  url: string,
-  aesKey: string | undefined,
+async function saveAttachment(
+  media: MediaReference,
+  root: string,
   signal: AbortSignal,
-  maxBytes = 20 * 1024 * 1024,
-  fetcher: typeof fetch = fetch,
-): Promise<{ buffer: Buffer; filename?: string }> {
-  const deadline = AbortSignal.any([signal, AbortSignal.timeout(15_000)]);
-  const response = await fetcher(url, { signal: deadline, redirect: "error" });
-  const limit = maxBytes + 32;
-  if (!response.ok || !response.body) throw new BridgeError("附件下载失败。");
-  if (Number(response.headers.get("content-length")) > limit) {
-    await response.body.cancel();
-    throw new BridgeError("附件超过大小限制。");
+  fetcher: typeof fetch,
+): Promise<Attachment> {
+  signal.throwIfAborted();
+  const response = await fetcher(media.url, { signal, redirect: "error" });
+  if (!response.ok || !response.body) {
+    await response.body?.cancel();
+    throw new BridgeError("附件下载失败。");
   }
+  const base = join(root, randomUUID());
+  const partial = base + ".part";
   const reader = response.body.getReader();
-  const chunks: Buffer[] = [];
-  let total = 0;
   try {
-    while (true) {
-      const part = await reader.read();
-      deadline.throwIfAborted();
-      if (part.done) break;
-      total += part.value.byteLength;
-      if (total > limit) throw new BridgeError("附件超过大小限制。");
-      chunks.push(Buffer.from(part.value));
+    const file = await open(partial, "wx+", 0o600);
+    try {
+      const type = await writeMedia(
+        file,
+        reader,
+        media,
+        response.headers,
+        signal,
+      ).finally(() => file.close());
+      signal.throwIfAborted();
+      const filename = responseFilename(response);
+      const extension =
+        type?.extension ??
+        (filename?.match(/\.([a-zA-Z0-9]{1,10})$/)?.[1]?.toLowerCase() ||
+          "bin");
+      const path = base + "." + extension;
+      renameSync(partial, path);
+      return {
+        path,
+        name: filename || `attachment.${extension}`,
+        mimeType: type?.mimeType ?? "application/octet-stream",
+      };
+    } catch (error) {
+      unlinkSync(partial);
+      throw error;
     }
   } finally {
     await reader.cancel().catch(() => {});
   }
-  const raw = Buffer.concat(chunks, total);
-  const buffer = aesKey ? decryptFile(raw, aesKey) : raw;
-  if (buffer.length > maxBytes) throw new BridgeError("附件超过大小限制。");
+}
+
+async function writeMedia(
+  file: FileHandle,
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  media: MediaReference,
+  headers: Headers,
+  signal: AbortSignal,
+) {
+  const maxWireBytes = maxFileBytes + (media.aeskey ? 32 : 0);
+  const checkSize = (size: number, limit: number) => {
+    if (!media.image && size > limit)
+      throw new BridgeError("单个文件超过企微文件回调的 100 MB 上限。");
+  };
+  checkSize(Number(headers.get("content-length")), maxWireBytes);
+  const key = media.aeskey ? Buffer.from(media.aeskey, "base64") : undefined;
+  const decipher =
+    key &&
+    createDecipheriv("aes-256-cbc", key, key.subarray(0, 16)).setAutoPadding(
+      false,
+    );
+  let size = 0;
+  while (true) {
+    const part = await reader.read();
+    signal.throwIfAborted();
+    if (part.done) break;
+    size += part.value.byteLength;
+    checkSize(size, maxWireBytes);
+    await file.writeFile(decipher ? decipher.update(part.value) : part.value);
+  }
+  if (decipher) {
+    await file.writeFile(decipher.final());
+    // 企微按 32 字节填充，Node 的自动去填充只支持 AES 的 16 字节块。
+    const tail = Buffer.alloc(Math.min(32, size));
+    await file.read(tail, 0, tail.length, size - tail.length);
+    const pad = tail.at(-1) ?? 0;
+    if (
+      !pad ||
+      pad > tail.length ||
+      !tail.subarray(-pad).every((byte) => byte === pad)
+    )
+      throw new BridgeError("附件解密失败，请重新发送。");
+    size -= pad;
+    await file.truncate(size);
+  }
+  if (!size) throw new BridgeError("附件为空。");
+  checkSize(size, maxFileBytes);
+  const header = Buffer.alloc(Math.min(12, size));
+  await file.read(header, 0, header.length, 0);
+  const type = imageType(header);
+  if (media.image && !type)
+    throw new BridgeError("图片格式不受支持，请发送 PNG、JPEG、WebP 或 GIF。");
+  return type;
+}
+
+function responseFilename(response: Response): string | undefined {
   const disposition = response.headers.get("content-disposition") ?? "";
   const encoded =
     disposition.match(/filename\*=UTF-8''([^;\s]+)/i)?.[1] ??
@@ -198,5 +247,5 @@ export async function downloadAttachment(
   try {
     filename = encoded ? decodeURIComponent(encoded).slice(0, 200) : undefined;
   } catch {}
-  return { buffer, ...(filename ? { filename } : {}) };
+  return filename;
 }
