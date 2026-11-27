@@ -216,6 +216,8 @@ PR 标题按 changelog 的用户视角写，用一句短句说明用户能感知
 
 用户说 `review`、`复查`、`代码审查` 等时，先输出对话草稿报告。
 
+从第一版草稿起，按 [0x07 评论规范](#0x07-评论规范) 写好每条待发评论的 Markdown 正文，在对话中逐条原样展示，包括汇总评论、行内评论及其代码块。用户要求修改某条评论时，在对话中展示该条的完整新版正文。获得发布授权后，直接使用已展示的对应版本。
+
 报告固定包含：
 
 1. `汇总评论`：整体结论、风险点、是否建议合入。写明关联方案路径和命中信号；未命中或同级多命中时写明检索范围，不以未确认方案做一致性审查。
@@ -331,8 +333,8 @@ for code_field, message_field in cls.RPC_EXCEPTION_FIELDS.items():
 
 | 场景 | 语言 |
 | --- | --- |
-| 对话草稿 | 使用当前对话语言。 |
-| 发布到 PR | conversation、inline review comment 和 approve body 使用目标项目 `language` 字段。 |
+| 对话中的说明 | 使用当前对话语言。 |
+| 评论正文（草稿与发布） | conversation、inline review comment 和 approve body 使用目标项目 `language` 字段。 |
 | 未配置语言 | 默认使用中文。 |
 
 目标项目 `language` 字段从 `repos.json`、`private/repos.json` 读取。
