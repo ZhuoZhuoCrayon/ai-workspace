@@ -475,7 +475,7 @@ erDiagram
         bigint id PK "取值 ID"
         int group_id UK
         string field_name UK
-        string fingerprint UK "除 field_name 外四个字段的 MD5"
+        string fingerprint UK "original_name、original_type、metric_type、meta 的 MD5"
         string original_name "族名"
         string original_type "histogram"
         string metric_type "counter"
@@ -524,11 +524,10 @@ erDiagram
 | `original_type` | 拆分前的原始类型，如 histogram                                                                                               | `__original_type` *[1]*                                                                                 |
 | `metric_type`   | 本条输出序列自身的类型，取 counter、gauge 或 unknown                                                                              | `__type`                                                                                                |
 | `meta`          | [a] `unit`：单位<br />[b] `description`：描述<br />[c] `temporality`：累计方式<br />[d] `interval`：上报周期<br />[e] `usage`：汇聚方式 | [a] `__unit`<br />[b] `__description`<br />[c] `__temporality`<br />[d] `__interval`<br />[e] `__usage` |
-| `fingerprint`   | 除 `field_name` 外四个字段规范 JSON 的 MD5                                                                                  | 无，bmw 计算                                                                                                |
+| `fingerprint`   | 以下四个字段规范 JSON 的 MD5 *[2]*：<br />[a] `original_name`<br />[b] `original_type`<br />[c] `metric_type`<br />[d] `meta` | 无，bmw 计算                                                                                                |
 
 - *[1] 原始类型是新增字段：Collector 协议新增 `__original_type`，`__type` 改为本条序列自身的类型，见「接收协议」。*
-
-类型随取值逐 scope 保存：同名指标在一个 scope 报 counter、在另一个报 gauge 时存为两行取值，各 scope 引用自己那行，读取不会拿错类型。
+- *[2] 指纹不含 `field_name`：它已在唯一键中。JSON 按键名升序输出，`meta` 只保留非 `null` 键，保留 `<`、`>`、`&` 原字符。*
 
 **例子**
 
@@ -597,7 +596,17 @@ Histogram(duration_seconds)
 
 ### c. scope 身份
 
-**scope 由类型与规范标签串唯一确定：bmw 先解码 Collector 的 scope 值，再按键名排序并拼接标签，最后计算 `scope_hash`。**
+**scope 是指标的上报来源，由类型加标签唯一确定，两者拼接后的 MD5 即 `scope_hash`。**
+
+**解码**：Collector 沿用现有的 `__scope` 编码，bmw 按 `__scope_type` 还原成标签。作用于整个指标的上报属于 DEFAULT，同样建一个 scope，与普通 scope 共用写入与过期规则：
+
+| scope 类型 | `__scope` 示例 | 解码后的 `labels` |
+| --- | --- | --- |
+| `APM` | `checkout-http%2Dclient` | `{"service_name": "checkout", "scope_name": "http-client"}` *[1]* |
+| `DEFAULT` | 空 | `{}`，每个数据源最多一个 |
+| 未注册解码器的类型 | 上报方自定义 | `{"scope": "<原值>"}` *[2]* |
+
+**身份**：标签先规范成固定顺序的字符串，同一组标签不论上报顺序都得到同一个哈希 *[3]*：
 
 ```text
 规范标签串 = 标签按键名升序，每个写成 k:v，以 || 连接
@@ -605,49 +614,35 @@ scope_hash = MD5(scope_type + 规范标签串)
 scope 11   = MD5("APM" + "scope_name:http||service_name:checkout")
 ```
 
-Collector 的 `__scope` 编码不变，元信息协议另新增 `__original_type` 并调整 `__type` 语义；bmw 按 scope 类型解码 *[1]*，解码与转义规则见「接收协议」：
-
-| scope 类型 | 解码后的 `labels` | 说明 |
-| --- | --- | --- |
-| `APM` | `service_name` 与 `scope_name` | 应用由 DataID 确定，`app_name` 不进标签 |
-| `DEFAULT` | `{}` | 每个数据源最多一个 |
-| 未注册解码器的类型 | `scope=<原值>` | [a] 编码方式由上报方定义，「待确认」<br />[b] 原值另存 `raw_scope` 供排障 |
-
-- *[1] 值含分隔符时拒收：标签值含 `||` 会让两个 scope 算出同一个哈希。*
-
-DEFAULT 上报也建一个 scope，让作用于整个指标的元信息与普通 scope 走同一套写入与过期。
-
-按标签找 scope 不建索引表，读出本数据源全部 scope 的 `id` 与 `labels` 后在内存中过滤 *[1]*：
+**查找与上限**：每个数据源最多 `2,000` 个 scope、`6w` 个取值，超限的新增丢弃并计数，用来拦住 Pod 名这类高基数标签。有了上限，按标签找 scope 可以读出全部 `id` 与 `labels` 后在内存中过滤 *[4]*：
 
 ```sql
 SELECT id, labels FROM metadata_timeseriesreportscope WHERE group_id = 9;  -- 不选 report_value_ids
 ```
 
-- *[1] 不选列表可跳过溢出页：超过约 `8 KB` 的列表存在溢出页，更短的列表随行读入，不选它只省传输与解码。*
-
-每个数据源最多 `2,000` 个 scope、`6w` 个取值。超限时 bmw 丢弃新 scope 或新取值并计数，防止 Pod 名等高基数标签撑大新表。
+- *[1] APM 按未转义的 `-` 拆分并还原 `%2D`、`%25`：应用由 DataID 确定，标签不含 `app_name`。*
+- *[2] 编码方式「待确认」：整段原值作为标签，另存 `raw_scope` 供排障。*
+- *[3] 标签值含 `||` 的记录被拒收：分隔符混入值后，不同标签可能拼出同一个串。*
+- *[4] 查询省略 `report_value_ids`：超过约 `8 KB` 的列表存在溢出页，省略可少读溢出页；短列表随行存放，省略只省传输与解码。*
 
 ### d. 生命周期
 
-**scope 行随上报写入，随 scope 整体过期删除；取值在引用数归零后删除；覆盖与页面分组不随上报过期。**
+**scope 随上报写入、停报 `30 d` 后删除，取值在引用数归零时删除；过期只清理这两类数据，覆盖与页面分组长期保留。**
 
-Collector 收到指标数据时才发送元信息，同一 Key 每 `2 h` 至多重发一次，按天上报的稀疏指标的元信息也按天到达。服务升级 SDK 可能改变单位等取值，服务下线会停报，之后还可能恢复。
+取值像图书馆的书，scope 像借书卡：借书卡记下借了哪几本，`scope_count` 记下每本书被几张卡借着，归零才下架。
 
-**写入**
+Collector 只在收到指标数据时发送元信息，同一 Key 每 `2 h` 至多重发一次，稀疏指标的元信息随数据按天到达。SDK 升级可能改变单位等取值，服务下线后 scope 停报，之后也可能恢复。
 
-bmw 按数据源聚批，每条记录对照进程内缓存 *[1]*，落入四种情况之一：
+**写入**：bmw 按数据源聚批，用进程内缓存判断每条记录属于哪种情况 *[1]*。例子中 scope `11`、`12`、`13` 分别是 checkout · `http`、checkout · `grpc` 与 cart · `http`：
 
 | 情况 | 例子 | 动作 | 写库 |
 | --- | --- | --- | --- |
-| scope 已含这个取值 ID | checkout · `grpc` 重发 `request_total` | 不改列表，`last_seen` 距上次写入满 `24 h` 才刷新 | 每个 scope 每天至多 `1` 行 |
+| scope 已含这个取值 ID | checkout · `grpc` 重发 `request_total` | 列表不变，`last_seen` 距上次写入满 `24 h` 才刷新 | 每个 scope 每天至多 `1` 行 |
 | scope 含同 `field_name` 的另一个取值 ID | cart · `http` 升级 SDK，`duration_seconds_sum` 改报 `s` *[2]* | [a] 列表中 `5` 换成 `3`<br />[b] 取值 `5` 的 `scope_count - 1`，取值 `3` 的 `+ 1` | 改写 scope `1` 行与取值 `2` 行 |
 | scope 不含这个 `field_name` | checkout · `http` 开始上报 `queue_size` | [a] 列表加入 `6`，取值 `6` 的 `scope_count + 1`<br />[b] 取值不存在时先插入 | 改写 scope `1` 行与取值 `1～2` 行 |
 | scope 不存在 | cart 开始在 `grpc` 下上报 | 新建 scope 行，列表按第三种情况逐条加入 | 插入 scope `1` 行，引用的取值 `scope_count + 1`，缺失的取值先插入 |
 
-- *[1] 缓存让重发不访问数据库：缓存每个 scope 的 `version` 与取值 ID 集合，结构见「消费与写入」。*
-- *[2] 变化最多晚到 `2 h`：Collector 用 Bloom 记录已发送的版本，少数变化与取值回退会被误判为已发送，要等去重缓存每 `2 h` 清空后才到达。*
-
-例子中，前三种情况只改写已有的行，图中 `a → b` 表示列的前后值 *[1]*：
+前三种情况只改写已有的行，图中 `a → b` 表示列的前后值 *[3]*：
 
 ```mermaid
 %%{init: {"flowchart": {"nodeSpacing": 28, "rankSpacing": 64, "wrappingWidth": 400}}}%%
@@ -664,20 +659,13 @@ flowchart LR
     class S11,S12,S13,V change
 ```
 
-- *[1] 演示只用于本节：其他小节仍以变化前的例子为准。*
+**提交**：批末把全部变化放进一个事务 *[4]*。写入与过期清理都先锁 scope 再改取值，以避免死锁：
 
-批末把本批全部变化放进一个事务 *[1]*，先锁 scope 再改取值，与过期清理的加锁顺序相同：
+1. 锁住本批有变化的 scope 行，`version` 与缓存不一致时重读该 scope 并重放本批改动。
+2. 写回 `report_value_ids`、`value_count` 与 `last_seen`，`version` 加 `1`。
+3. 用一条 `CASE id` 语句增减 `scope_count` 后提交，影响行数不足时回滚，重新插入取值并换用新 ID 重试 *[5]*。
 
-1. 加行锁锁住本批有变化的 scope，`version` 不一致时重读该 scope 并重放本批改动。
-2. 写回列表、`value_count` 与 `last_seen`，`version + 1`。
-3. 用一条 `CASE id` 语句增减 `scope_count` 后提交，影响行数不足时回滚，重新插入取值并换用新 ID 重试 *[2]*。
-
-- *[1] 逐个 scope 提交更慢：S1 冷启动一批一个事务 `29.1 s`，逐个 scope 提交 `142 s`，见「消费与写入」。*
-- *[2] 写入与过期清理不丢引用：过期清理只删 `scope_count = 0` 的取值，写入先加引用时删不掉，过期先删时写入按影响行数发现并重建，竞态见「过期清理」。*
-
-**过期**
-
-过期清理并入每 `5 min` 一轮的指标同步。scope `13` 自 `10-12` 起停报，`30 d` 后的那一轮删除它 *[1]*，并清理不再被引用的取值 *[2]*：
+**过期**：清理随每 `5 min` 一轮的指标同步运行，与指标项共用 `30 d` 阈值，稀疏 scope 只要 `30 d` 内上报过一次就保留。scope `13` 自 `10-12` 起停报，`30 d` 后的那一轮先减引用，再删除 scope 与引用归零的取值 *[6]* *[7]*：
 
 ```mermaid
 %%{init: {"flowchart": {"nodeSpacing": 28, "rankSpacing": 64, "wrappingWidth": 400}}}%%
@@ -707,23 +695,21 @@ flowchart LR
     style Expiry fill:#f8fafc,stroke:#94a3b8,stroke-dasharray:4 3
 ```
 
-- *[1] scope 过期直接删行：scope 不承载 `field_id` 与用户配置，再次上报按新 scope 重建。*
-- *[2] 两类删除都走索引：删 scope 走 `(group_id, last_seen)`，删取值走 `(group_id, scope_count)`。*
-
-稀疏上报的 scope 与指标项同样处理：`30 d` 内上报过一次就保留。
-
-**单个指标停报**
-
-停报的指标不单独清理：它的取值 ID 留在 scope 列表里，直到 scope 整体过期或该指标改报另一种取值。停报范围决定视图是否还显示它：
+**单个指标停报**：取值 ID 留在 scope 列表里，直到 scope 整体过期或该指标改报另一种取值。读取方按 `last_modify_time` 隐藏过期指标项，残留 ID 只对活跃指标项生效：
 
 | 停报范围 | 例子 | 该服务视图 | 不分服务视图 |
 | --- | --- | --- | --- |
-| 全数据源都停报 | checkout · `grpc` 停报 `queue_size`，其他 scope 都不报 | 指标项 `30 d` 后过期，之后不显示 *[1]* | 指标项过期后不显示 |
-| 部分服务停报 | cart · `http` 停报 `duration_seconds_bucket`，checkout 仍在报 | cart 视图仍显示，直到 scope `13` 过期 | 显示 |
+| 全数据源都停报 | checkout · `grpc` 停报 `queue_size`，其他 scope 都不报 | 指标项 `30 d` 后过期，之后不显示 | 指标项过期后不显示 |
+| 部分服务停报 | cart · `http` 停报 `duration_seconds_bucket`，checkout 仍在报 | cart 视图仍显示，直到 scope `13` 过期 *[8]* | 显示 |
 
-- *[1] 指标项过期已过滤：读取方按 `last_modify_time` 过滤过期指标项，列表里残留的 ID 不会让它重新出现。*
-
-部分服务停报时，该服务视图会多显示到 scope 过期，这是本方案接受的代价。多显示只发生在这一种情况，读取方按 `last_modify_time` 过滤过期指标项。按条目清理要给每个 ID 记最后上报日，每条从 `4 B` 增到 `6 B`，并多一个过期扫描索引。
+- *[1] 重发只查缓存：缓存记录每个 scope 的 `version` 与取值 ID 集合。*
+- *[2] 变化最多晚到 `2 h`：Collector 的 Bloom 偶尔把变化或回退误判为已发送，去重缓存每 `2 h` 清空后才会发出。*
+- *[3] 演示只用于本节：其他小节仍按变化前的数据，cart · `http` 引用取值 `5`。*
+- *[4] 单事务更快：S1 冷启动时一批一个事务耗时 `29.1 s`，逐个 scope 提交耗时 `142 s`。*
+- *[5] 引用数让写入与过期可并发：过期只删 `scope_count = 0` 的取值，写入先加引用则取值保留，过期先删则写入按影响行数重建。*
+- *[6] scope 可以直接删行：`field_id` 在指标项里，用户配置在覆盖与页面分组里，恢复上报时重建 scope 即可。*
+- *[7] 两类删除都走索引：删 scope 走 `(group_id, last_seen)`，删取值走 `(group_id, scope_count)`。*
+- *[8] 多显示是有意取舍：逐条清理要给每个 ID 记最后上报日，每条从 `4 B` 增到 `6 B`，还要多一个过期扫描索引。*
 
 ### e. 与指标发现的分工
 
@@ -815,11 +801,11 @@ flowchart LR
 
 ### g. 页面分组与归属
 
-**页面分组仍是 `TimeSeriesScope`，新增的选择器表示分组属于全局还是某个服务。服务视图看到的分组是全局分组加上选择器命中该服务的分组。**
+**页面分组仍存在 `TimeSeriesScope`，新增选择器决定分组在哪些视图出现：全局分组处处可见，服务分组只在该服务的视图出现。**
 
-**选择器**
+选择器像文件夹上的访客名单：空名单人人可见，写上 checkout 就只给 checkout 看。名单只管文件夹给谁看，指标要另行放入：同一选择器下一个指标只属于一个分组，移入 `N` 个指标就写 `N` 条 Override。
 
-选择器只有三级 *[1]*：
+**选择器**：选择器分三级，规范串与 scope 相同但不带类型：
 
 | 级别 | `selector` | `selector_hash` | 生效范围 |
 | --- | --- | --- | --- |
@@ -827,21 +813,15 @@ flowchart LR
 | 服务 | `{"service_name": "checkout"}` | `md5("service_name:checkout")` | checkout 的服务视图 |
 | 服务与 scope 名 | `{"service_name": "checkout", "scope_name": "grpc"}` | 规范串的 MD5 | checkout 在 `grpc` 下的视图，只用于修改配置，页面分组不用这一级 |
 
-- *[1] 规范化同「scope 身份」：键名升序拼成 `k:v` 并以 `||` 连接，不带 scope 类型，值含 `||` 时拒收。*
-
-**页面分组表的变化**
+**表结构**：页面分组表新增两列并换唯一键 *[1]*：
 
 | 列或约束 | 变化 | 含义 |
 | --- | --- | --- |
 | `selector` | 新增 | NULL 表示全局分组 |
 | `selector_hash` | 新增 | `''` 表示全局分组，旧代码写入时落默认值 `''` |
-| 唯一键 | 由 `(group_id, scope_name)` 换为 `(group_id, selector_hash, scope_name)` | 同名分组可以分属全局与不同服务 |
+| 唯一键 | 由 `(group_id, scope_name)` 换为 `(group_id, selector_hash, scope_name)` | 同名分组可以分属全局与不同服务 *[2]* |
 
-页面分组表每个数据源只有几十到几百行，DDL 耗时见「已有表的 DDL 风险」，`TimeSeriesMetric` 仍零 DDL。旧代码按 `(group_id, scope_name)` 取分组，遇到同名的服务分组会取错或报错，所以按服务建分组在全部组件升级后才开放，见「版本共存」与「发布顺序」。
-
-**例子**
-
-分组 `31` 只属于 checkout，与全局分组 `22` 同名不冲突；分组 `21` 是系统默认的「未分组」：
+**例子**：checkout 建了自己的「支付」分组 `31`，与全局「支付」分组 `22` 同名并存：
 
 | id | selector_hash | selector | scope_name | 说明 |
 | --- | --- | --- | --- | --- |
@@ -849,7 +829,7 @@ flowchart LR
 | 22 | `''` | NULL | `支付` | 全局分组 |
 | 31 | `md5("service_name:checkout")` | `{"service_name": "checkout"}` | `支付` | 只属于 checkout |
 
-指标所在分组按服务加 scope、服务、全局三级覆盖依次查找，都没有时才用 `TimeSeriesMetric.scope_id` 的系统基础分组：
+指标所在分组依次查 scope、服务、全局三级 Override，都未设置时用 `TimeSeriesMetric.scope_id`：
 
 | 视图 | 可见的页面分组 | `duration_seconds_sum` 所在分组 | 来源 |
 | --- | --- | --- | --- |
@@ -857,36 +837,34 @@ flowchart LR
 | checkout | `21`、`22`、`31` | `31` | 服务覆盖 `2` |
 | cart | `21`、`22` | `22` | 继承全局覆盖 `1` |
 
-**新指标项的默认归属**
+**新指标归属**：指标同步新建指标项时，只按页面配置写系统基础分组：
 
-新指标项的系统基础分组只按页面配置决定：
+1. **自动规则**：指标名匹配全局分组的 `auto_rules` 时，进入该分组。
+2. **未分组**：其余指标进入 `scope_name=default` 的分组。
 
-1. **自动规则**：指标名匹配全局页面分组的 `auto_rules` 时，写入该分组的 `scope_id`。
-2. **默认分组**：未命中时写入 `scope_name=default` 的页面分组。
+上报 scope 的 `scope_name` 只用于过滤数据：只从 checkout · `http` 上报的 `request_total` 未命中自动规则时进入「未分组」，`http` 只作为它的查询条件。
 
-ReportScope 的 `scope_name` 只参与真实数据过滤，不查找、不创建、不移动 `TimeSeriesScope`。例如 `request_total` 只从 checkout · http 上报，但没有命中页面自动规则时，它仍进入「未分组」，不会自动创建 `http` 页面分组。
+**维度配置**：维度的 `alias`、`common` 与 `hidden` 存在页面分组的 `dimension_config` 里，同组指标共享。服务要用独立的维度别名时，先建服务分组，再用 Override 把指标移入。
 
-维度的 `alias`、`common` 与 `hidden` 保存在当前生效页面分组的 `dimension_config` 中，同一分组内的指标共享。服务需要独立维度别名时，先创建服务分组并用逐指标 Override 移入；Report 表不保存维度编辑。
-
-**V2 前缀机制下线**
-
-服务改由选择器表达，不再编进分组名：
+**V2 前缀机制下线**：服务改由选择器表达，分组名只保留业务含义：
 
 | V2 机制 | 现有做法 | 下线后 |
 | --- | --- | --- |
-| 分组名前缀 | 多个分组维度的值拼成 `checkout\|\|http` 式的分组名 | 存量名称原样保留；新指标不再从上报 scope 派生分组名 *[1]* |
+| 分组名前缀 | 多个分组维度的值拼成 `checkout\|\|http` 式的分组名 | [a] 存量名称原样保留 *[3]*<br />[b] 新指标按自动规则与「未分组」归属 |
 | 每个前缀一个默认分组 | 自动补建 `<前缀>\|\|default` | 只有一个全局默认分组 |
 | 按前缀匹配自动规则 | 只在同前缀的分组里匹配 `auto_rules` | 在全部全局分组里匹配 |
 
-- *[1] 迁移边界：存量 `checkout||http` 等名称按普通页面分组继续展示，迁移不从 ReportScope 重建或改名。*
+- *[1] 这是已有表唯一的 DDL：页面分组表上界 `1.9w` 行，按 `10w` 行实测 MySQL `5.7` 也只需 `3.7 s`，`TimeSeriesMetric` 保持零 DDL。*
+- *[2] 服务分组等全部组件升级后开放：旧代码只按 `(group_id, scope_name)` 取分组，遇到同名服务分组会取错或报错。*
+- *[3] 存量分组按普通页面分组展示：迁移保留 `checkout||http` 等原名，也不从上报 scope 重建。*
 
 ### h. 有效配置与页面编辑
 
-**有效配置按配置键逐个取第一个已设置的值。所有用户指标编辑统一写 Override；页面分组与维度配置写 `TimeSeriesScope`。**
+**每个配置键从最具体的一级往下找，取第一个已设置的值；用户编辑指标写 Override，编辑分组与维度写 `TimeSeriesScope`。**
 
-**生效顺序**
+查找像查规章：小组约定优先，其次是部门、公司规定，最后是出厂说明书。每个键单独查，小组只定了单位时，别名照常往下查。
 
-解析器 `MetricConfigResolver` 按以下六级逐级查找 *[1]*。服务视图不指定 scope 名时，指标只由一个 scope 名上报才使用第一级。例如 checkout 的 `queue_size` 只在 grpc 下上报，服务视图显示 checkout · grpc 页设置的别名：
+**生效顺序**：`MetricConfigResolver` 按六级查找 *[1]*。服务视图未指定 scope 名时，指标只在一个 scope 名下上报才查第一级：checkout 的 `queue_size` 只在 `grpc` 下上报，服务视图因此显示 `grpc` 页设置的别名：
 
 ```mermaid
 %%{init: {"flowchart": {"nodeSpacing": 28, "rankSpacing": 48, "wrappingWidth": 400}}}%%
@@ -903,9 +881,7 @@ flowchart LR
     class L4,L6 old
 ```
 
-- *[1] 以键是否存在判断覆盖：`false`、`0`、`""` 与 `[]` 都可能是用户的有效设置；清除继承时显式删除该键。*
-
-第五级的上报取值按视图选出：
+**上报取值**：第五级按视图选取值：
 
 | 视图 | 选用的取值 |
 | --- | --- |
@@ -913,9 +889,7 @@ flowchart LR
 | 带服务，该服务多个 scope 引用不同取值 | `last_seen` 最近的 scope 引用的取值 |
 | 不分服务 | [a] DEFAULT scope 引用的取值优先<br />[b] 否则取 `scope_count` 最大者，并列取 ID 小者<br />[c] 候选取值的 `metric_type` 或 `original_type` 不止一种时置 `type_conflict` |
 
-**配置键映射**
-
-五个配置项都按六级生效顺序查找，单位、函数与聚合周期的上报值要先转换：
+**配置键映射**：五个配置项都按六级查找，单位、函数与聚合周期的上报值先转换：
 
 | 配置项 | `field_config` 键 | `meta` 键 | 上报值的转换 | 表级兜底与默认值 |
 | --- | --- | --- | --- | --- |
@@ -925,9 +899,7 @@ flowchart LR
 | 函数 | `function` | `temporality` | `cumulative` 的 Counter 补 `increase` | `[]` |
 | 聚合周期 | `interval` | `interval` | 毫秒转为秒 | `auto` |
 
-**写入路由**
-
-用户指标修改只走一个入口，三种选择器都写 Override；清除覆盖即恢复继承 *[1]*。页面分组 CRUD 与维度别名、常用、隐藏配置写 `TimeSeriesScope`，上报值只由 bmw 写入：
+**写入路由**：两个页面都经 `modify_metric()` 写 Override，删除覆盖即回到继承值 *[2]*：
 
 ```mermaid
 %%{init: {"flowchart": {"nodeSpacing": 28, "rankSpacing": 56, "wrappingWidth": 400}}}%%
@@ -945,9 +917,7 @@ flowchart LR
     class Modify,Override,TSS,Apply,New add
 ```
 
-- *[1] 来源随有效配置返回：每个键标明来自哪一级，清除后回到上一级；迁移不批量补约 `100w` 条全局 Override，只在用户后续编辑时按需创建。*
-
-例子中的四次修改分别写入：
+**例子**：四次修改写出三行 Override：
 
 | 修改 | `modify_metric` 参数 | 写入的行 |
 | --- | --- | --- |
@@ -956,7 +926,7 @@ flowchart LR
 | checkout 把它的单位改为 `ms`，并移入自己的「支付」 | [a] `selector={"service_name": "checkout"}`<br />[b] `field_config={"unit": "ms"}`<br />[c] `scope_id=31` | 新增服务覆盖 `2` |
 | checkout 在 `grpc` 下把 `queue_size` 的别名改为「gRPC 队列长度」 | [a] `selector={"service_name": "checkout", "scope_name": "grpc"}`<br />[b] `field_config={"alias": "gRPC 队列长度"}` | 新增 scope 覆盖 `3` |
 
-上述四次修改后的覆盖表：
+修改后的覆盖表，前两次修改合并在覆盖 `1`：
 
 | id | selector | field_name | field_config | scope_id |
 | --- | --- | --- | --- | --- |
@@ -964,11 +934,7 @@ flowchart LR
 | 2 | `{"service_name": "checkout"}` | `duration_seconds_sum` | `{"unit": "ms"}` | 31 |
 | 3 | `{"service_name": "checkout", "scope_name": "grpc"}` | `queue_size` | `{"alias": "gRPC 队列长度"}` | NULL |
 
-页面分组 selector 只控制目录在哪些页面可见，不自动纳入该页面的全部指标。同一 selector 下一个指标只属于一个页面分组；把 `N` 个现有指标移入分组时批量 upsert `N` 条 Override。未来指标也要自动进入时，另配全局分组 `auto_rules`。
-
-**读取结果**
-
-`duration_seconds_sum` 在三个视图中的有效配置：
+**读取结果**：`duration_seconds_sum` 在三个视图中的有效配置：
 
 | 视图 | 单位 | 别名 | 页面分组 |
 | --- | --- | --- | --- |
@@ -976,7 +942,7 @@ flowchart LR
 | checkout · `http` | [a] `ms`<br />[b] 来自服务覆盖 `2` | 请求耗时，继承全局覆盖 `1` | 支付 `31`，来自服务覆盖 `2` |
 | cart · `http` | [a] `ms`<br />[b] scope `13` 引用取值 `5` | 请求耗时，继承全局覆盖 `1` | 支付 `22`，继承全局覆盖 `1` |
 
-**同步不覆盖用户设置**
+**写入方职责**：每类数据只有一个写入方，用户设置只由用户改写：
 
 | 写入方 | 入口 | 写入 | 从不写 |
 | --- | --- | --- | --- |
@@ -984,13 +950,14 @@ flowchart LR
 | bmw 指标同步 | `RefreshTimeSeriesMetric()` | [a] 新建指标项与活跃状态<br />[b] 仅新建时按 `auto_rules → default` 写系统基础 `scope_id` | 覆盖、用户配置与服务分组 |
 | 用户 | [a] `modify_metric()`<br />[b] 页面分组接口 | [a] 全局、服务与 scope Override<br />[b] 页面分组与 `dimension_config` | 指标项基础归属、取值与上报 scope |
 
+- *[1] 键存在即算已设置：`false`、`0`、`""` 与 `[]` 都是有效设置，恢复继承要删除该键。*
+- *[2] Override 只在用户编辑时创建：迁移无需回填约 `100w` 条，查询结果为每个键标明来源级别。*
+
 ### i. 读取路径
 
-**新表只服务真实上报范围与上报元信息读取；页面归属不查询 Report 表。**
+**新表回答“谁上报了哪些指标、元信息是什么”，页面归属由 Override 与页面分组决定。**
 
-**按 scope 取所有指标**
-
-checkout 的服务视图读法分五步，其中三次查询新表，每次只读需要的列 *[1]*：
+**按 scope 取指标**：checkout 的服务视图分五步读取，三次查询新表，每次只读需要的列 *[1]*：
 
 ```mermaid
 %%{init: {"flowchart": {"nodeSpacing": 24, "rankSpacing": 40, "wrappingWidth": 400}}}%%
@@ -1006,45 +973,43 @@ flowchart LR
     class Q4 old
 ```
 
-- *[1] 第一步不读列表：未命中的 scope 不读列表溢出页，S2 场景实测 p50 `15.5 ms`。*
+**接口**：Metadata 查询接口新增可选参数 `report_labels` 与 `view`，前者选视图，如 `{"service_name": "checkout"}`，后者取 `metric` 或 `family`。每个指标多返回七个字段，其中 `report_scopes` 列出上报它的 scope。
 
-**查询接口与服务范围对象**
+**服务过滤**：SaaS 每个请求用 `report_scopes` 构造一次 `ServiceMetricScope`，在内存中判断：
 
-查询接口新增 `report_labels` 与 `view` 两个可选参数，每个指标多返回七个字段，协议见「查询与写入接口」。
+- `visible()`：指标树只显示该服务上报过的指标。
+- `scope_name_filter()`：图表与维度值只查该服务上报过的 `scope_name`。
 
-服务范围对象每个请求构造一次，汇总该服务各指标真实上报的 `scope_name`，接口见「服务范围对象」。指标树按 `visible()` 过滤，图表与维度值按 `scope_name_filter()` 写 `scope_name` 条件。维度值请求要带 `field_id`，后端才能反查 scope；不得把 `TimeSeriesMetric.field_scope` 转成 scope 条件。
+维度值请求新增 `field_id`，后端据此反查上报 scope。`scope_name` 条件只取自上报 scope，`TimeSeriesMetric.field_scope` 是建行时写定的数据分组，与上报服务无关。
 
-**读取约束**
+读取约束：
 
-1. **与指标项分开读取**：新表不与指标项 JOIN，指标项的现有查询语句不变，结果在内存中合并。
-2. **按数据源一次预取**：每个请求对一个数据源只预取一次，不逐个指标查询，S2 整组预取 `185 ms`。
-3. **新表缺失只降级**：读新表报 `1146`（表不存在）时视为没有取值、scope 与覆盖，结果回落到指标项与表级字段。
+1. **与指标项分开读取**：新表与指标项各自查询，结果在内存中合并，指标项现有查询保持原样。
+2. **按数据源一次预取**：每个请求对一个数据源预取一次，S2 整组预取 `185 ms`。
+3. **新表缺失时降级**：读新表报 `1146`（表不存在）时按空结果处理，回落到指标项与表级字段。
+
+- *[1] 先筛 scope 再读列表：只为命中的 scope 读取 `report_value_ids`，S2 场景实测 p50 `15.5 ms`。*
 
 ### j. 指标族与复合视图
 
-**Histogram 的族成员在读取时组成一个族，详情页一个族一个面板，每个统计方法一个 target。**
+**Histogram 上报时拆成 `_bucket`、`_sum`、`_count` 等多条序列，读取时按原名拼回一个族：详情页一个族一个面板，每个统计方法一个 target。**
 
-**族成员**
+Histogram 像拆成三栏的成绩单：`_sum` 是总分，`_count` 是人数，`_bucket` 是各分数段人数。平均分要总分除以人数，P95 要数分数段，单看一栏算不出来。
 
-族按拆分前的原始类型判断，不看 `metric_type`：
+**族成员**：族按拆分前的原始类型 `original_type` 判断，与 `metric_type` 无关：
 
 | 条件 | 规则 |
 | --- | --- |
 | 范围 | 同一 scope 视图，不分服务视图用选出的默认取值 |
 | 原名 | `original_name` 相同 *[1]* |
 | 原始类型 | `original_type = histogram` |
-| 指标名 | [a] 规范化原名 *[2]* 加 `_bucket`、`_sum`、`_count`<br />[b] 或加 `_min`、`_max` |
+| 指标名 | 规范化原名 *[2]* 加 `_bucket`、`_sum`、`_count`、`_min` 或 `_max` |
 
-- *[1] 独立指标不会误入族：独立上报的 Counter `duration_seconds_sum` 的 `original_name` 是它自己。*
-- *[2] 规范化替换点号：`http.server.duration` 规范化为 `http_server_duration`。*
+checkout · `http` 视图中，取值 `2`、`3`、`4` 组成 `duration_seconds` 族。成员的 `metric_type` 都是 counter，`cumulative` 时补的 `increase` 作用于全部成员。
 
-checkout · `http` 视图中，取值 `2`、`3`、`4` 组成 `duration_seconds` 族。族成员的 `metric_type` 都是 counter，`cumulative` 的 Counter 补 `increase` 作用于全部族成员。
+**分组规则**：族成员同在一个页面分组才组成完整的族，按服务移动时看该服务视图的有效分组。例子把整族移入分组 `31`；只移走 `_bucket` 时，原分组的族停用依赖它的分位方法。
 
-族成员要同在一个页面分组，按服务移动时以该服务视图的有效页面分组判断。例子按族移动，`_bucket`、`_sum`、`_count` 的指标项或覆盖都改写分组，族面板因此同属分组 `31`。只移走一个族成员时，原分组的族只禁用依赖它的方法。
-
-**族面板结构**
-
-族面板沿用现有面板协议，不新增键 *[1]*。checkout · `http` 视图中 `duration_seconds` 的族面板如下 *[2]* *[3]*：
+**族面板结构**：族面板沿用现有面板协议，target 的 `alias` 写统计方法 *[3]*。checkout · `http` 视图中 `duration_seconds` 的族面板如下 *[4]* *[5]*：
 
 ```json
 {
@@ -1130,13 +1095,7 @@ checkout · `http` 视图中，取值 `2`、`3`、`4` 组成 `duration_seconds` 
 }
 ```
 
-- *[1] `alias` 非空即表示族面板：读取方按 `alias` 区分统计方法。*
-- *[2] 示例只节选三个 target：SUM 与 COUNT 同构，其余分位方法只改 `scalar`，`table` 是数据源 `9` 结果表的示意值。*
-- *[3] 单位与标题取 `_sum` 的有效配置：checkout 视图中服务覆盖 `2` 把单位改为 `ms`，别名「请求耗时」来自全局覆盖 `1`。*
-
-**现有代码的调整**
-
-族视图只在图表配置接口加一个分支，其余请求与族外指标照旧，两条路径共用从现有循环抽出的查询构造：
+**现有代码的调整**：族视图只在图表配置接口加一个分支，两条路径共用从现有循环抽出的查询构造：
 
 ```mermaid
 %%{init: {"flowchart": {"nodeSpacing": 28, "rankSpacing": 56, "wrappingWidth": 400}}}%%
@@ -1155,6 +1114,12 @@ flowchart LR
     class Req,Old change
     class Out1 old
 ```
+
+- *[1] 原名区分族成员与同名独立指标：独立上报的 Counter `duration_seconds_sum` 的 `original_name` 是它自己。*
+- *[2] 规范化替换点号：`http.server.duration` 规范化为 `http_server_duration`。*
+- *[3] `alias` 非空即表示族面板：读取方按它区分统计方法。*
+- *[4] 示例节选三个 target：SUM 与 COUNT 同构，其余分位方法只改 `scalar`，`table` 是数据源 `9` 结果表的示意值。*
+- *[5] 单位与标题取 `_sum` 的有效配置：服务覆盖 `2` 把单位改为 `ms`，别名「请求耗时」来自全局覆盖 `1`。*
 
 ## 0x03 开发方案 —— Metadata 存储、解析与查询
 
@@ -1192,7 +1157,7 @@ class TimeSeriesReportValue(models.Model):
     id = models.BigAutoField(primary_key=True)                           # 必须 < 2^32，见 encode_report_value_ids()
     group_id = models.IntegerField()
     field_name = models.CharField(max_length=255, db_collation=UTF8)     # __metric
-    fingerprint = models.CharField(max_length=32, db_collation=ASCII)    # 下面四个字段规范 JSON 的 MD5
+    fingerprint = models.CharField(max_length=32, db_collation=ASCII)    # original_name、original_type、metric_type、meta 规范 JSON 的 MD5
     original_name = models.CharField(max_length=255, db_collation=UTF8)  # __name：拆分前原名，即族名
     original_type = models.CharField(max_length=16)                      # __original_type：histogram 等
     metric_type = models.CharField(max_length=16)                        # __type：本条序列自身的类型
