@@ -4,7 +4,7 @@ tags: [rum, apm, query, span, view, session, factory, unify-query, semconv]
 issue: ./README.md
 description: 通过统一 Target、查询基类、Level 工厂和语义字段目录收敛 RUM 与 APM 查询
 created: 2026-08-07
-updated: 2026-11-25
+updated: 2026-11-26
 ---
 
 # RUM 分层统一查询 —— 实施方案
@@ -820,12 +820,13 @@ Session 和 View 共用同一套规范化规则。结束时间取值与状态判
 | --- | --- | --- |
 | View | -- | 按 `attributes.view.id` 去重，取 `min(attributes.view.version)` 的快照 |
 | Action | View | `attributes.view.id` 相等，不因 `attributes.action.id` 挂到其他 Action |
-| Resource、Error、Long Task | Action、View | 同一 View 内挂到 `attributes.action.ids` 命中的每个 Action，未命中时挂到 View |
+| Resource、Error、Long Task | Action、View | 同一 Session 和 View 内挂到 `attributes.action.ids` 命中的每个 Action，未命中时挂到 View |
 | 其他成员 | View | 直属 View，不按 Action ID 挂载 |
 
 - *[1] View 按 `attributes.view.started_at` 升序，子节点按 `start_time` 升序。*
 - *[2] Vital、Session 不生成节点。*
 - *[3] `attributes.view.id` 为空或所属 View 无快照的 Span 丢弃。*
+- *[4] 同一 Span 可出现在多个 Action 下。View 的请求数和异常数分别对符合条件的 Span ID 去重。*
 
 复用 Span Builder：两个入口调用同一个 `build(span, related_spans)`，只是入参来源不同。
 
@@ -1013,6 +1014,8 @@ Session 和 View 共用同一套规范化规则。结束时间取值与状态判
 ### b. RecordDetail（Resource）
 
 #### 0）通用
+
+Resource 加载时序在 `data.phases` 保留按原顺序排列的阶段，同时通过 `data.groups[].phases` 提供分组。两处阶段共用时间起点、单位和 Hover 定义。
 
 Resource `loading_timing` 优先用 `attributes.resource.timing.*`（相对 timeOrigin 的时间点）按 A→E 匹配瀑布图，阶段起点再换成相对 `start_time` 的偏移。`start_time` 或 `response_end` 缺失时，回退到旧 `attributes.resource.*.start / duration`（相对 `entry.startTime` 的偏移）；旧偏移不能送进 TimingLayout。新区间 `end <= start` 时整段省略，不混用两套字段。
 
@@ -1771,6 +1774,9 @@ pytest bkmonitor/data_source/tests/test_utils_query.py -q
 
 | 时间 | 结论性进展 |
 | --- | --- |
+| `2026-11-26 16:43` | [a] 复查 [#13500](https://github.com/TencentBlueKing/bk-monitor/pull/13500) 的 `066e27a`<br />[b] 资源详情前端依赖顶层 `phases`，合入前需恢复该字段，并在接口文档补齐 Service Worker 三组示例 |
+| `2026-11-26 10:43` | [a] [#13430](https://github.com/TencentBlueKing/bk-monitor/pull/13430) 后端复查通过（`8683b05a22fd`）<br />[b] 用 bkop 的 SDK `0.0.35-beta.14` 样本回放详情，707 条静态资源中 6 条确认命中 HTTP 缓存，其余 701 条返回 `null`<br />[c] 692 条 Long Task 的关联操作和类型均与上报一致<br />[d] 760 项回归通过，两个后端线程已解决 |
+| `2026-11-26 10:08` | [a] 复查 [#13430](https://github.com/TencentBlueKing/bk-monitor/pull/13430) 的 `48fad431db24`<br />[b] bkop 的 SDK `0.0.35-beta.14` 样本确认 Resource、Error、Custom 上报 `outcome.type`，Fetch / XHR 上报 `server.address`<br />[c] 当前详情仍读取已废弃的缓存命中字段<br />[d] Action 详情关联查询与 View 时间线跨 Action 计数尚待适配 |
 | `2026-11-25 14:35` | [a] Web Vitals 字段的 `field_alias` 改为指标简称，字段说明放在 `view_config.fields[].extra_config.hover`，前端据此显示表头虚线提示<br />[b] `hover` 作为 `FieldSpec.extra_config` 的标准扩展项，与 `virtual`、`composite` 并列。文案集中在 `semconv/rum/hover.py`，详情 Builder 的 `VITAL_HOVERS` 引用同一份定义<br />[c] 按 GTM 重新交付 [PR #13453](https://github.com/TencentBlueKing/bk-monitor/pull/13453)，最新提交 `93cd6a34167ff134b1cdaa827b21f5d979dc7331`，`rum_web` 与 `semconv` 回归 `753 passed`，Ruff、提交 hooks 和 PreCI 实际扫描通过。未走 GTM 的 #13451 已关闭<br />[d] paas3 已部署 `3.12.0-deploy-paas3-dev-v3.807`，34 个 Pod 就绪。自审未发现阻塞问题，前端联调未执行 |
 | `2026-11-24 19:00` | [a] 复查 [#13430](https://github.com/TencentBlueKing/bk-monitor/pull/13430)：Vital 选取抽成 `select_latest_vitals`，列表、详情和时间线共用。挂载文档已修正，3 条线程已 resolve<br />[b] 协议删除 `outcome.type` 和 `action.name`，Resource 的 `http_result` 只保留状态码，Error 概览不再返回徽标<br />[c] `url.scheme`（Resource）、`http.request.method`（Fetch / XHR）、`server.address` 与 `server.port`（WebSocket）为有条件保留字段，只在其余场景废弃。PR 删除了定义及按场景保留的引用，已补发更正评论要求恢复<br />[d] rebase 后前端适配移出 PR，前端仍读旧字段，已提 P1：需恢复前端改动或配套 PR 同步合入。异常数线程并入该问题跟进 |
 | `2026-11-24 16:00` | [a] review 新版 SDK 协议适配（[#13430](https://github.com/TencentBlueKing/bk-monitor/pull/13430)），发布 COMMENT review，无阻塞问题<br />[b] 方案同步协议变化：时间线成员按 `action.ids` 挂到多个 Action，仅 Resource、Error、Long Task 参与，缓存命中改为后端推导的 `display.resource.cache_hit`，Request 卡片不再返回 `server.address`，Action、Long Task 徽标去掉 `outcome.type`，`web_vitals` 不再返回 TTFB 分段<br />[c] Vital 选取改为同一指标 ID 先比 `version` 再比 `end_time`。PR 只改了列表汇总，详情与时间线仍按 `end_time` 选取，已提 P1<br />[d] 既有线程「View 异常数只统计 Error Span」未修复，保持 unresolved。本地 venv 依赖落后，单测未运行 |
@@ -1840,8 +1846,9 @@ pytest bkmonitor/data_source/tests/test_utils_query.py -q
 
 | 状态 | 分支 | 里程碑 | PR |
 | --- | --- | --- | --- |
+| 🔄 | `feat/rum-resource-timing-groups/#1010158081140528674` | Resource 加载时序阶段分组 | [TencentBlueKing/bk-monitor #13500](https://github.com/TencentBlueKing/bk-monitor/pull/13500) |
 | 🔄 | `feat/rum-web-vitals-field-hover/#1010158081140477210` | Web Vitals 列表表头显示简称并返回字段 Hover | [TencentBlueKing/bk-monitor #13453](https://github.com/TencentBlueKing/bk-monitor/pull/13453) |
-| 🔄 | `feat/rum-to-new-sdk/#1010158081140387781` | 适配新版 RUM SDK 字段协议，迁移废弃字段引用，Vital 按版本选取 | [TencentBlueKing/bk-monitor #13430](https://github.com/TencentBlueKing/bk-monitor/pull/13430) |
+| ✅ | `feat/rum-to-new-sdk/#1010158081140387781` | 适配新版 RUM SDK 字段协议，迁移废弃字段引用，Vital 按版本选取 | [TencentBlueKing/bk-monitor #13430](https://github.com/TencentBlueKing/bk-monitor/pull/13430) |
 | 🔄 | `feat/adapt-rum-waterfall-to-new-sdk/#1010158081140245676` | View 与 Resource 详情兼容新版 SDK 的浏览器原始时间点 | [TencentBlueKing/bk-monitor #13354](https://github.com/TencentBlueKing/bk-monitor/pull/13354) |
 | 🔄 | `feat/rum-search-overview/#1010158081140241770` | 三个视角的检索总数与时间趋势 | [TencentBlueKing/bk-monitor #13336](https://github.com/TencentBlueKing/bk-monitor/pull/13336) |
 | ✅ | `feat/rum-network-quality-labels/#1010158081139982713` | 虚拟字段查询、复合列协议与字段值展示 | [TencentBlueKing/bk-monitor #13219](https://github.com/TencentBlueKing/bk-monitor/pull/13219) |
